@@ -17,8 +17,19 @@ client with similar team-coordination features. Core pieces:
   config section, colours per-category.
 - **Freeze tracking** — detects Bind/Snare/Entangle/Ice-spell hits, shows icon + countdown, can
   hide/block freezes against teammates.
-- **Infobox panel** — bottom-right HUD: your stats, freeze status, target's prayer, opponent
-  prayers/weapons, who's attacking you.
+- **Teleblock tracking** — same idea as freeze tracking, but for the teleblock spell (icon +
+  countdown; 5 min normally, 2.5 min if the target was praying Protect from Magic when it landed).
+- **Snipe list** — a flat, always-on highlight list (default red), independent of caller/target
+  status. Shift-right-click a player to add them, same idiom as "Add caller" (default green).
+- **Infobox panel** — bottom-right HUD: your stats (HP/prayer/strength/ranged — prayer and
+  strength colour green while boosted at/above a threshold), freeze/teleblock status, target's
+  prayer, opponent prayers/weapons, who's attacking you, current wilderness location.
+- **Friends chat log** — sidebar panel, newest-first, logs members joining/leaving/dying.
+- **Location tools** — detects your current named wilderness area (a user-built list of
+  rectangles, see `WildernessLocation`/the sidebar's "Location Mapper" tool) and can spam it into
+  chat via hotkey.
+- **Team cape overlay** — like vanilla RuneLite's "Teams" plugin, but with a custom name per team
+  number (`PrepToolsConfig#teamCapeNames`).
 - **Right-click menu integration** — prioritises/recolours Attack and freeze-spell casts, blocks
   casting a freeze spell on a teammate.
 
@@ -69,6 +80,17 @@ These cost real debugging time to find. Don't rediscover them the hard way:
   Related: cache expensive per-player computed state (e.g. per-player highlight colour/style) once
   per `GameTick`, not inside `render()` — `render()` runs once per frame per overlay, so anything
   computed there runs far more often than the underlying game state actually changes.
+- **Wilderness level: read the game's own widget, don't derive it from coordinates.**
+  `client.getWidget(InterfaceID.PvpIcons.WILDERNESSLEVEL)` returns a widget whose text is
+  `"Level: N"` (null when not in the wilderness at all) - this is exactly what
+  `CombatLevelPlugin` (RuneLite core) reads for the same purpose. Far more robust than a
+  hand-written Y-coordinate formula, especially in a fork tracking a future content revision
+  where wilderness geometry could shift.
+- **Teleblock's spot-animation ID isn't in the old-style `net.runelite.api.GraphicID`** (unlike
+  the freeze spells, which are). It's `net.runelite.api.gameval.SpotanimID.TELE_BLOCK_IMPACT`
+  (345) instead - the newer gameval-style constants class. Player death (for detecting an
+  on-screen friends chat member dying) is similarly only in the gameval class:
+  `net.runelite.api.gameval.AnimationID.HUMAN_DEATH` / `HUMAN_DEATH_BACKWARDS` (836/837).
 - **git has no configured `user.email`/`user.name` in this environment**, and Claude must not set
   git config itself. Ask the user to run it themselves via `! git config user.email ... && git
   config user.name ...` before attempting a commit.

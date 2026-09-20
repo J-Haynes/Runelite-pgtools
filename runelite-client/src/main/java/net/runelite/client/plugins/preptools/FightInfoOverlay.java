@@ -189,9 +189,10 @@ public class FightInfoOverlay extends Overlay
 			|| config.showPlayerStrength() || config.showPlayerRanged();
 		boolean freezeStatusEnabled = config.showFreezeStatus();
 		boolean targetPrayerEnabled = config.showTargetPrayer();
+		boolean locationEnabled = config.showLocationInInfobox();
 
 		if (!prayersEnabled && !weaponsEnabled && !attackingEnabled
-			&& !statsEnabled && !freezeStatusEnabled && !targetPrayerEnabled)
+			&& !statsEnabled && !freezeStatusEnabled && !targetPrayerEnabled && !locationEnabled)
 		{
 			return null;
 		}
@@ -229,6 +230,17 @@ public class FightInfoOverlay extends Overlay
 			y += LABEL_HEIGHT;
 
 			maxWidth = Math.max(maxWidth, PADDING + drawTargetPrayerRow(graphics, PADDING, y));
+			y += ROW_HEIGHT + SECTION_GAP;
+			anySectionDrawn = true;
+		}
+
+		if (locationEnabled)
+		{
+			drawSeparatorIfNeeded(graphics, anySectionDrawn, y, Math.max(maxWidth, PANEL_MIN_WIDTH));
+			drawLabel(graphics, "Location", PADDING, y);
+			y += LABEL_HEIGHT;
+
+			maxWidth = Math.max(maxWidth, PADDING + drawLocationRow(graphics, PADDING, y));
 			y += ROW_HEIGHT + SECTION_GAP;
 			anySectionDrawn = true;
 		}
@@ -384,9 +396,10 @@ public class FightInfoOverlay extends Overlay
 			|| config.showPlayerStrength() || config.showPlayerRanged();
 		boolean freezeStatusEnabled = config.showFreezeStatus();
 		boolean targetPrayerEnabled = config.showTargetPrayer();
+		boolean locationEnabled = config.showLocationInInfobox();
 
 		if (!prayersEnabled && !weaponsEnabled && !attackingEnabled
-			&& !statsEnabled && !freezeStatusEnabled && !targetPrayerEnabled)
+			&& !statsEnabled && !freezeStatusEnabled && !targetPrayerEnabled && !locationEnabled)
 		{
 			return null;
 		}
@@ -412,6 +425,13 @@ public class FightInfoOverlay extends Overlay
 		{
 			drawAccentStripe(graphics, y, config.targetColor());
 			maxWidth = Math.max(maxWidth, COMPACT_PADDING + drawTargetPrayerRow(graphics, COMPACT_PADDING, y));
+			y += ROW_HEIGHT + COMPACT_ROW_GAP;
+		}
+
+		if (locationEnabled)
+		{
+			drawAccentStripe(graphics, y, SELF_ACCENT_COLOR);
+			maxWidth = Math.max(maxWidth, COMPACT_PADDING + drawLocationRow(graphics, COMPACT_PADDING, y));
 			y += ROW_HEIGHT + COMPACT_ROW_GAP;
 		}
 
@@ -591,17 +611,19 @@ public class FightInfoOverlay extends Overlay
 
 		if (config.showPlayerPrayer())
 		{
-			drawnX += drawSkillLevelStat(graphics, SpriteID.SKILL_PRAYER, client.getBoostedSkillLevel(Skill.PRAYER), drawnX, y);
+			Color color = plugin.isPrayerBoosted() ? config.prayerBoostColor() : Color.WHITE;
+			drawnX += drawSkillLevelStat(graphics, SpriteID.SKILL_PRAYER, client.getBoostedSkillLevel(Skill.PRAYER), drawnX, y, color);
 		}
 
 		if (config.showPlayerStrength())
 		{
-			drawnX += drawSkillLevelStat(graphics, SpriteID.SKILL_STRENGTH, client.getBoostedSkillLevel(Skill.STRENGTH), drawnX, y);
+			Color color = plugin.isStrengthBoosted() ? config.strengthPeakColor() : Color.WHITE;
+			drawnX += drawSkillLevelStat(graphics, SpriteID.SKILL_STRENGTH, client.getBoostedSkillLevel(Skill.STRENGTH), drawnX, y, color);
 		}
 
 		if (config.showPlayerRanged())
 		{
-			drawnX += drawSkillLevelStat(graphics, SpriteID.SKILL_RANGED, client.getBoostedSkillLevel(Skill.RANGED), drawnX, y);
+			drawnX += drawSkillLevelStat(graphics, SpriteID.SKILL_RANGED, client.getBoostedSkillLevel(Skill.RANGED), drawnX, y, Color.WHITE);
 		}
 
 		return drawnX - x;
@@ -628,12 +650,15 @@ public class FightInfoOverlay extends Overlay
 	/**
 	 * A single current (boosted) skill level, e.g. prayer points remaining or a buffed Strength
 	 * level - boosted rather than base, since knowing whether a potion has worn off is the whole
-	 * point of showing it during a fight.
+	 * point of showing it during a fight. Colour is caller-chosen: Strength turns green while the
+	 * boost exceeds the configured threshold (plugin.isStrengthBoosted()), Prayer turns green
+	 * while boosted at all above the real level (plugin.isPrayerBoosted()), Ranged has no such
+	 * distinction and always draws white.
 	 */
-	private int drawSkillLevelStat(Graphics2D graphics, int spriteId, int level, int x, int y)
+	private int drawSkillLevelStat(Graphics2D graphics, int spriteId, int level, int x, int y, Color color)
 	{
 		drawIconInSlot(graphics, getSprite(spriteId), x, y);
-		return ICON_SLOT_SIZE + 4 + drawText(graphics, String.valueOf(level), x + ICON_SLOT_SIZE + 4, y, Color.WHITE);
+		return ICON_SLOT_SIZE + 4 + drawText(graphics, String.valueOf(level), x + ICON_SLOT_SIZE + 4, y, color);
 	}
 
 	/**
@@ -806,6 +831,38 @@ public class FightInfoOverlay extends Overlay
 			default:
 				return icon.toString();
 		}
+	}
+
+	/**
+	 * Your current wilderness location - name (from the "Location Mapper" sidebar tool's saved
+	 * areas), wilderness level (from the game's own wilderness level widget), or both. No icon -
+	 * unlike the other rows, there's no single sprite that represents "a place", so this is
+	 * text-only, left-aligned at the row's normal text position.
+	 */
+	private int drawLocationRow(Graphics2D graphics, int x, int y)
+	{
+		String name = plugin.getCurrentLocationName();
+		Integer level = plugin.getCurrentWildernessLevel();
+
+		String text;
+		if (name == null && level == null)
+		{
+			text = "Not in wilderness";
+		}
+		else if (name != null && level != null)
+		{
+			text = name + " (level " + level + ")";
+		}
+		else if (name != null)
+		{
+			text = name;
+		}
+		else
+		{
+			text = "Wilderness (level " + level + ")";
+		}
+
+		return drawText(graphics, text, x, y, Color.WHITE);
 	}
 
 	/**

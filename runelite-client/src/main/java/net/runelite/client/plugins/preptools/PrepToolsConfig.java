@@ -19,7 +19,8 @@ public interface PrepToolsConfig extends Config
 	@ConfigSection(
 		name = "Callers",
 		description = "Who to highlight as callers, and how they look.",
-		position = 10
+		position = 10,
+		closedByDefault = true
 	)
 	String callersSection = "callersSection";
 
@@ -48,7 +49,7 @@ public interface PrepToolsConfig extends Config
 	)
 	default Color callerColor()
 	{
-		return Color.RED;
+		return Color.GREEN;
 	}
 
 	@ConfigItem(
@@ -104,6 +105,42 @@ public interface PrepToolsConfig extends Config
 		return true;
 	}
 
+	// --- Snipe List section ---
+
+	@ConfigSection(
+		name = "Snipe List",
+		description = "Players to always highlight on sight, regardless of caller/target status.",
+		position = 15,
+		closedByDefault = true
+	)
+	String snipeListSection = "snipeListSection";
+
+	@ConfigItem(
+		keyName = "snipeList",
+		name = "Snipe list",
+		description = "<html>Names to always highlight, comma or newline separated.<br>"
+			+ "Shift-right-click a player in game and choose 'Add to snipe<br>"
+			+ "list' to add them without typing here.</html>",
+		position = 1,
+		section = "snipeListSection"
+	)
+	default String snipeList()
+	{
+		return "";
+	}
+
+	@ConfigItem(
+		keyName = "snipeColor",
+		name = "Snipe colour",
+		description = "Outline colour for a player on the snipe list.",
+		position = 2,
+		section = "snipeListSection"
+	)
+	default Color snipeColor()
+	{
+		return Color.RED;
+	}
+
 	// --- Overlay section (shared rendering style for every highlight category) ---
 
 	@ConfigSection(
@@ -113,7 +150,8 @@ public interface PrepToolsConfig extends Config
 			+ "outline weight, name font, and dot size. Colours stay<br>"
 			+ "per-category, set in the Callers/Target/Pile Finder<br>"
 			+ "sections instead.</html>",
-		position = 5
+		position = 5,
+		closedByDefault = true
 	)
 	String overlaySection = "overlaySection";
 
@@ -186,7 +224,8 @@ public interface PrepToolsConfig extends Config
 	@ConfigSection(
 		name = "Target",
 		description = "The primary caller's target - who they're attacking or following.",
-		position = 20
+		position = 20,
+		closedByDefault = true
 	)
 	String targetSection = "targetSection";
 
@@ -323,7 +362,8 @@ public interface PrepToolsConfig extends Config
 	@ConfigSection(
 		name = "Infobox",
 		description = "The bottom-right panel: your stats/freeze status, target's prayer, opponent prayers/weapons, and who's attacking you.",
-		position = 1
+		position = 1,
+		closedByDefault = true
 	)
 	String fightInfoSection = "fightInfoSection";
 
@@ -528,6 +568,140 @@ public interface PrepToolsConfig extends Config
 		return 1500;
 	}
 
+	@ConfigItem(
+		keyName = "strengthPeakColor",
+		name = "Strength boost colour",
+		description = "<html>Part of 'Your Stats'. Colour for the Strength number<br>"
+			+ "while your current Strength boost (boosted level minus real<br>"
+			+ "level) is above the 'Strength green threshold' setting<br>"
+			+ "below. White at or below that threshold.</html>",
+		position = 17,
+		section = "fightInfoSection"
+	)
+	default Color strengthPeakColor()
+	{
+		return Color.GREEN;
+	}
+
+	@ConfigItem(
+		keyName = "strengthGreenThreshold",
+		name = "Strength green threshold",
+		description = "<html>How big your current Strength boost (boosted level<br>"
+			+ "minus real level) must be to show green - white once it<br>"
+			+ "drops to this value or below. E.g. with this set to 10, a<br>"
+			+ "+11 boost (110/99) shows green, and it turns white the<br>"
+			+ "moment it decays to a +10 boost (109/99). 0 (default) means<br>"
+			+ "any active boost at all - even +1 - shows green.</html>",
+		position = 18,
+		section = "fightInfoSection"
+	)
+	default int strengthGreenThreshold()
+	{
+		return 0;
+	}
+
+	@ConfigItem(
+		keyName = "prayerBoostColor",
+		name = "Prayer boost colour",
+		description = "<html>Part of 'Your Stats'. Colour for the Prayer number<br>"
+			+ "whenever current prayer points are above your real<br>"
+			+ "(unboosted) Prayer level - not just from a prayer potion,<br>"
+			+ "but also from gear that restores prayer points past the<br>"
+			+ "normal cap, like the Ancient mace or the Eldritch<br>"
+			+ "nightmare staff. White at or below your real level.</html>",
+		position = 19,
+		section = "fightInfoSection"
+	)
+	default Color prayerBoostColor()
+	{
+		return Color.GREEN;
+	}
+
+	// --- Team Capes section ---
+
+	@ConfigSection(
+		name = "Team Capes",
+		description = "Custom names for team cape numbers, shown alongside the vanilla team cape counter.",
+		position = 40,
+		closedByDefault = true
+	)
+	String teamCapeSection = "teamCapeSection";
+
+	@ConfigItem(
+		keyName = "showTeamCapeOverlay",
+		name = "Show team cape overlay",
+		description = "Shows a small panel listing nearby team cape numbers, with your custom name for each.",
+		position = 1,
+		section = "teamCapeSection"
+	)
+	default boolean showTeamCapeOverlay()
+	{
+		return true;
+	}
+
+	@ConfigItem(
+		keyName = "teamCapeNames",
+		name = "Team cape names",
+		description = "<html>One 'TeamNumber:Name' entry per line, e.g.<br>"
+			+ "'50:EoP' shows 'EoP' next to anyone wearing team cape 50.<br>"
+			+ "Team numbers without an entry here just show the icon alone.<br>"
+			+ "Names longer than 5 characters are truncated - easier to<br>"
+			+ "manage from the sidebar panel's Team Capes editor, which<br>"
+			+ "enforces that limit as you type.</html>",
+		position = 2,
+		section = "teamCapeSection"
+	)
+	default String teamCapeNames()
+	{
+		return "50:EoP\n38:Apex";
+	}
+
+	@ConfigItem(
+		keyName = "minimumTeamCapeCount",
+		name = "Minimum count",
+		description = "Only show a team number once at least this many nearby players are wearing it.",
+		position = 3,
+		section = "teamCapeSection"
+	)
+	default int minimumTeamCapeCount()
+	{
+		return 2;
+	}
+
+	// --- Friends Chat Log section ---
+
+	@ConfigSection(
+		name = "Friends Chat Log",
+		description = "A newest-first log of friends chat join/leave/death activity, shown in the sidebar panel.",
+		position = 45,
+		closedByDefault = true
+	)
+	String friendsChatLogSection = "friendsChatLogSection";
+
+	@ConfigItem(
+		keyName = "enableFriendsChatLog",
+		name = "Enable log",
+		description = "Logs friends chat members entering/exiting chat and dying, with a timestamp, in the sidebar panel.",
+		position = 1,
+		section = "friendsChatLogSection"
+	)
+	default boolean enableFriendsChatLog()
+	{
+		return true;
+	}
+
+	@ConfigItem(
+		keyName = "friendsChatLogMaxEntries",
+		name = "Max log entries",
+		description = "Oldest entries are dropped once the log reaches this many lines.",
+		position = 2,
+		section = "friendsChatLogSection"
+	)
+	default int friendsChatLogMaxEntries()
+	{
+		return 200;
+	}
+
 	// --- Chat spam section ---
 
 	@ConfigSection(
@@ -563,6 +737,118 @@ public interface PrepToolsConfig extends Config
 		return "";
 	}
 
+	// --- Location Tools section ---
+
+	@ConfigSection(
+		name = "Location Tools",
+		description = "<html>Detects roughly where in the wilderness you are (from a<br>"
+			+ "user-built list of named areas) and lets you spam it into<br>"
+			+ "chat. Also holds the location-mapping tool in the sidebar<br>"
+			+ "panel, for building/editing that list from your own<br>"
+			+ "in-game coordinates.</html>",
+		position = 55,
+		closedByDefault = true
+	)
+	String locationSection = "locationSection";
+
+	@ConfigItem(
+		keyName = "showLocationInInfobox",
+		name = "Show location in infobox",
+		description = "Shows your current wilderness location name and level (if any) in the fight info panel.",
+		position = 1,
+		section = "locationSection"
+	)
+	default boolean showLocationInInfobox()
+	{
+		return true;
+	}
+
+	@ConfigItem(
+		keyName = "locationSpamHotkey",
+		name = "Location hotkey",
+		description = "<html>Pressing this types your current wilderness location<br>"
+			+ "into chat. You still press Enter yourself.</html>",
+		position = 2,
+		section = "locationSection"
+	)
+	default Keybind locationSpamHotkey()
+	{
+		return new Keybind(KeyEvent.VK_F11, 0);
+	}
+
+	@ConfigItem(
+		keyName = "locationSpamPrefix",
+		name = "Prefix",
+		description = "<html>Text placed before the location, e.g. 'Loc:' produces<br>'Loc: Ferox Enclave (level 15)'.</html>",
+		position = 3,
+		section = "locationSection"
+	)
+	default String locationSpamPrefix()
+	{
+		return "";
+	}
+
+	// --- Teleblock Timers section ---
+
+	@ConfigSection(
+		name = "Teleblock Timers",
+		description = "Countdown shown when a player - including you - gets tele-blocked.",
+		position = 75,
+		closedByDefault = true
+	)
+	String teleblockSection = "teleblockSection";
+
+	@ConfigItem(
+		keyName = "showTeleblockTimers",
+		name = "Show teleblock timers",
+		description = "<html>Shows an icon and countdown at the base of a tele-blocked<br>"
+			+ "player's model - works on other players and on yourself.<br>"
+			+ "5 minutes normally, or 2.5 minutes if the target was<br>"
+			+ "praying Protect from Magic at the moment it landed.</html>",
+		position = 1,
+		section = "teleblockSection"
+	)
+	default boolean showTeleblockTimers()
+	{
+		return true;
+	}
+
+	@ConfigItem(
+		keyName = "teleblockTimerColor",
+		name = "Teleblock colour",
+		description = "Colour of the countdown text while tele-blocked.",
+		position = 2,
+		section = "teleblockSection"
+	)
+	default Color teleblockTimerColor()
+	{
+		return new Color(255, 140, 0); // orange
+	}
+
+	@ConfigItem(
+		keyName = "teleblockTimeFormat",
+		name = "Time format",
+		description = "Show the countdown in seconds or game ticks.",
+		position = 3,
+		section = "teleblockSection"
+	)
+	default FreezeTimeFormat teleblockTimeFormat()
+	{
+		return FreezeTimeFormat.SECONDS;
+	}
+
+	@ConfigItem(
+		keyName = "hideTeleblockTimersForOwnTeam",
+		name = "Hide for own team",
+		description = "Don't show teleblock timers for your own team - your configured callers and anyone in your friends chat.",
+		position = 4,
+		section = "teleblockSection"
+	)
+	default boolean hideTeleblockTimersForOwnTeam()
+	{
+		return false;
+	}
+
 	// --- Debug section ---
 
 	@ConfigSection(
@@ -587,12 +873,29 @@ public interface PrepToolsConfig extends Config
 		return false;
 	}
 
+	@ConfigItem(
+		keyName = "showWildernessLocationOverlay",
+		name = "Show location boxes",
+		description = "<html>Helper for building the wilderness location list (see the<br>"
+			+ "sidebar's Location Mapper tool). Draws every saved area's<br>"
+			+ "outer border on your current plane, labelled with its name.<br>"
+			+ "Purely a mapping aid - functional, not pretty. Turn on<br>"
+			+ "temporarily while mapping, then off.</html>",
+		position = 2,
+		section = "debugSection"
+	)
+	default boolean showWildernessLocationOverlay()
+	{
+		return false;
+	}
+
 	// --- Freeze timers section ---
 
 	@ConfigSection(
 		name = "Freeze Timers",
 		description = "Countdown shown when a player - including you - gets frozen.",
-		position = 70
+		position = 70,
+		closedByDefault = true
 	)
 	String freezeSection = "freezeSection";
 

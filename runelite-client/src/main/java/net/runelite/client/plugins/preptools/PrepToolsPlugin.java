@@ -1,19 +1,25 @@
 package net.runelite.client.plugins.preptools;
 
+import com.google.gson.Gson;
+import com.google.gson.reflect.TypeToken;
 import com.google.inject.Provides;
 import java.awt.Color;
 import java.awt.Font;
 import java.awt.Graphics2D;
 import java.awt.RenderingHints;
 import java.awt.image.BufferedImage;
+import java.util.ArrayDeque;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
+import java.util.Deque;
 import java.util.HashMap;
 import java.util.HashSet;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 import javax.inject.Inject;
 import lombok.Getter;
@@ -31,14 +37,21 @@ import net.runelite.api.MenuEntry;
 import net.runelite.api.Player;
 import net.runelite.api.PlayerComposition;
 import net.runelite.api.ScriptID;
+import net.runelite.api.Skill;
 import net.runelite.api.SpriteID;
+import net.runelite.api.Tile;
 import net.runelite.api.VarClientStr;
 import net.runelite.api.coords.WorldPoint;
+import net.runelite.api.events.AnimationChanged;
+import net.runelite.api.events.FriendsChatMemberJoined;
+import net.runelite.api.events.FriendsChatMemberLeft;
 import net.runelite.api.events.GameTick;
 import net.runelite.api.events.GraphicChanged;
 import net.runelite.api.events.MenuOpened;
 import net.runelite.api.events.PostMenuSort;
+import net.runelite.api.gameval.AnimationID;
 import net.runelite.api.gameval.InterfaceID;
+import net.runelite.api.gameval.SpotanimID;
 import net.runelite.api.kit.KitType;
 import net.runelite.api.widgets.Widget;
 import net.runelite.api.widgets.WidgetUtil;
@@ -67,6 +80,42 @@ import net.runelite.client.util.Text;
 public class PrepToolsPlugin extends Plugin
 {
 	private static final String ADD_CALLER = "Add caller";
+	private static final String ADD_TO_SNIPE_LIST = "Add to snipe list";
+
+	/**
+	 * Human death animations (forward/backward fall) - used to detect a friends chat member dying
+	 * for the Friends Chat Log. Not exhaustive (a handful of unusual death variants exist, e.g.
+	 * transformation deaths) but covers the overwhelming majority of PvP deaths.
+	 */
+	private static final Set<Integer> PLAYER_DEATH_ANIMATION_IDS = new HashSet<>(Arrays.asList(
+		AnimationID.HUMAN_DEATH,
+		AnimationID.HUMAN_DEATH_BACKWARDS
+	));
+
+	/**
+	 * Teleblock duration, in game ticks: halved if the target was praying Protect from Magic at
+	 * the moment it landed (confirmed via the OSRS wiki - 5 minutes normally, 2.5 minutes if
+	 * protected).
+	 */
+	private static final int TELEBLOCK_DURATION_TICKS = 500;
+	private static final int TELEBLOCK_DURATION_TICKS_PROTECTED = 250;
+
+	/**
+	 * Matches the wilderness level widget's text (e.g. "Level: 15") - same pattern
+	 * CombatLevelPlugin uses to read InterfaceID.PvpIcons.WILDERNESSLEVEL, which is the game's own
+	 * calculation rather than a coordinate-based formula this plugin would have to keep in sync
+	 * with wilderness geometry itself.
+	 */
+	private static final Pattern WILDERNESS_LEVEL_PATTERN = Pattern.compile("^Level: (\\d+)$");
+
+	private static final String WILDERNESS_LOCATIONS_CONFIG_KEY = "wildernessLocationsJson";
+
+	/**
+	 * Hard cap on a team cape's custom name length. Enforced twice: here at parse time (so it
+	 * holds even if someone edits the raw "Team cape names" config field directly), and again as
+	 * a keystroke-level DocumentFilter on the sidebar panel's own name field (PrepToolsPanel).
+	 */
+	static final int TEAM_CAPE_NAME_MAX_LENGTH = 5;
 
 	// Melee weapons that count towards the melee indicator. All grouped under one generic melee icon.
 	private static final Set<Integer> MELEE_WEAPON_IDS = new HashSet<>(Arrays.asList(
@@ -175,6 +224,15 @@ public class PrepToolsPlugin extends Plugin
 	private FreezeOverlay freezeOverlay;
 
 	@Inject
+	private TeleblockOverlay teleblockOverlay;
+
+	@Inject
+	private TeamCapeOverlay teamCapeOverlay;
+
+	@Inject
+	private WildernessLocationDebugOverlay wildernessLocationDebugOverlay;
+
+	@Inject
 	private PrepToolsConfig config;
 
 	@Inject
@@ -183,12 +241,22 @@ public class PrepToolsPlugin extends Plugin
 	@Inject
 	private ChatMessageManager chatMessageManager;
 
+	@Inject
+	private Gson gson;
+
 	/**
 	 * The current primary caller: the sidebar-pinned caller if one is on screen, otherwise
 	 * the first on-screen caller in list order. Null if no configured caller is on screen.
 	 */
 	@Getter
 	private Player primaryCaller;
+
+	/**
+	 * Players currently on the snipe list (PrepToolsConfig#snipeList) who are on screen - always
+	 * highlighted, independent of caller/target/pile status. See rebuildHighlightStyles().
+	 */
+	@Getter
+	private final Set<Player> snipedPlayers = new HashSet<>();
 
 	/**
 	 * Name of the caller manually pinned as primary via the sidebar panel (PrepToolsPanel).
@@ -286,12 +354,110 @@ public class PrepToolsPlugin extends Plugin
 	private long attackerFlashEndTime;
 	private boolean previouslyBeingAttacked;
 
+	/**
+	 * Newest-first, size-capped log of friends chat join/leave/death activity - see
+	 * logFriendsChatActivity(). Session-only, never persisted.
+	 */
+	@Getter
+	private final Deque<FriendsChatLogEntry> friendsChatLog = new ArrayDeque<>();
+
+	/**
+	 * Team number -> nearby player count, recomputed every tick in updateTeamCapeCounts(). Sorted
+	 * by count descending, same as vanilla RuneLite's Team plugin.
+	 */
+	@Getter
+	private Map<Integer, Integer> teamCapeCounts = new LinkedHashMap<>();
+
+	/**
+	 * Team number -> user-configured custom name, parsed from PrepToolsConfig#teamCapeNames every
+	 * tick (see updateTeamCapeCounts()) - same re-parse-every-tick approach already used for the
+	 * Callers list (parseCallerEntries()), for consistency.
+	 */
+	@Getter
+	private Map<Integer, String> teamCapeNames = new HashMap<>();
+
+	/**
+	 * Players (any player, including the local player) currently believed to be tele-blocked.
+	 * Mirrors freezeStates/FreezeState in shape and lifecycle, minus the freeze-only concepts of
+	 * post-expiry immunity and movement-based early clearing (neither applies to teleblock).
+	 */
+	@Getter
+	private final Map<Player, TeleblockState> teleblockStates = new HashMap<>();
+
+	/**
+	 * User-built list of named wilderness areas (PrepToolsPanel's "Location Mapper" tool), used by
+	 * findLocationName() to resolve the local player's current WorldPoint to a place name. Persisted
+	 * as JSON via ConfigManager (see loadWildernessLocations()/saveWildernessLocations()) rather than
+	 * a visible multi-line ConfigItem - editing a list of rectangles as raw text isn't something
+	 * anyone wants to hand-type, so the panel's buttons are the only intended way to build it up.
+	 * Also read by WildernessLocationDebugOverlay (the Debug section's "Show location boxes"
+	 * toggle) to draw each saved area's border in-game.
+	 */
+	@Getter
+	private List<WildernessLocation> wildernessLocations = new ArrayList<>();
+
+	/**
+	 * The local player's WorldPoint as of the most recent game tick - cached here (rather than read
+	 * directly from the panel) since Player#getWorldLocation() must be called from the client
+	 * thread, and the sidebar's "Set Corner A/B" buttons run on the EDT. Reading this plain,
+	 * immutable-once-assigned field from the EDT is the same basic cross-thread reliance already
+	 * used elsewhere in this plugin (e.g. missingFriendsChatMembers), not full synchronization -
+	 * fine for a "best effort, refreshes every 0.6s" coordinate readout.
+	 */
+	@Getter
+	private WorldPoint lastKnownWorldPoint;
+
+	@Getter
+	private String currentLocationName;
+
+	@Getter
+	private Integer currentWildernessLevel;
+
+	/**
+	 * The WorldPoint of the tile currently under the mouse cursor in the game view (null if the
+	 * cursor isn't over a tile at all - e.g. over a widget, or off-screen). Purely informational,
+	 * for the Location Mapper tool - unlike lastKnownWorldPoint, this is NOT used for the Set
+	 * Corner A/B buttons, which still capture the player's own position.
+	 */
+	@Getter
+	private WorldPoint hoveredWorldPoint;
+
+	@Getter
+	private String hoveredLocationName;
+
+	// The two corners of the in-progress "new location" rectangle, set via the panel's Set Corner
+	// A/B buttons. Session-only; cleared once saved (or on shutdown).
+	private WorldPoint locationCornerA;
+	private WorldPoint locationCornerB;
+
+	/**
+	 * True while the current Strength boost (boosted level minus real level) is above
+	 * PrepToolsConfig#strengthGreenThreshold() - see updatePlayerStatBoosts().
+	 */
+	@Getter
+	private boolean strengthBoosted;
+
+	/**
+	 * True while boosted Prayer points are above the real (unboosted) Prayer level.
+	 */
+	@Getter
+	private boolean prayerBoosted;
+
 	private final HotkeyListener chatSpamHotkeyListener = new HotkeyListener(() -> config.chatSpamHotkey())
 	{
 		@Override
 		public void hotkeyPressed()
 		{
 			postFollowedPlayerNameToChat();
+		}
+	};
+
+	private final HotkeyListener locationSpamHotkeyListener = new HotkeyListener(() -> config.locationSpamHotkey())
+	{
+		@Override
+		public void hotkeyPressed()
+		{
+			postLocationToChat();
 		}
 	};
 
@@ -309,7 +475,13 @@ public class PrepToolsPlugin extends Plugin
 		overlayManager.add(minimapOverlay);
 		overlayManager.add(fightInfoOverlay);
 		overlayManager.add(freezeOverlay);
+		overlayManager.add(teleblockOverlay);
+		overlayManager.add(teamCapeOverlay);
+		overlayManager.add(wildernessLocationDebugOverlay);
 		keyManager.registerKeyListener(chatSpamHotkeyListener);
+		keyManager.registerKeyListener(locationSpamHotkeyListener);
+
+		loadWildernessLocations();
 
 		panel = new PrepToolsPanel(this);
 		navButton = NavigationButton.builder()
@@ -320,6 +492,9 @@ public class PrepToolsPlugin extends Plugin
 			.build();
 		clientToolbar.addNavigation(navButton);
 		panel.rebuild(parseCallerEntries(config.callers()));
+		panel.rebuildSnipeList(parseNameList(config.snipeList()));
+		panel.rebuildTeamCapeNames(parseTeamCapeNames(config.teamCapeNames()));
+		panel.updateWildernessLocations(wildernessLocations);
 
 		clearState();
 	}
@@ -332,7 +507,11 @@ public class PrepToolsPlugin extends Plugin
 		overlayManager.remove(minimapOverlay);
 		overlayManager.remove(fightInfoOverlay);
 		overlayManager.remove(freezeOverlay);
+		overlayManager.remove(teleblockOverlay);
+		overlayManager.remove(teamCapeOverlay);
+		overlayManager.remove(wildernessLocationDebugOverlay);
 		keyManager.unregisterKeyListener(chatSpamHotkeyListener);
+		keyManager.unregisterKeyListener(locationSpamHotkeyListener);
 		clientToolbar.removeNavigation(navButton);
 		clearState();
 	}
@@ -378,6 +557,20 @@ public class PrepToolsPlugin extends Plugin
 		rangedAttackerCount = 0;
 		cachedHighlightStyles = Collections.emptyMap();
 		friendsChatMemberNamesCache = Collections.emptySet();
+		snipedPlayers.clear();
+		friendsChatLog.clear();
+		teamCapeCounts = new LinkedHashMap<>();
+		teamCapeNames = new HashMap<>();
+		teleblockStates.clear();
+		lastKnownWorldPoint = null;
+		currentLocationName = null;
+		currentWildernessLevel = null;
+		hoveredWorldPoint = null;
+		hoveredLocationName = null;
+		locationCornerA = null;
+		locationCornerB = null;
+		strengthBoosted = false;
+		prayerBoosted = false;
 	}
 
 	@Subscribe
@@ -385,11 +578,16 @@ public class PrepToolsPlugin extends Plugin
 	{
 		refreshFriendsChatMemberNames();
 		updateCallersAndTargets();
+		updateSnipeList();
 		updateTargetedPlayers();
 		updateOpponentInfo();
 		updateWeaponIndicators();
 		updateMissingMembers();
 		updateFreezeTimers();
+		updateTeleblockTimers();
+		updateTeamCapeCounts();
+		updatePlayerStatBoosts();
+		updateLocation();
 		rebuildHighlightStyles(config);
 
 		Set<String> onScreenStandardNames = new HashSet<>();
@@ -407,18 +605,43 @@ public class PrepToolsPlugin extends Plugin
 
 		panel.updateStatus(onScreenStandardNames, primaryCaller != null ? Text.standardize(primaryCaller.getName()) : null);
 		panel.updateMissingMembers(missingFriendsChatMembers);
+
+		Set<String> onScreenSnipeNames = new HashSet<>();
+		for (Player player : snipedPlayers)
+		{
+			if (player.getName() != null)
+			{
+				onScreenSnipeNames.add(Text.standardize(player.getName()));
+			}
+		}
+		panel.updateSnipeStatus(onScreenSnipeNames);
+		pushLocationMapperUpdate();
 	}
 
 	/**
-	 * Rebuilds the sidebar's list of caller rows whenever the "Callers" config text changes,
-	 * so adding/removing/renaming a caller there is reflected without needing to restart anything.
+	 * Rebuilds the sidebar's list of caller/snipe rows whenever the corresponding config text
+	 * changes, so adding/removing/renaming an entry there is reflected without needing to restart
+	 * anything.
 	 */
 	@Subscribe
 	public void onConfigChanged(ConfigChanged event)
 	{
-		if (PrepToolsConfig.GROUP.equals(event.getGroup()) && "callers".equals(event.getKey()))
+		if (!PrepToolsConfig.GROUP.equals(event.getGroup()))
+		{
+			return;
+		}
+
+		if ("callers".equals(event.getKey()))
 		{
 			panel.rebuild(parseCallerEntries(config.callers()));
+		}
+		else if ("snipeList".equals(event.getKey()))
+		{
+			panel.rebuildSnipeList(parseNameList(config.snipeList()));
+		}
+		else if ("teamCapeNames".equals(event.getKey()))
+		{
+			panel.rebuildTeamCapeNames(parseTeamCapeNames(config.teamCapeNames()));
 		}
 	}
 
@@ -547,8 +770,8 @@ public class PrepToolsPlugin extends Plugin
 
 	/**
 	 * Rebuilds cachedHighlightStyles: the display colour/weight/font/shape for every
-	 * currently-highlighted player, including the priority order (backup caller < pile finder <
-	 * primary caller < target). Weight/font/shape/dot size are shared across every category (the
+	 * currently-highlighted player, including the priority order (backup caller < snipe list <
+	 * pile finder < primary caller < target). Weight/font/shape/dot size are shared across every category (the
 	 * Overlay section in PrepToolsConfig) - only colour stays per-category (Callers/Target/Pile
 	 * Finder sections). This used to be five independently-configurable settings per category
 	 * (fifteen settings total for the same three visual knobs), which turned out to be more
@@ -577,6 +800,15 @@ public class PrepToolsPlugin extends Plugin
 			if (player != null)
 			{
 				highlights.put(player, backupStyle);
+			}
+		}
+
+		HighlightStyle snipeStyle = new HighlightStyle(config.snipeColor(), outlineWidth, fontStyle, fontSize, shape, dotSize);
+		for (Player player : snipedPlayers)
+		{
+			if (player != null)
+			{
+				highlights.put(player, snipeStyle);
 			}
 		}
 
@@ -829,6 +1061,36 @@ public class PrepToolsPlugin extends Plugin
 		targetFlashEndTimes.entrySet().removeIf(e -> e.getValue() < now);
 
 		previousTargets = new HashSet<>(targets);
+	}
+
+	/**
+	 * Populates snipedPlayers from the "Snipe list" config text - deliberately just a flat
+	 * name-match, unlike updateCallersAndTargets()'s primary/backup/pin logic: every configured
+	 * name that's on screen gets highlighted, all at once, all the time.
+	 */
+	private void updateSnipeList()
+	{
+		snipedPlayers.clear();
+
+		List<String> names = parseNameList(config.snipeList());
+		if (names.isEmpty())
+		{
+			return;
+		}
+
+		Set<String> standardizedNames = new HashSet<>();
+		for (String name : names)
+		{
+			standardizedNames.add(Text.standardize(name));
+		}
+
+		for (Player player : client.getPlayers())
+		{
+			if (player != null && player.getName() != null && standardizedNames.contains(Text.standardize(player.getName())))
+			{
+				snipedPlayers.add(player);
+			}
+		}
 	}
 
 	/**
@@ -1444,9 +1706,9 @@ public class PrepToolsPlugin extends Plugin
 	}
 
 	/**
-	 * Adds a shift-right-click "Add caller" option to other players in the game world, so a
-	 * caller can be added to the Callers list without alt-tabbing to config to type their name.
-	 * Only appears while shift is held (client.isKeyPressed(KeyCode.KC_SHIFT)) - same idiom used
+	 * Adds shift-right-click "Add caller" and "Add to snipe list" options to other players in the
+	 * game world, so either list can be built without alt-tabbing to config to type a name. Only
+	 * appears while shift is held (client.isKeyPressed(KeyCode.KC_SHIFT)) - same idiom used
 	 * elsewhere in RuneLite for shift-only menu additions (e.g. NpcIndicatorsPlugin's tag option).
 	 *
 	 * Anchored on MenuOpened rather than MenuEntryAdded: MenuOpened fires once with the whole
@@ -1487,6 +1749,12 @@ public class PrepToolsPlugin extends Plugin
 				.setTarget(entry.getTarget())
 				.setType(MenuAction.RUNELITE)
 				.onClick(e -> addCaller(player.getName()));
+
+			client.createMenuEntry(idx)
+				.setOption(ADD_TO_SNIPE_LIST)
+				.setTarget(entry.getTarget())
+				.setType(MenuAction.RUNELITE)
+				.onClick(e -> addToSnipeList(player.getName()));
 		}
 	}
 
@@ -1565,6 +1833,104 @@ public class PrepToolsPlugin extends Plugin
 	}
 
 	/**
+	 * Appends a player to the "Snipe list" config list if they're not already on it - mirrors
+	 * addCaller()'s shift-right-click flow exactly, just against the snipe list instead.
+	 */
+	private void addToSnipeList(String playerName)
+	{
+		if (playerName == null)
+		{
+			return;
+		}
+
+		if (!appendSnipeNameIfNew(playerName))
+		{
+			return;
+		}
+
+		chatMessageManager.queue(QueuedMessage.builder()
+			.type(ChatMessageType.CONSOLE)
+			.value("Added " + playerName + " to the snipe list.")
+			.build());
+	}
+
+	/**
+	 * Adds a name typed directly into the sidebar panel's snipe list "Add" field. Package-private
+	 * since PrepToolsPanel lives in this same package.
+	 */
+	void addSnipeFromPanel(String rawInput)
+	{
+		if (rawInput == null || rawInput.trim().isEmpty())
+		{
+			return;
+		}
+
+		appendSnipeNameIfNew(rawInput.trim());
+	}
+
+	private boolean appendSnipeNameIfNew(String name)
+	{
+		String standardizedName = Text.standardize(name);
+		for (String existingName : parseNameList(config.snipeList()))
+		{
+			if (Text.standardize(existingName).equals(standardizedName))
+			{
+				return false;
+			}
+		}
+
+		String existing = config.snipeList();
+		String updated = (existing == null || existing.trim().isEmpty())
+			? name
+			: existing.trim() + "\n" + name;
+
+		configManager.setConfiguration(PrepToolsConfig.GROUP, "snipeList", updated);
+		return true;
+	}
+
+	/**
+	 * Called by the sidebar panel's delete button to remove a name from the "Snipe list" config
+	 * list entirely. Package-private since PrepToolsPanel lives in this same package.
+	 */
+	void removeSnipedName(String name)
+	{
+		List<String> names = parseNameList(config.snipeList());
+		String standardizedName = Text.standardize(name);
+
+		boolean removed = names.removeIf(existingName -> Text.standardize(existingName).equals(standardizedName));
+		if (!removed)
+		{
+			return;
+		}
+
+		configManager.setConfiguration(PrepToolsConfig.GROUP, "snipeList", String.join("\n", names));
+	}
+
+	/**
+	 * Splits a comma/newline separated name list (the "Snipe list" config format - no nickname
+	 * support, unlike parseCallerEntries()) into a plain list of trimmed, non-empty names.
+	 */
+	private List<String> parseNameList(String raw)
+	{
+		List<String> names = new ArrayList<>();
+		if (raw == null || raw.trim().isEmpty())
+		{
+			return names;
+		}
+
+		for (String part : raw.split("[,\\n]"))
+		{
+			String trimmed = part.trim();
+			if (!trimmed.isEmpty())
+			{
+				names.add(trimmed);
+			}
+		}
+
+		return names;
+	}
+
+	/**
 	 * Posts the name of the player you're currently following/interacting with into the chat
 	 * input box, prefixed with the configured text. This PRE-FILLS the chat input only - it does
 	 * not press Enter for you, so you still send the message yourself as a final, deliberate
@@ -1614,55 +1980,80 @@ public class PrepToolsPlugin extends Plugin
 
 	/**
 	 * Detects a player (any player, including the local player) being hit by a freeze-capable
-	 * spell graphic and starts/refreshes their freeze countdown. This fires once per hit - the
-	 * countdown itself is tracked separately and ticked down in updateFreezeTimers().
+	 * spell graphic, or by the teleblock spell's graphic, and starts/refreshes the matching
+	 * countdown. Fires once per hit - the countdowns themselves are tracked separately and ticked
+	 * down in updateFreezeTimers()/updateTeleblockTimers().
+	 *
+	 * Restructured from two independent early-return methods into one: both checks need the same
+	 * "is this a player" guard, and a single GraphicChanged event only ever carries one graphic ID
+	 * at a time, so a freeze hit and a teleblock hit can never both match for the same event -
+	 * checking both here (rather than short-circuiting the whole method on !showFreezeTimers()) is
+	 * what lets teleblock detection run independently of the freeze config toggle.
 	 */
 	@Subscribe
 	public void onGraphicChanged(GraphicChanged event)
 	{
-		if (!config.showFreezeTimers())
-		{
-			return;
-		}
-
 		Actor actor = event.getActor();
 		if (!(actor instanceof Player))
 		{
 			return;
 		}
 
-		FreezeSpellInfo info = FREEZE_SPELL_INFO.get(actor.getGraphic());
-		if (info == null)
-		{
-			return;
-		}
-
 		Player player = (Player) actor;
 
-		// "Hide for own team" is about decluttering teammates' freezes, not suppressing your own -
-		// isOwnTeamMember() is true for the local player too (you're on your own team), so that
-		// has to be excluded explicitly or your own freeze would never get tracked while it's on.
-		if (config.hideFreezeTimersForOwnTeam() && player != client.getLocalPlayer() && isOwnTeamMember(player))
+		if (config.showFreezeTimers())
 		{
-			return;
+			FreezeSpellInfo info = FREEZE_SPELL_INFO.get(actor.getGraphic());
+			if (info != null)
+			{
+				// "Hide for own team" is about decluttering teammates' freezes, not suppressing your
+				// own - isOwnTeamMember() is true for the local player too (you're on your own
+				// team), so that has to be excluded explicitly or your own freeze would never get
+				// tracked while it's on.
+				if (!(config.hideFreezeTimersForOwnTeam() && player != client.getLocalPlayer() && isOwnTeamMember(player)))
+				{
+					int startTick = client.getTickCount();
+					// +1: testing showed the countdown hitting zero one full tick before the target
+					// could actually move again. The wiki-quoted durations (e.g. Ice Barrage = 32
+					// ticks) are correct, but there's an alignment gap of one tick between the
+					// moment GraphicChanged fires and when the server-side unfreeze actually takes
+					// effect, on top of the earlier movement-detection timing issue. This correction
+					// targets that specific remaining gap.
+					int endTick = startTick + info.durationTicks + 1;
+
+					// If this player is already tracked as frozen with a later end tick, don't
+					// shorten it - otherwise (new freeze, or existing one already expired) take the
+					// new duration.
+					FreezeState existing = freezeStates.get(player);
+					if (existing == null || endTick > existing.endTick)
+					{
+						long durationMillis = (info.durationTicks + 1) * 600L;
+						freezeStates.put(player, new FreezeState(info.spriteId, startTick, endTick, System.currentTimeMillis(), durationMillis));
+						freezeLastKnownLocation.put(player, player.getWorldLocation());
+					}
+				}
+			}
 		}
 
-		int startTick = client.getTickCount();
-		// +1: testing showed the countdown hitting zero one full tick before the target could
-		// actually move again. The wiki-quoted durations (e.g. Ice Barrage = 32 ticks) are
-		// correct, but there's an alignment gap of one tick between the moment GraphicChanged
-		// fires and when the server-side unfreeze actually takes effect, on top of the earlier
-		// movement-detection timing issue. This correction targets that specific remaining gap.
-		int endTick = startTick + info.durationTicks + 1;
-
-		// If this player is already tracked as frozen with a later end tick, don't shorten it -
-		// otherwise (new freeze, or existing one already expired) take the new duration.
-		FreezeState existing = freezeStates.get(player);
-		if (existing == null || endTick > existing.endTick)
+		if (config.showTeleblockTimers() && actor.getGraphic() == SpotanimID.TELE_BLOCK_IMPACT)
 		{
-			long durationMillis = (info.durationTicks + 1) * 600L;
-			freezeStates.put(player, new FreezeState(info.spriteId, startTick, endTick, System.currentTimeMillis(), durationMillis));
-			freezeLastKnownLocation.put(player, player.getWorldLocation());
+			if (!(config.hideTeleblockTimersForOwnTeam() && player != client.getLocalPlayer() && isOwnTeamMember(player)))
+			{
+				// Halved duration if the target was praying Protect from Magic at the moment the
+				// spell landed - read here, at hit time, since the overhead icon can change again
+				// immediately afterwards and wouldn't reflect what was actually active when it counted.
+				boolean wasPrayingMagic = player.getOverheadIcon() == HeadIcon.MAGIC;
+				int durationTicks = wasPrayingMagic ? TELEBLOCK_DURATION_TICKS_PROTECTED : TELEBLOCK_DURATION_TICKS;
+				int startTick = client.getTickCount();
+				int endTick = startTick + durationTicks;
+
+				TeleblockState existing = teleblockStates.get(player);
+				if (existing == null || endTick > existing.endTick)
+				{
+					long durationMillis = durationTicks * 600L;
+					teleblockStates.put(player, new TeleblockState(startTick, endTick, System.currentTimeMillis(), durationMillis));
+				}
+			}
 		}
 	}
 
@@ -1804,6 +2195,44 @@ public class PrepToolsPlugin extends Plugin
 		}
 	}
 
+	/**
+	 * Tracked state for one player's active teleblock - see onGraphicChanged()/TeleblockOverlay.
+	 * No immunity phase and no movement-based early clearing (neither concept applies to teleblock -
+	 * it doesn't prevent movement, and there's no post-expiry "can't be teleblocked again" window).
+	 */
+	static class TeleblockState
+	{
+		final int startTick;
+		final int endTick;
+		final long startTimeMillis;
+		final long durationMillis;
+
+		TeleblockState(int startTick, int endTick, long startTimeMillis, long durationMillis)
+		{
+			this.startTick = startTick;
+			this.endTick = endTick;
+			this.startTimeMillis = startTimeMillis;
+			this.durationMillis = durationMillis;
+		}
+	}
+
+	/**
+	 * Ticks down tracked teleblocks, removing any that have expired. Also drops a team member who
+	 * was already tracked before "Hide for own team" was turned on, or who became a teammate
+	 * mid-teleblock - same idea as updateFreezeTimers()'s equivalent cleanup.
+	 */
+	private void updateTeleblockTimers()
+	{
+		if (config.hideTeleblockTimersForOwnTeam())
+		{
+			Player local = client.getLocalPlayer();
+			teleblockStates.keySet().removeIf(player -> player != local && isOwnTeamMember(player));
+		}
+
+		int currentTick = client.getTickCount();
+		teleblockStates.entrySet().removeIf(entry -> currentTick >= entry.getValue().endTick);
+	}
+
 	private void updateWeaponIndicators()
 	{
 		meleeAttackerCount = 0;
@@ -1888,6 +2317,486 @@ public class PrepToolsPlugin extends Plugin
 
 		// getEquipmentId(KitType) already returns the plain item ID - no offset needed here.
 		return composition.getEquipmentId(KitType.WEAPON);
+	}
+
+	/**
+	 * Recomputes teamCapeCounts (team number -> nearby player count) and re-parses teamCapeNames
+	 * from config, every tick - a plain full scan of client.getPlayers(), the same approach already
+	 * used elsewhere in this plugin (updateOpponentInfo(), updateTargetedPlayers()) rather than
+	 * tracking spawn/despawn/changed deltas the way vanilla RuneLite's Team plugin does; simpler,
+	 * and cheap enough at normal player-count scale.
+	 */
+	private void updateTeamCapeCounts()
+	{
+		teamCapeNames = parseTeamCapeNames(config.teamCapeNames());
+
+		if (!config.showTeamCapeOverlay())
+		{
+			teamCapeCounts = Collections.emptyMap();
+			return;
+		}
+
+		Map<Integer, Integer> counts = new HashMap<>();
+		for (Player player : client.getPlayers())
+		{
+			if (player != null && player.getTeam() > 0)
+			{
+				counts.merge(player.getTeam(), 1, Integer::sum);
+			}
+		}
+
+		Map<Integer, Integer> sorted = new LinkedHashMap<>();
+		counts.entrySet().stream()
+			.sorted(Map.Entry.<Integer, Integer>comparingByValue().reversed()
+				.thenComparing(Map.Entry.comparingByKey()))
+			.forEach(e -> sorted.put(e.getKey(), e.getValue()));
+
+		teamCapeCounts = sorted;
+	}
+
+	/**
+	 * Parses PrepToolsConfig#teamCapeNames ("TeamNumber:Name" per line/comma) into a lookup map.
+	 * Malformed lines (no colon, or a non-numeric team number) are silently skipped.
+	 */
+	private Map<Integer, String> parseTeamCapeNames(String raw)
+	{
+		Map<Integer, String> names = new HashMap<>();
+		if (raw == null || raw.trim().isEmpty())
+		{
+			return names;
+		}
+
+		for (String part : raw.split("[,\\n]"))
+		{
+			String trimmed = part.trim();
+			if (trimmed.isEmpty())
+			{
+				continue;
+			}
+
+			int colonIndex = trimmed.indexOf(':');
+			if (colonIndex < 0)
+			{
+				continue;
+			}
+
+			String numberPart = trimmed.substring(0, colonIndex).trim();
+			String namePart = trimmed.substring(colonIndex + 1).trim();
+			if (namePart.isEmpty())
+			{
+				continue;
+			}
+
+			// Backstop for TEAM_CAPE_NAME_MAX_LENGTH - the sidebar panel's editor already prevents
+			// typing past it, but this field can also be edited directly as raw text via RuneLite's
+			// own config panel, which has no such restriction.
+			if (namePart.length() > TEAM_CAPE_NAME_MAX_LENGTH)
+			{
+				namePart = namePart.substring(0, TEAM_CAPE_NAME_MAX_LENGTH);
+			}
+
+			try
+			{
+				names.put(Integer.parseInt(numberPart), namePart);
+			}
+			catch (NumberFormatException e)
+			{
+				// Skip malformed lines rather than failing the whole list over one typo.
+			}
+		}
+
+		return names;
+	}
+
+	/**
+	 * Renders a team-number -> name map back into the "Team cape names" config field's text
+	 * format - the inverse of parseTeamCapeNames(). Used by setTeamCapeNameFromPanel()/
+	 * removeTeamCapeName() to persist a change made from the sidebar panel's editor.
+	 */
+	private String serializeTeamCapeNames(Map<Integer, String> names)
+	{
+		StringBuilder sb = new StringBuilder();
+		for (Map.Entry<Integer, String> entry : names.entrySet())
+		{
+			if (sb.length() > 0)
+			{
+				sb.append('\n');
+			}
+			sb.append(entry.getKey()).append(':').append(entry.getValue());
+		}
+		return sb.toString();
+	}
+
+	/**
+	 * Called by the sidebar panel's Team Capes editor to add or replace the custom name for one
+	 * team number. Package-private since PrepToolsPanel lives in this same package.
+	 */
+	void setTeamCapeNameFromPanel(int teamNumber, String rawName)
+	{
+		String name = rawName == null ? "" : rawName.trim();
+		if (name.length() > TEAM_CAPE_NAME_MAX_LENGTH)
+		{
+			name = name.substring(0, TEAM_CAPE_NAME_MAX_LENGTH);
+		}
+
+		Map<Integer, String> names = parseTeamCapeNames(config.teamCapeNames());
+		if (name.isEmpty())
+		{
+			names.remove(teamNumber);
+		}
+		else
+		{
+			names.put(teamNumber, name);
+		}
+
+		configManager.setConfiguration(PrepToolsConfig.GROUP, "teamCapeNames", serializeTeamCapeNames(names));
+	}
+
+	/**
+	 * Called by the sidebar panel's delete button next to a configured team cape name.
+	 */
+	void removeTeamCapeName(int teamNumber)
+	{
+		Map<Integer, String> names = parseTeamCapeNames(config.teamCapeNames());
+		if (names.remove(teamNumber) != null)
+		{
+			configManager.setConfiguration(PrepToolsConfig.GROUP, "teamCapeNames", serializeTeamCapeNames(names));
+		}
+	}
+
+	/**
+	 * Computes strengthBoosted/prayerBoosted for FightInfoOverlay's green/white Strength and
+	 * Prayer colouring - both a straight comparison against the real (unboosted) level, no peak
+	 * tracking. Strength additionally requires the boost to exceed PrepToolsConfig#
+	 * strengthGreenThreshold() (default 0, i.e. any active boost at all) - e.g. with the threshold
+	 * set to 10, a +11 boost (110/99) reads as boosted, and a +10 boost (109/99) doesn't.
+	 */
+	private void updatePlayerStatBoosts()
+	{
+		int currentStrength = client.getBoostedSkillLevel(Skill.STRENGTH);
+		int realStrength = client.getRealSkillLevel(Skill.STRENGTH);
+		strengthBoosted = (currentStrength - realStrength) > config.strengthGreenThreshold();
+
+		int currentPrayer = client.getBoostedSkillLevel(Skill.PRAYER);
+		int realPrayer = client.getRealSkillLevel(Skill.PRAYER);
+		prayerBoosted = currentPrayer > realPrayer;
+	}
+
+	/**
+	 * Refreshes lastKnownWorldPoint/currentWildernessLevel/currentLocationName from the local
+	 * player's current position - see those fields' own docs.
+	 */
+	private void updateLocation()
+	{
+		Player local = client.getLocalPlayer();
+		if (local == null)
+		{
+			return;
+		}
+
+		WorldPoint point = local.getWorldLocation();
+		if (point == null)
+		{
+			return;
+		}
+
+		lastKnownWorldPoint = point;
+		currentWildernessLevel = readWildernessLevelWidget();
+		currentLocationName = findLocationName(point);
+
+		// The "hovered tile" readout for the Location Mapper tool - getSelectedSceneTile() is the
+		// same client-tracked "tile under the cursor" state the game itself uses for its own
+		// Walk-here/tile-highlight behaviour, so no separate mouse-position-to-world-point maths is
+		// needed here. Only updated once per tick (like everything else in this plugin) rather than
+		// on every mouse-move/render frame - plenty responsive for a manual mapping tool.
+		Tile hoveredTile = client.getSelectedSceneTile();
+		hoveredWorldPoint = hoveredTile != null ? hoveredTile.getWorldLocation() : null;
+		hoveredLocationName = hoveredWorldPoint != null ? findLocationName(hoveredWorldPoint) : null;
+	}
+
+	/**
+	 * Reads the game's own wilderness level widget (InterfaceID.PvpIcons.WILDERNESSLEVEL, text
+	 * like "Level: 15") rather than re-deriving a level from coordinates - this is exactly the
+	 * approach RuneLite's own CombatLevelPlugin uses for the same widget, and it means this plugin
+	 * never has to keep a hand-written formula in sync with wilderness geometry (which could easily
+	 * shift in a future content revision this fork is tracking). Returns null while not in the
+	 * wilderness (the widget doesn't exist at all then).
+	 */
+	private Integer readWildernessLevelWidget()
+	{
+		Widget widget = client.getWidget(InterfaceID.PvpIcons.WILDERNESSLEVEL);
+		if (widget == null)
+		{
+			return null;
+		}
+
+		String text = widget.getText();
+		if (text == null)
+		{
+			return null;
+		}
+
+		Matcher m = WILDERNESS_LEVEL_PATTERN.matcher(text);
+		return m.matches() ? Integer.parseInt(m.group(1)) : null;
+	}
+
+	/**
+	 * Resolves a WorldPoint to a user-named area, if it falls inside one of wildernessLocations -
+	 * first match wins, so overlapping boxes fall back to whichever was added first.
+	 */
+	private String findLocationName(WorldPoint point)
+	{
+		for (WildernessLocation location : wildernessLocations)
+		{
+			if (location.contains(point.getX(), point.getY(), point.getPlane()))
+			{
+				return location.name;
+			}
+		}
+		return null;
+	}
+
+	/**
+	 * Loads wildernessLocations from config (see WILDERNESS_LOCATIONS_CONFIG_KEY's doc for why this
+	 * is a raw config key rather than a visible ConfigItem), seeding a handful of default areas on
+	 * first run.
+	 */
+	private void loadWildernessLocations()
+	{
+		String json = configManager.getConfiguration(PrepToolsConfig.GROUP, WILDERNESS_LOCATIONS_CONFIG_KEY);
+		if (json == null || json.trim().isEmpty())
+		{
+			wildernessLocations = defaultWildernessLocations();
+			saveWildernessLocations();
+			return;
+		}
+
+		try
+		{
+			List<WildernessLocation> parsed = gson.fromJson(json, new TypeToken<List<WildernessLocation>>()
+			{
+			}.getType());
+			wildernessLocations = parsed != null ? parsed : new ArrayList<>();
+		}
+		catch (RuntimeException e)
+		{
+			log.warn("PvP Tools: failed to parse saved wilderness locations, resetting to defaults", e);
+			wildernessLocations = defaultWildernessLocations();
+			saveWildernessLocations();
+		}
+	}
+
+	private void saveWildernessLocations()
+	{
+		configManager.setConfiguration(PrepToolsConfig.GROUP, WILDERNESS_LOCATIONS_CONFIG_KEY, gson.toJson(wildernessLocations));
+	}
+
+	/**
+	 * A handful of rough, eyeballed-not-surveyed starter boxes - just enough for the "Location
+	 * Mapper" sidebar tool to have something to show/build on immediately, per CLAUDE.md's own
+	 * note that this feature should "start with a very simple structure" if precise wilderness
+	 * coordinate data is hard to come by. Walk to a real landmark, use Set Corner A/B + Save in the
+	 * panel, and either replace one of these or add alongside it - that hands-on process is the
+	 * actual intended way this list gets built out and verified, not these numbers.
+	 */
+	private List<WildernessLocation> defaultWildernessLocations()
+	{
+		List<WildernessLocation> defaults = new ArrayList<>();
+		defaults.add(new WildernessLocation("Ferox Enclave", 3125, 3607, 3160, 3638, 0));
+		defaults.add(new WildernessLocation("Wilderness Volcano", 3345, 3903, 3390, 3936, 0));
+		defaults.add(new WildernessLocation("Lava Maze", 3050, 3810, 3070, 3830, 0));
+		defaults.add(new WildernessLocation("Graveyard of Shadows", 3160, 3660, 3180, 3680, 0));
+		defaults.add(new WildernessLocation("Mage Arena Bank", 3090, 3940, 3110, 3960, 0));
+		return defaults;
+	}
+
+	/**
+	 * Called by the sidebar panel's "Set Corner A/B" buttons - captures the local player's current
+	 * position (cached in lastKnownWorldPoint every tick) as one corner of a new location box.
+	 * Package-private since PrepToolsPanel lives in this same package.
+	 */
+	void setLocationCornerA()
+	{
+		locationCornerA = lastKnownWorldPoint;
+		pushLocationMapperUpdate();
+	}
+
+	void setLocationCornerB()
+	{
+		locationCornerB = lastKnownWorldPoint;
+		pushLocationMapperUpdate();
+	}
+
+	/**
+	 * Pushes the full Location Mapper readout (current position, hovered tile, both corners) to
+	 * the sidebar panel in one call - shared by onGameTick's per-tick refresh and the corner/save
+	 * button handlers below, so the panel's method signature only needs updating in one place.
+	 */
+	private void pushLocationMapperUpdate()
+	{
+		panel.updateLocationMapper(lastKnownWorldPoint, currentWildernessLevel, currentLocationName,
+			hoveredWorldPoint, hoveredLocationName, locationCornerA, locationCornerB);
+	}
+
+	/**
+	 * Called by the sidebar panel's "Save Location" button once both corners are set and a name has
+	 * been typed in. Normalizes the two corners into a min/max box regardless of which corner was
+	 * set first/which direction they're offset from each other.
+	 */
+	void saveLocationFromPanel(String name)
+	{
+		if (name == null || name.trim().isEmpty() || locationCornerA == null || locationCornerB == null)
+		{
+			return;
+		}
+
+		if (locationCornerA.getPlane() != locationCornerB.getPlane())
+		{
+			chatMessageManager.queue(QueuedMessage.builder()
+				.type(ChatMessageType.CONSOLE)
+				.value("PvP Tools: both corners must be on the same plane/floor.")
+				.build());
+			return;
+		}
+
+		int minX = Math.min(locationCornerA.getX(), locationCornerB.getX());
+		int maxX = Math.max(locationCornerA.getX(), locationCornerB.getX());
+		int minY = Math.min(locationCornerA.getY(), locationCornerB.getY());
+		int maxY = Math.max(locationCornerA.getY(), locationCornerB.getY());
+
+		wildernessLocations.add(new WildernessLocation(name.trim(), minX, minY, maxX, maxY, locationCornerA.getPlane()));
+		saveWildernessLocations();
+
+		locationCornerA = null;
+		locationCornerB = null;
+		panel.updateWildernessLocations(wildernessLocations);
+		pushLocationMapperUpdate();
+	}
+
+	/**
+	 * Called by the sidebar panel's delete button next to a saved location.
+	 */
+	void removeWildernessLocation(WildernessLocation location)
+	{
+		if (wildernessLocations.remove(location))
+		{
+			saveWildernessLocations();
+			panel.updateWildernessLocations(wildernessLocations);
+		}
+	}
+
+	/**
+	 * Types the current wilderness location (name and/or level, whatever's known) into the chat
+	 * input box - prefill only, same "you still press Enter" model as postFollowedPlayerNameToChat().
+	 */
+	private void postLocationToChat()
+	{
+		clientThread.invoke(() ->
+		{
+			String name = currentLocationName;
+			Integer level = currentWildernessLevel;
+			if (name == null && level == null)
+			{
+				return;
+			}
+
+			StringBuilder sb = new StringBuilder();
+			String prefix = config.locationSpamPrefix();
+			if (prefix != null && !prefix.trim().isEmpty())
+			{
+				sb.append(prefix.trim()).append(' ');
+			}
+			sb.append(name != null ? name : "Wilderness");
+			if (level != null)
+			{
+				sb.append(" (level ").append(level).append(')');
+			}
+
+			client.setVarcStrValue(VarClientStr.CHATBOX_TYPED_TEXT, sb.toString());
+			client.runScript(ScriptID.CHAT_PROMPT_INIT);
+		});
+	}
+
+	/**
+	 * Appends one line to the Friends Chat Log (newest-first, capped at
+	 * PrepToolsConfig#friendsChatLogMaxEntries) and pushes the update to the sidebar panel.
+	 */
+	private void logFriendsChatActivity(String playerName, String activity)
+	{
+		if (!config.enableFriendsChatLog() || playerName == null)
+		{
+			return;
+		}
+
+		friendsChatLog.addFirst(new FriendsChatLogEntry(playerName, activity));
+
+		int max = Math.max(1, config.friendsChatLogMaxEntries());
+		while (friendsChatLog.size() > max)
+		{
+			friendsChatLog.removeLast();
+		}
+
+		panel.updateFriendsChatLog(friendsChatLog);
+	}
+
+	/**
+	 * Logs a friends chat member joining. Package-private visibility not needed - RuneLite's
+	 * eventbus finds @Subscribe methods reflectively regardless of access modifier - but public to
+	 * match this class's other @Subscribe handlers.
+	 */
+	@Subscribe
+	public void onFriendsChatMemberJoined(FriendsChatMemberJoined event)
+	{
+		FriendsChatMember member = event.getMember();
+		if (member != null)
+		{
+			logFriendsChatActivity(member.getName(), "joined the friends chat");
+		}
+	}
+
+	/**
+	 * Logs a friends chat member leaving. NOTE: this also fires when a member simply logs out
+	 * (they're removed from the friends chat member list either way) - there's no public API signal
+	 * that distinguishes "left the chat while staying logged in" from "logged out", so both are
+	 * logged identically here rather than guessing.
+	 */
+	@Subscribe
+	public void onFriendsChatMemberLeft(FriendsChatMemberLeft event)
+	{
+		FriendsChatMember member = event.getMember();
+		if (member != null)
+		{
+			logFriendsChatActivity(member.getName(), "left the friends chat");
+		}
+	}
+
+	/**
+	 * Logs a friends chat member's death, detected via their death animation - only works while
+	 * they're actually on screen (an animation change for an off-screen/despawned player can't be
+	 * observed at all). Restricted to PLAYER_DEATH_ANIMATION_IDS (the common human death anims) -
+	 * see that constant's own doc for the coverage caveat.
+	 */
+	@Subscribe
+	public void onAnimationChanged(AnimationChanged event)
+	{
+		if (!config.enableFriendsChatLog())
+		{
+			return;
+		}
+
+		Actor actor = event.getActor();
+		if (!(actor instanceof Player) || !PLAYER_DEATH_ANIMATION_IDS.contains(actor.getAnimation()))
+		{
+			return;
+		}
+
+		Player player = (Player) actor;
+		if (player.getName() == null || !getFriendsChatMemberNames().contains(Text.standardize(player.getName())))
+		{
+			return;
+		}
+
+		logFriendsChatActivity(player.getName(), "died");
 	}
 
 	/**
