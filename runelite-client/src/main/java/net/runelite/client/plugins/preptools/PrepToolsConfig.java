@@ -617,6 +617,26 @@ public interface PrepToolsConfig extends Config
 		return Color.GREEN;
 	}
 
+	@ConfigItem(
+		keyName = "showPlayerIndex",
+		name = "Show player index",
+		description = "<html>Shows your current server-assigned player index - a<br>"
+			+ "stable ID given at login, NOT the same as the PID that<br>"
+			+ "shuffles every ~30-90s. Jagex has confirmed (Mod Ash, Feb<br>"
+			+ "2023) the client uses this ID to decide render priority<br>"
+			+ "when multiple players stand on one tile - who's drawn on<br>"
+			+ "top vs hidden in a pile. Informational only: which<br>"
+			+ "direction (low/high) is favourable isn't confirmed<br>"
+			+ "anywhere, so this doesn't colour-code the value or claim<br>"
+			+ "it controls who gets right/left-clicked in a pile.</html>",
+		position = 20,
+		section = "fightInfoSection"
+	)
+	default boolean showPlayerIndex()
+	{
+		return false;
+	}
+
 	// --- Team Capes section ---
 
 	@ConfigSection(

@@ -23,7 +23,9 @@ client with similar team-coordination features. Core pieces:
   status. Shift-right-click a player to add them, same idiom as "Add caller" (default green).
 - **Infobox panel** — bottom-right HUD: your stats (HP/prayer/strength/ranged — prayer and
   strength colour green while boosted at/above a threshold), freeze/teleblock status, target's
-  prayer, opponent prayers/weapons, who's attacking you, current wilderness location.
+  prayer, opponent prayers/weapons (melee/ranged/magic — melee/ranged/magic weapon IDs live in
+  `PrepToolsPlugin`'s `MELEE_WEAPON_IDS`/`RANGED_WEAPON_IDS`/`MAGIC_WEAPON_IDS`), who's attacking
+  you, current wilderness location, your player index (informational — see the PID note below).
 - **Friends chat log** — sidebar panel, newest-first, logs members joining/leaving/dying.
 - **Location tools** — detects your current named wilderness area (a user-built list of
   rectangles, see `WildernessLocation`/the sidebar's "Location Mapper" tool) and can spam it into
@@ -91,6 +93,16 @@ These cost real debugging time to find. Don't rediscover them the hard way:
   (345) instead - the newer gameval-style constants class. Player death (for detecting an
   on-screen friends chat member dying) is similarly only in the gameval class:
   `net.runelite.api.gameval.AnimationID.HUMAN_DEATH` / `HUMAN_DEATH_BACKWARDS` (836/837).
+- **"PID" is two unrelated OSRS mechanics — don't conflate them.** (1) The classic PvP "PID":
+  combat action-processing priority, randomizes every ~100-150 ticks (60-90s; 40-60 ticks/24-36s
+  on PvP worlds), not exposed anywhere in the RuneLite API, not controllable. (2) A separate stable
+  per-login player index (`Player.getId()`) that a Jagex developer (Mod Ash, Feb 2023, cited on the
+  OSRS Wiki's "Player identification number" page) confirmed the client uses for **render
+  priority** when players stack on one tile (who's drawn on top vs hidden) — this is what
+  `PrepToolsConfig#showPlayerIndex()`/`FightInfoOverlay#drawPlayerIndexRow()` surface. Neither
+  mechanic is confirmed anywhere (wiki, PK guides, community) to control right-click menu order or
+  which player a left-click on a pile defaults to — every "PID guide" online is actually about
+  mechanic (1), which is irrelevant to click targeting. Don't imply otherwise in UI copy.
 - **git has no configured `user.email`/`user.name` in this environment**, and Claude must not set
   git config itself. Ask the user to run it themselves via `! git config user.email ... && git
   config user.name ...` before attempting a commit.

@@ -124,12 +124,24 @@ public class PrepToolsPlugin extends Plugin
 		23330, // Rune scimitar (guthix)
 		23332, // Rune scimitar (saradomin)
 		23334, // Rune scimitar (zamorak)
-		1347   // Rune warhammer
+		1347,  // Rune warhammer
+		1289,  // Rune sword
+		1319,  // Rune 2h sword
+		20756  // Hill giant club
 	));
 
 	// Ranged weapons that count towards the ranged indicator.
 	private static final Set<Integer> RANGED_WEAPON_IDS = new HashSet<>(Arrays.asList(
 		853 // Maple shortbow
+	));
+
+	// Elemental staves that count towards the magic indicator. All grouped under one generic
+	// magic icon (staff of air), same idea as the melee/ranged sets above.
+	private static final Set<Integer> MAGIC_WEAPON_IDS = new HashSet<>(Arrays.asList(
+		1381, // Staff of air
+		1387, // Staff of fire
+		1385, // Staff of earth
+		1383  // Staff of water
 	));
 
 	// Freeze-capable spell graphics, their BASE duration in game ticks (1 tick = 0.6s), and the
@@ -332,6 +344,8 @@ public class PrepToolsPlugin extends Plugin
 	private int opponentMeleeWeaponCount;
 	@Getter
 	private int opponentRangedWeaponCount;
+	@Getter
+	private int opponentMagicWeaponCount;
 
 	/**
 	 * Number of players interacting with the local player who are wielding a tracked melee weapon.
@@ -344,6 +358,13 @@ public class PrepToolsPlugin extends Plugin
 	 */
 	@Getter
 	private int rangedAttackerCount;
+
+	/**
+	 * Number of players interacting with the local player who are wielding a tracked magic weapon
+	 * (an elemental staff - see MAGIC_WEAPON_IDS).
+	 */
+	@Getter
+	private int magicAttackerCount;
 
 	// Tracks which players are currently within their "just became a target" flash window.
 	private final Map<Player, Long> targetFlashEndTimes = new HashMap<>();
@@ -553,8 +574,10 @@ public class PrepToolsPlugin extends Plugin
 		opponentMagicPrayerCount = 0;
 		opponentMeleeWeaponCount = 0;
 		opponentRangedWeaponCount = 0;
+		opponentMagicWeaponCount = 0;
 		meleeAttackerCount = 0;
 		rangedAttackerCount = 0;
+		magicAttackerCount = 0;
 		cachedHighlightStyles = Collections.emptyMap();
 		friendsChatMemberNamesCache = Collections.emptySet();
 		snipedPlayers.clear();
@@ -1186,6 +1209,7 @@ public class PrepToolsPlugin extends Plugin
 		opponentMagicPrayerCount = 0;
 		opponentMeleeWeaponCount = 0;
 		opponentRangedWeaponCount = 0;
+		opponentMagicWeaponCount = 0;
 
 		if (!config.showFightInfoOverlay() || (!config.showOpponentPrayers() && !config.showOpponentWeapons()))
 		{
@@ -1240,6 +1264,10 @@ public class PrepToolsPlugin extends Plugin
 			else if (RANGED_WEAPON_IDS.contains(weaponId))
 			{
 				opponentRangedWeaponCount++;
+			}
+			else if (MAGIC_WEAPON_IDS.contains(weaponId))
+			{
+				opponentMagicWeaponCount++;
 			}
 		}
 	}
@@ -2237,6 +2265,7 @@ public class PrepToolsPlugin extends Plugin
 	{
 		meleeAttackerCount = 0;
 		rangedAttackerCount = 0;
+		magicAttackerCount = 0;
 
 		if (!config.showFightInfoOverlay() || !config.showAttackingYou())
 		{
@@ -2283,6 +2312,10 @@ public class PrepToolsPlugin extends Plugin
 			else if (RANGED_WEAPON_IDS.contains(weaponId))
 			{
 				rangedAttackerCount++;
+			}
+			else if (MAGIC_WEAPON_IDS.contains(weaponId))
+			{
+				magicAttackerCount++;
 			}
 		}
 
@@ -2683,6 +2716,33 @@ public class PrepToolsPlugin extends Plugin
 			saveWildernessLocations();
 			panel.updateWildernessLocations(wildernessLocations);
 		}
+	}
+
+	/**
+	 * Called by the sidebar panel's per-row "Save" button while editing an existing saved
+	 * location. The two corners are taken exactly like saveLocationFromPanel() takes
+	 * locationCornerA/B - arbitrary points, not already-sorted min/max - and normalized into a
+	 * min/max box the same way, so editing an area behaves identically to how it was first drawn.
+	 * Mutates the existing WildernessLocation instance in place (rather than replacing it in the
+	 * list) so identity-based lookups elsewhere (e.g. the panel's edit-in-progress tracking) keep
+	 * working across the edit.
+	 */
+	void updateWildernessLocation(WildernessLocation location, String name, int corner1X, int corner1Y, int corner2X, int corner2Y, int plane)
+	{
+		if (name == null || name.trim().isEmpty() || !wildernessLocations.contains(location))
+		{
+			return;
+		}
+
+		location.name = name.trim();
+		location.minX = Math.min(corner1X, corner2X);
+		location.maxX = Math.max(corner1X, corner2X);
+		location.minY = Math.min(corner1Y, corner2Y);
+		location.maxY = Math.max(corner1Y, corner2Y);
+		location.plane = plane;
+
+		saveWildernessLocations();
+		panel.updateWildernessLocations(wildernessLocations);
 	}
 
 	/**

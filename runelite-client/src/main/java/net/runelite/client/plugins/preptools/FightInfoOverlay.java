@@ -31,12 +31,15 @@ import net.runelite.client.ui.overlay.OverlayPosition;
  *    the active spell's own icon and countdown while frozen. Reuses PrepToolsPlugin's FreezeState
  *    tracking and PrepToolsConfig's freeze colour/format settings, so it always agrees with
  *    FreezeOverlay's in-world countdown for the same freeze.
- * 3) The primary caller's target's active overhead prayer icon (optional, off by default).
- * 4) Opponents' overhead protection prayers (melee/ranged/magic), aggregated across every
+ * 3) Your current server-assigned player index (optional, off by default) - see
+ *    drawPlayerIndexRow()'s doc for what this is and, importantly, isn't confirmed to do.
+ * 4) The primary caller's target's active overhead prayer icon (optional, off by default).
+ * 5) Your current wilderness location (optional, on by default).
+ * 6) Opponents' overhead protection prayers (melee/ranged/magic), aggregated across every
  *    player currently on screen who is NOT in your friends chat.
- * 5) Opponents' weapons, same population, same melee/ranged categorisation as the "attacking
+ * 7) Opponents' weapons, same population, same melee/ranged/magic categorisation as the "attacking
  *    you" section below.
- * 6) Weapons of whoever is currently interacting with (attacking) YOU specifically. This row
+ * 8) Weapons of whoever is currently interacting with (attacking) YOU specifically. This row
  *    always reserves its space, even when empty, and can flash briefly when someone new engages you.
  *
  * Rendering approach: content is first drawn onto an offscreen buffer so the exact pixel bounds
@@ -51,6 +54,7 @@ public class FightInfoOverlay extends Overlay
 {
 	private static final int MELEE_WEAPON_ICON_ITEM_ID = 1333; // Rune scimitar
 	private static final int RANGED_WEAPON_ICON_ITEM_ID = 853;  // Maple shortbow
+	private static final int MAGIC_WEAPON_ICON_ITEM_ID = 1381;  // Staff of air
 
 	// Real overhead protection prayer sprite IDs, verified against RuneLite's SpriteID source.
 	private static final int SPRITE_PROTECT_MELEE = SpriteID.PRAYER_PROTECT_FROM_MELEE;
@@ -190,9 +194,10 @@ public class FightInfoOverlay extends Overlay
 		boolean freezeStatusEnabled = config.showFreezeStatus();
 		boolean targetPrayerEnabled = config.showTargetPrayer();
 		boolean locationEnabled = config.showLocationInInfobox();
+		boolean playerIndexEnabled = config.showPlayerIndex();
 
-		if (!prayersEnabled && !weaponsEnabled && !attackingEnabled
-			&& !statsEnabled && !freezeStatusEnabled && !targetPrayerEnabled && !locationEnabled)
+		if (!prayersEnabled && !weaponsEnabled && !attackingEnabled && !statsEnabled
+			&& !freezeStatusEnabled && !targetPrayerEnabled && !locationEnabled && !playerIndexEnabled)
 		{
 			return null;
 		}
@@ -219,6 +224,17 @@ public class FightInfoOverlay extends Overlay
 			y += LABEL_HEIGHT;
 
 			maxWidth = Math.max(maxWidth, PADDING + drawFreezeStatusRow(graphics, PADDING, y));
+			y += ROW_HEIGHT + SECTION_GAP;
+			anySectionDrawn = true;
+		}
+
+		if (playerIndexEnabled)
+		{
+			drawSeparatorIfNeeded(graphics, anySectionDrawn, y, Math.max(maxWidth, PANEL_MIN_WIDTH));
+			drawLabel(graphics, "Player Index", PADDING, y);
+			y += LABEL_HEIGHT;
+
+			maxWidth = Math.max(maxWidth, PADDING + drawPlayerIndexRow(graphics, PADDING, y));
 			y += ROW_HEIGHT + SECTION_GAP;
 			anySectionDrawn = true;
 		}
@@ -266,7 +282,8 @@ public class FightInfoOverlay extends Overlay
 
 		if (weaponsEnabled && hasOpponents)
 		{
-			boolean anyWeapons = plugin.getOpponentMeleeWeaponCount() > 0 || plugin.getOpponentRangedWeaponCount() > 0;
+			boolean anyWeapons = plugin.getOpponentMeleeWeaponCount() > 0 || plugin.getOpponentRangedWeaponCount() > 0
+				|| plugin.getOpponentMagicWeaponCount() > 0;
 			if (anyWeapons)
 			{
 				drawSeparatorIfNeeded(graphics, anySectionDrawn, y, Math.max(maxWidth, PANEL_MIN_WIDTH));
@@ -282,6 +299,10 @@ public class FightInfoOverlay extends Overlay
 				if (plugin.getOpponentRangedWeaponCount() > 0)
 				{
 					x += drawItemIcon(graphics, RANGED_WEAPON_ICON_ITEM_ID, plugin.getOpponentRangedWeaponCount(), x, y);
+				}
+				if (plugin.getOpponentMagicWeaponCount() > 0)
+				{
+					x += drawItemIcon(graphics, MAGIC_WEAPON_ICON_ITEM_ID, plugin.getOpponentMagicWeaponCount(), x, y);
 				}
 
 				maxWidth = Math.max(maxWidth, x);
@@ -313,7 +334,7 @@ public class FightInfoOverlay extends Overlay
 
 			int x = PADDING;
 
-			if (plugin.getMeleeAttackerCount() == 0 && plugin.getRangedAttackerCount() == 0)
+			if (plugin.getMeleeAttackerCount() == 0 && plugin.getRangedAttackerCount() == 0 && plugin.getMagicAttackerCount() == 0)
 			{
 				graphics.setFont(graphics.getFont().deriveFont(Font.PLAIN, 13f));
 				graphics.setColor(Color.LIGHT_GRAY);
@@ -329,6 +350,10 @@ public class FightInfoOverlay extends Overlay
 				if (plugin.getRangedAttackerCount() > 0)
 				{
 					x += drawItemIcon(graphics, RANGED_WEAPON_ICON_ITEM_ID, plugin.getRangedAttackerCount(), x, y);
+				}
+				if (plugin.getMagicAttackerCount() > 0)
+				{
+					x += drawItemIcon(graphics, MAGIC_WEAPON_ICON_ITEM_ID, plugin.getMagicAttackerCount(), x, y);
 				}
 			}
 
@@ -397,9 +422,10 @@ public class FightInfoOverlay extends Overlay
 		boolean freezeStatusEnabled = config.showFreezeStatus();
 		boolean targetPrayerEnabled = config.showTargetPrayer();
 		boolean locationEnabled = config.showLocationInInfobox();
+		boolean playerIndexEnabled = config.showPlayerIndex();
 
-		if (!prayersEnabled && !weaponsEnabled && !attackingEnabled
-			&& !statsEnabled && !freezeStatusEnabled && !targetPrayerEnabled && !locationEnabled)
+		if (!prayersEnabled && !weaponsEnabled && !attackingEnabled && !statsEnabled
+			&& !freezeStatusEnabled && !targetPrayerEnabled && !locationEnabled && !playerIndexEnabled)
 		{
 			return null;
 		}
@@ -418,6 +444,13 @@ public class FightInfoOverlay extends Overlay
 		{
 			drawAccentStripe(graphics, y, SELF_ACCENT_COLOR);
 			maxWidth = Math.max(maxWidth, COMPACT_PADDING + drawFreezeStatusRow(graphics, COMPACT_PADDING, y));
+			y += ROW_HEIGHT + COMPACT_ROW_GAP;
+		}
+
+		if (playerIndexEnabled)
+		{
+			drawAccentStripe(graphics, y, SELF_ACCENT_COLOR);
+			maxWidth = Math.max(maxWidth, COMPACT_PADDING + drawPlayerIndexRow(graphics, COMPACT_PADDING, y));
 			y += ROW_HEIGHT + COMPACT_ROW_GAP;
 		}
 
@@ -452,7 +485,8 @@ public class FightInfoOverlay extends Overlay
 
 		if (weaponsEnabled && hasOpponents)
 		{
-			boolean anyWeapons = plugin.getOpponentMeleeWeaponCount() > 0 || plugin.getOpponentRangedWeaponCount() > 0;
+			boolean anyWeapons = plugin.getOpponentMeleeWeaponCount() > 0 || plugin.getOpponentRangedWeaponCount() > 0
+				|| plugin.getOpponentMagicWeaponCount() > 0;
 			if (anyWeapons)
 			{
 				drawAccentStripe(graphics, y, OPPONENT_ACCENT_COLOR);
@@ -465,6 +499,10 @@ public class FightInfoOverlay extends Overlay
 				if (plugin.getOpponentRangedWeaponCount() > 0)
 				{
 					x += drawItemIcon(graphics, RANGED_WEAPON_ICON_ITEM_ID, plugin.getOpponentRangedWeaponCount(), x, y);
+				}
+				if (plugin.getOpponentMagicWeaponCount() > 0)
+				{
+					x += drawItemIcon(graphics, MAGIC_WEAPON_ICON_ITEM_ID, plugin.getOpponentMagicWeaponCount(), x, y);
 				}
 
 				maxWidth = Math.max(maxWidth, x);
@@ -489,7 +527,7 @@ public class FightInfoOverlay extends Overlay
 
 			int x = COMPACT_PADDING;
 
-			if (plugin.getMeleeAttackerCount() == 0 && plugin.getRangedAttackerCount() == 0)
+			if (plugin.getMeleeAttackerCount() == 0 && plugin.getRangedAttackerCount() == 0 && plugin.getMagicAttackerCount() == 0)
 			{
 				graphics.setFont(graphics.getFont().deriveFont(Font.PLAIN, 13f));
 				graphics.setColor(Color.LIGHT_GRAY);
@@ -505,6 +543,10 @@ public class FightInfoOverlay extends Overlay
 				if (plugin.getRangedAttackerCount() > 0)
 				{
 					x += drawItemIcon(graphics, RANGED_WEAPON_ICON_ITEM_ID, plugin.getRangedAttackerCount(), x, y);
+				}
+				if (plugin.getMagicAttackerCount() > 0)
+				{
+					x += drawItemIcon(graphics, MAGIC_WEAPON_ICON_ITEM_ID, plugin.getMagicAttackerCount(), x, y);
 				}
 			}
 
@@ -862,6 +904,23 @@ public class FightInfoOverlay extends Overlay
 			text = "Wilderness (level " + level + ")";
 		}
 
+		return drawText(graphics, text, x, y, Color.WHITE);
+	}
+
+	/**
+	 * Your current server-assigned player index - a stable ID given at login (distinct from the
+	 * "PID" that reshuffles every ~30-90s). A Jagex developer (Mod Ash, Feb 2023, on the OSRS
+	 * Wiki's "Player identification number" page) confirmed the client uses this ID to decide
+	 * render priority when multiple players stand on the same tile - i.e. who's drawn on top vs
+	 * hidden in a pile. Deliberately informational only: no colour-coding, and no claim that this
+	 * controls which player gets right/left-clicked in a pile - that specific claim (which is the
+	 * one PKers usually care about) isn't confirmed anywhere, only the render-priority part is. No
+	 * icon, same reasoning as drawLocationRow() - there's no single sprite that represents "an ID".
+	 */
+	private int drawPlayerIndexRow(Graphics2D graphics, int x, int y)
+	{
+		Player local = client.getLocalPlayer();
+		String text = local != null ? "Index " + local.getId() : "Unknown";
 		return drawText(graphics, text, x, y, Color.WHITE);
 	}
 

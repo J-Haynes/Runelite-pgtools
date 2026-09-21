@@ -102,6 +102,8 @@ public class PrepToolsPanel extends PluginPanel
 	private final JLabel cornerBLabel = new JLabel();
 	private final JTextField newLocationNameField = new JTextField();
 	private final JPanel savedLocationsPanel = new JPanel();
+	private List<WildernessLocation> lastWildernessLocations = Collections.emptyList();
+	private WildernessLocation editingWildernessLocation;
 
 	PrepToolsPanel(PrepToolsPlugin plugin)
 	{
@@ -811,7 +813,8 @@ public class PrepToolsPanel extends PluginPanel
 		JTextArea instructions = createWidthClampedTextArea(
 			"Walk to a landmark, click Set Corner A, walk to the opposite "
 				+ "corner of the area, click Set Corner B, name it, then Save. "
-				+ "The saved box is used to detect and spam your location.");
+				+ "The saved box is used to detect and spam your location. "
+				+ "Click ✎ on a saved area below to edit its name or coordinates directly.");
 		instructions.setForeground(ColorScheme.LIGHT_GRAY_COLOR);
 		instructions.setBorder(new EmptyBorder(0, 0, 8, 0));
 
@@ -945,36 +948,163 @@ public class PrepToolsPanel extends PluginPanel
 	}
 
 	/**
-	 * Rebuilds the "Saved Locations" list with a delete button per entry. Called at startup and
-	 * whenever a location is added/removed.
+	 * Rebuilds the "Saved Locations" list with edit/delete buttons per entry. Called at startup and
+	 * whenever a location is added/removed/edited. Caches the list so rebuildSavedLocations() (the
+	 * edit/cancel toggle) can rebuild locally without needing a round trip through the plugin.
 	 */
 	void updateWildernessLocations(List<WildernessLocation> locations)
 	{
+		lastWildernessLocations = locations;
+		rebuildSavedLocations();
+	}
+
+	private void rebuildSavedLocations()
+	{
 		savedLocationsPanel.removeAll();
 
-		for (WildernessLocation location : locations)
+		for (WildernessLocation location : lastWildernessLocations)
 		{
-			JPanel row = new JPanel(new BorderLayout(6, 0));
-			row.setBackground(ColorScheme.DARK_GRAY_COLOR);
-			row.setBorder(BorderFactory.createEmptyBorder(1, 2, 1, 2));
-
-			JLabel nameLabel = new JLabel(location.name);
-			nameLabel.setForeground(Color.WHITE);
-			nameLabel.setFont(FontManager.getRunescapeSmallFont());
-			nameLabel.setToolTipText(
-				"(" + location.minX + "," + location.minY + ") - (" + location.maxX + "," + location.maxY + "), plane " + location.plane);
-
-			JButton deleteButton = createSmallButton("✕", "Remove " + location.name);
-			deleteButton.setForeground(new Color(220, 80, 80));
-			deleteButton.addActionListener(e -> plugin.removeWildernessLocation(location));
-
-			row.add(nameLabel, BorderLayout.CENTER);
-			row.add(deleteButton, BorderLayout.EAST);
-			savedLocationsPanel.add(row);
+			savedLocationsPanel.add(location == editingWildernessLocation
+				? buildLocationEditRow(location)
+				: buildLocationViewRow(location));
 		}
 
 		revalidate();
 		repaint();
+	}
+
+	private JPanel buildLocationViewRow(WildernessLocation location)
+	{
+		JPanel row = new JPanel(new BorderLayout(6, 0));
+		row.setBackground(ColorScheme.DARK_GRAY_COLOR);
+		row.setBorder(BorderFactory.createEmptyBorder(1, 2, 1, 2));
+
+		JLabel nameLabel = new JLabel(location.name);
+		nameLabel.setForeground(Color.WHITE);
+		nameLabel.setFont(FontManager.getRunescapeSmallFont());
+		nameLabel.setToolTipText(
+			"(" + location.minX + "," + location.minY + ") - (" + location.maxX + "," + location.maxY + "), plane " + location.plane);
+
+		JButton editButton = createSmallButton("✎", "Edit " + location.name);
+		editButton.addActionListener(e ->
+		{
+			editingWildernessLocation = location;
+			rebuildSavedLocations();
+		});
+
+		JButton deleteButton = createSmallButton("✕", "Remove " + location.name);
+		deleteButton.setForeground(new Color(220, 80, 80));
+		deleteButton.addActionListener(e -> plugin.removeWildernessLocation(location));
+
+		JPanel buttons = new JPanel(new GridLayout(1, 2, 4, 0));
+		buttons.setBackground(ColorScheme.DARK_GRAY_COLOR);
+		buttons.add(editButton);
+		buttons.add(deleteButton);
+
+		row.add(nameLabel, BorderLayout.CENTER);
+		row.add(buttons, BorderLayout.EAST);
+		return row;
+	}
+
+	/**
+	 * In-place edit form for a saved location: name plus the same two-corner model as the
+	 * "Set Corner A/B" flow above (not pre-sorted min/max) - PrepToolsPlugin#updateWildernessLocation
+	 * normalizes them the same way saveLocationFromPanel() does, so typing the corners in either
+	 * order/direction works exactly like drawing the area fresh does.
+	 */
+	private JPanel buildLocationEditRow(WildernessLocation location)
+	{
+		JPanel row = new JPanel();
+		row.setLayout(new BoxLayout(row, BoxLayout.Y_AXIS));
+		row.setBackground(ColorScheme.DARKER_GRAY_COLOR);
+		row.setBorder(BorderFactory.createCompoundBorder(
+			BorderFactory.createLineBorder(ColorScheme.MEDIUM_GRAY_COLOR),
+			BorderFactory.createEmptyBorder(4, 4, 4, 4)));
+		row.setAlignmentX(LEFT_ALIGNMENT);
+		row.setMaximumSize(new Dimension(PluginPanel.PANEL_WIDTH, Integer.MAX_VALUE));
+
+		JTextField nameField = new JTextField(location.name);
+		nameField.setFont(FontManager.getRunescapeSmallFont());
+		nameField.setAlignmentX(LEFT_ALIGNMENT);
+		nameField.setMaximumSize(new Dimension(Integer.MAX_VALUE, nameField.getPreferredSize().height));
+
+		JTextField minXField = new JTextField(String.valueOf(location.minX));
+		JTextField minYField = new JTextField(String.valueOf(location.minY));
+		JTextField maxXField = new JTextField(String.valueOf(location.maxX));
+		JTextField maxYField = new JTextField(String.valueOf(location.maxY));
+		JTextField planeField = new JTextField(String.valueOf(location.plane));
+
+		JPanel coordsGrid = new JPanel(new GridLayout(3, 2, 4, 2));
+		coordsGrid.setBackground(ColorScheme.DARKER_GRAY_COLOR);
+		coordsGrid.setAlignmentX(LEFT_ALIGNMENT);
+		coordsGrid.setMaximumSize(new Dimension(PluginPanel.PANEL_WIDTH, Integer.MAX_VALUE));
+		coordsGrid.add(buildLabeledField("Corner A X", minXField));
+		coordsGrid.add(buildLabeledField("Corner A Y", minYField));
+		coordsGrid.add(buildLabeledField("Corner B X", maxXField));
+		coordsGrid.add(buildLabeledField("Corner B Y", maxYField));
+		coordsGrid.add(buildLabeledField("Plane", planeField));
+
+		JButton saveButton = createSmallButton("Save", "Save changes to this area");
+		saveButton.addActionListener(e ->
+		{
+			String newName = nameField.getText();
+			if (newName == null || newName.trim().isEmpty())
+			{
+				return;
+			}
+
+			try
+			{
+				int corner1X = Integer.parseInt(minXField.getText().trim());
+				int corner1Y = Integer.parseInt(minYField.getText().trim());
+				int corner2X = Integer.parseInt(maxXField.getText().trim());
+				int corner2Y = Integer.parseInt(maxYField.getText().trim());
+				int plane = Integer.parseInt(planeField.getText().trim());
+
+				editingWildernessLocation = null;
+				plugin.updateWildernessLocation(location, newName, corner1X, corner1Y, corner2X, corner2Y, plane);
+			}
+			catch (NumberFormatException ex)
+			{
+				// Invalid numeric input - leave the row in edit mode rather than saving garbage.
+			}
+		});
+
+		JButton cancelButton = createSmallButton("Cancel", "Discard changes");
+		cancelButton.addActionListener(e ->
+		{
+			editingWildernessLocation = null;
+			rebuildSavedLocations();
+		});
+
+		JPanel buttonsRow = new JPanel(new GridLayout(1, 2, 6, 0));
+		buttonsRow.setBackground(ColorScheme.DARKER_GRAY_COLOR);
+		buttonsRow.setAlignmentX(LEFT_ALIGNMENT);
+		buttonsRow.setMaximumSize(new Dimension(PluginPanel.PANEL_WIDTH, Integer.MAX_VALUE));
+		buttonsRow.setBorder(new EmptyBorder(4, 0, 0, 0));
+		buttonsRow.add(saveButton);
+		buttonsRow.add(cancelButton);
+
+		row.add(nameField);
+		row.add(Box.createVerticalStrut(4));
+		row.add(coordsGrid);
+		row.add(buttonsRow);
+		return row;
+	}
+
+	private JPanel buildLabeledField(String label, JTextField field)
+	{
+		field.setFont(FontManager.getRunescapeSmallFont());
+
+		JLabel labelComponent = new JLabel(label);
+		labelComponent.setForeground(ColorScheme.LIGHT_GRAY_COLOR);
+		labelComponent.setFont(FontManager.getRunescapeSmallFont());
+
+		JPanel wrapper = new JPanel(new BorderLayout(2, 0));
+		wrapper.setBackground(ColorScheme.DARKER_GRAY_COLOR);
+		wrapper.add(labelComponent, BorderLayout.WEST);
+		wrapper.add(field, BorderLayout.CENTER);
+		return wrapper;
 	}
 
 	@Override
