@@ -247,6 +247,15 @@ tasks.register<Exec>("jpackageInstaller") {
         {
             args += listOf("--icon", jpackageIcon.absolutePath, "--linux-shortcut")
         }
+        // jpackage adds no shortcut of any kind by default - without this, a Windows install
+        // would land in Program Files with nothing pointing at it, so the only way to launch it
+        // would be to go dig the .exe out manually. --win-menu/--win-shortcut give a Start Menu
+        // entry and a desktop icon respectively - the whole point of this task is "double-click
+        // to install, then just click the icon", so both are worth the extra install prompt.
+        if (os.isWindows)
+        {
+            args += listOf("--win-menu", "--win-shortcut")
+        }
         commandLine(args)
     }
 }
