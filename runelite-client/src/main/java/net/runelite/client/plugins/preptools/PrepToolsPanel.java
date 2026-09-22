@@ -4,9 +4,12 @@ import java.awt.BorderLayout;
 import java.awt.Color;
 import java.awt.Dimension;
 import java.awt.GridLayout;
+import java.awt.Image;
 import java.awt.Insets;
 import java.awt.Toolkit;
 import java.awt.datatransfer.StringSelection;
+import java.awt.event.KeyAdapter;
+import java.awt.event.KeyEvent;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.Deque;
@@ -19,6 +22,7 @@ import javax.swing.BorderFactory;
 import javax.swing.Box;
 import javax.swing.BoxLayout;
 import javax.swing.ButtonGroup;
+import javax.swing.ImageIcon;
 import javax.swing.JButton;
 import javax.swing.JLabel;
 import javax.swing.JPanel;
@@ -29,15 +33,23 @@ import javax.swing.JTextArea;
 import javax.swing.JTextField;
 import javax.swing.ScrollPaneConstants;
 import javax.swing.SpinnerNumberModel;
+import javax.swing.SwingConstants;
+import javax.swing.SwingUtilities;
 import javax.swing.border.EmptyBorder;
 import javax.swing.text.AbstractDocument;
 import javax.swing.text.AttributeSet;
 import javax.swing.text.BadLocationException;
 import javax.swing.text.DocumentFilter;
+import net.runelite.api.SpriteID;
 import net.runelite.api.coords.WorldPoint;
+import net.runelite.client.game.ItemManager;
+import net.runelite.client.game.SpriteManager;
 import net.runelite.client.ui.ColorScheme;
 import net.runelite.client.ui.FontManager;
 import net.runelite.client.ui.PluginPanel;
+import net.runelite.client.ui.components.materialtabs.MaterialTab;
+import net.runelite.client.ui.components.materialtabs.MaterialTabGroup;
+import net.runelite.client.util.AsyncBufferedImage;
 import net.runelite.client.util.Text;
 
 /**
@@ -68,10 +80,20 @@ public class PrepToolsPanel extends PluginPanel
 	private static final int LOG_SCROLL_HEIGHT = 160;
 
 	private final PrepToolsPlugin plugin;
+	private final SpriteManager spriteManager;
+	private final ItemManager itemManager;
+
+	// --- Tabs ---
+	private final JPanel display = new JPanel();
+	private final MaterialTabGroup tabGroup = new MaterialTabGroup(display);
+
 	private final JPanel listPanel = new JPanel();
 	private final JTextField addCallerField = new JTextField();
-	private final JTextArea missingArea;
-	private final JButton copyMissingButton;
+	// Not final: assigned inside buildCallersSection(), called from the constructor - Java's
+	// definite-assignment checker can't trace a final field's assignment through a delegated method
+	// call, only direct constructor code, even though each is still only ever assigned once here.
+	private JTextArea missingArea;
+	private JButton copyMissingButton;
 
 	private ButtonGroup buttonGroup = new ButtonGroup();
 	private final Map<String, JRadioButton> radiosByKey = new HashMap<>();
@@ -87,8 +109,13 @@ public class PrepToolsPanel extends PluginPanel
 	private final JTextField addSnipeField = new JTextField();
 	private final Map<String, JLabel> snipeStatusLabelsByKey = new HashMap<>();
 
+	// --- Clan IDs ---
+	private final JPanel clanIdsListPanel = new JPanel();
+
 	// --- Friends chat log ---
 	private JTextArea friendsChatLogArea;
+	private JButton copyFriendsChatLogButton;
+	private List<FriendsChatLogEntry> lastFriendsChatLog = Collections.emptyList();
 
 	// --- Team capes ---
 	private final JPanel teamCapeNamesPanel = new JPanel();
@@ -105,21 +132,137 @@ public class PrepToolsPanel extends PluginPanel
 	private List<WildernessLocation> lastWildernessLocations = Collections.emptyList();
 	private WildernessLocation editingWildernessLocation;
 
-	PrepToolsPanel(PrepToolsPlugin plugin)
+	PrepToolsPanel(PrepToolsPlugin plugin, SpriteManager spriteManager, ItemManager itemManager)
 	{
 		this.plugin = plugin;
+		this.spriteManager = spriteManager;
+		this.itemManager = itemManager;
 
-		setLayout(new BoxLayout(this, BoxLayout.Y_AXIS));
+		setLayout(new BorderLayout());
 		setBackground(ColorScheme.DARK_GRAY_COLOR);
-		setBorder(new EmptyBorder(10, 10, 10, 10));
 
-		JLabel title = new JLabel("Primary Caller");
-		title.setForeground(Color.WHITE);
-		title.setFont(FontManager.getRunescapeBoldFont());
-		title.setAlignmentX(LEFT_ALIGNMENT);
-		title.setBorder(new EmptyBorder(0, 0, 6, 0));
+		MaterialTab callersTab = new MaterialTab("Callers", tabGroup, wrapTabContent(buildCallersSection()));
+		MaterialTab snipeTab = new MaterialTab("Snipe", tabGroup, wrapTabContent(buildSnipeListSection()));
+		MaterialTab clanIdsTab = new MaterialTab("Clan IDs", tabGroup, wrapTabContent(buildClanIdsSection()));
+		MaterialTab fcLogTab = new MaterialTab("FC", tabGroup, wrapTabContent(buildFriendsChatLogSection()));
+		MaterialTab capesTab = new MaterialTab("Capes", tabGroup, wrapTabContent(buildTeamCapeNamesSection()));
+		MaterialTab locationTab = new MaterialTab("Location", tabGroup, wrapTabContent(buildLocationMapperSection()));
 
-		JTextArea instructions = createWidthClampedTextArea(
+		// Centre icon+text within each tab's own grid cell (not just the icon relative to the text -
+		// see loadTabIcon()/loadTabItemIcon() for that part) - applied up front, before the icon even
+		// loads, so nothing shifts once it does.
+		for (MaterialTab tab : new MaterialTab[] {callersTab, snipeTab, clanIdsTab, fcLogTab, capesTab, locationTab})
+		{
+			tab.setHorizontalAlignment(SwingConstants.CENTER);
+			tab.setVerticalAlignment(SwingConstants.CENTER);
+		}
+
+		// Real in-game sprites, not bundled image files - this plugin has no resource assets of its
+		// own, and these already look native/consistent with the rest of the client's own UI chrome.
+		// Loaded async (sprite cache isn't guaranteed ready synchronously at panel-construction time)
+		// - see loadTabIcon() below. Capes is the one exception: SpriteID.EQUIPMENT_SLOT_CAPE turned
+		// out to be a blank/placeholder equipment-slot icon, not an actual cape - team cape *items*
+		// are the real source of a recognisable cape icon (same items TeamCapeOverlay itself already
+		// draws), so that one tab goes through ItemManager instead (loadTabItemIcon()).
+		loadTabIcon(callersTab, SpriteID.TAB_FRIENDS);
+		loadTabIcon(snipeTab, SpriteID.PLAYER_KILLER_SKULL);
+		loadTabIcon(clanIdsTab, SpriteID.TAB_STATS);
+		loadTabIcon(fcLogTab, SpriteID.TAB_FRIENDS_CHAT);
+		loadTabItemIcon(capesTab, TeamCapeOverlay.teamCapeItemId(30));
+		loadTabIcon(locationTab, SpriteID.MINIMAP_ORB_WORLD_MAP_PLANET);
+
+		tabGroup.setLayout(new GridLayout(2, 3, 4, 4));
+		tabGroup.setBorder(new EmptyBorder(8, 8, 6, 8));
+		tabGroup.addTab(callersTab);
+		tabGroup.addTab(snipeTab);
+		tabGroup.addTab(clanIdsTab);
+		tabGroup.addTab(fcLogTab);
+		tabGroup.addTab(capesTab);
+		tabGroup.addTab(locationTab);
+		tabGroup.select(callersTab);
+
+		display.setBackground(ColorScheme.DARK_GRAY_COLOR);
+
+		add(tabGroup, BorderLayout.NORTH);
+		add(display, BorderLayout.CENTER);
+
+		rebuild(new ArrayList<>());
+		rebuildSnipeList(new ArrayList<>());
+		rebuildTeamCapeNames(new HashMap<>());
+	}
+
+	private static final int TAB_ICON_SIZE = 15;
+
+	private void applyTabIcon(MaterialTab tab, Image image)
+	{
+		Image scaled = image.getScaledInstance(TAB_ICON_SIZE, TAB_ICON_SIZE, Image.SCALE_SMOOTH);
+		tab.setIcon(new ImageIcon(scaled));
+		tab.setHorizontalTextPosition(SwingConstants.CENTER);
+		tab.setVerticalTextPosition(SwingConstants.BOTTOM);
+	}
+
+	/**
+	 * Loads a real in-game sprite as this tab's icon, above its text label. MaterialTab extends
+	 * JLabel, so it can carry both an icon and text simultaneously - just not through either of
+	 * MaterialTab's own two constructors (string-only or icon-only), so the icon is set directly
+	 * afterward instead. Scaled to a small fixed size since sprites come in wildly different native
+	 * resolutions and would otherwise make the tab row uneven.
+	 */
+	private void loadTabIcon(MaterialTab tab, int spriteId)
+	{
+		spriteManager.getSpriteAsync(spriteId, 0, image -> SwingUtilities.invokeLater(() -> applyTabIcon(tab, image)));
+	}
+
+	/**
+	 * Same as loadTabIcon(), but for an item icon (ItemManager) rather than a UI sprite
+	 * (SpriteManager) - see the Capes tab's comment at the call site for why it needs this one.
+	 */
+	private void loadTabItemIcon(MaterialTab tab, int itemId)
+	{
+		AsyncBufferedImage image = itemManager.getImage(itemId);
+		image.onLoaded(() -> SwingUtilities.invokeLater(() -> applyTabIcon(tab, image)));
+	}
+
+	/**
+	 * Wraps a tab's content panel in its own scroll pane - so a tall tab (Callers+Missing, or
+	 * Location with a long Saved Locations list) scrolls within the display area while the tab bar
+	 * above it stays fixed/visible, instead of the whole sidebar growing and pushing the tab bar
+	 * itself out of view. Same idiom TimeTrackingPanel uses for its own tabs: content pinned to
+	 * BorderLayout.NORTH inside a wrapper (so it doesn't stretch to fill unused vertical space),
+	 * scroller with no horizontal bar.
+	 */
+	private JScrollPane wrapTabContent(JPanel content)
+	{
+		JPanel wrapped = new JPanel(new BorderLayout());
+		wrapped.setBackground(ColorScheme.DARK_GRAY_COLOR);
+		wrapped.setBorder(new EmptyBorder(8, 10, 10, 10));
+		wrapped.add(content, BorderLayout.NORTH);
+
+		JScrollPane scroller = new JScrollPane(wrapped,
+			ScrollPaneConstants.VERTICAL_SCROLLBAR_AS_NEEDED, ScrollPaneConstants.HORIZONTAL_SCROLLBAR_NEVER);
+		scroller.setBackground(ColorScheme.DARK_GRAY_COLOR);
+		scroller.setBorder(BorderFactory.createEmptyBorder());
+		scroller.getVerticalScrollBar().setPreferredSize(new Dimension(10, 0));
+		return scroller;
+	}
+
+	/**
+	 * Builds the "Callers" tab: primary caller list, title/instructions/list/add field. The
+	 * "Missing (Friends Chat)" section lives on the Friends Chat tab instead - see
+	 * buildMissingMembersSection() - since it's about friends chat membership generally, not
+	 * specifically about configured callers.
+	 */
+	private JPanel buildCallersSection()
+	{
+		JPanel section = new JPanel();
+		section.setLayout(new BoxLayout(section, BoxLayout.Y_AXIS));
+		section.setBackground(ColorScheme.DARK_GRAY_COLOR);
+		section.setAlignmentX(LEFT_ALIGNMENT);
+		section.setMaximumSize(new Dimension(PluginPanel.PANEL_WIDTH, Integer.MAX_VALUE));
+
+		JLabel title = createSectionTitle("Primary Caller", 0);
+
+		JTextArea instructions = createDescriptionArea(
 			"When your primary caller dies or leaves screen, secondary "
 				+ "callers take over automatically, top to bottom through the "
 				+ "list below.\n\n"
@@ -128,8 +271,6 @@ public class PrepToolsPanel extends PluginPanel
 				+ "Add a nickname with \":Nickname\" after a name, e.g. "
 				+ "Xx_Bob_xX:Bob - works in the Add field below the list too.\n\n"
 				+ "To switch primary right now, just click a name below.");
-		instructions.setForeground(ColorScheme.LIGHT_GRAY_COLOR);
-		instructions.setBorder(new EmptyBorder(0, 0, 10, 0));
 
 		listPanel.setLayout(new GridLayout(0, 1, 0, 6));
 		listPanel.setBackground(ColorScheme.DARK_GRAY_COLOR);
@@ -144,14 +285,36 @@ public class PrepToolsPanel extends PluginPanel
 		addCallerButton.addActionListener(e -> addCallerFromField());
 
 		JPanel addCallerPanel = new JPanel(new BorderLayout(4, 0));
-		addCallerPanel.setBackground(ColorScheme.DARK_GRAY_COLOR);
 		addCallerPanel.setAlignmentX(LEFT_ALIGNMENT);
 		addCallerPanel.setMaximumSize(new Dimension(PluginPanel.PANEL_WIDTH, Integer.MAX_VALUE));
-		addCallerPanel.setBorder(new EmptyBorder(8, 0, 0, 0));
 		addCallerPanel.add(addCallerField, BorderLayout.CENTER);
 		addCallerPanel.add(addCallerButton, BorderLayout.EAST);
+		styleInputRow(addCallerPanel);
 
-		JLabel missingTitle = new JLabel("Missing (Friends Chat)");
+		section.add(title);
+		section.add(Box.createVerticalStrut(TIER_GAP));
+		section.add(instructions);
+		section.add(Box.createVerticalStrut(TIER_GAP));
+		section.add(listPanel);
+		section.add(Box.createVerticalStrut(TIER_GAP));
+		section.add(addCallerPanel);
+		return section;
+	}
+
+	/**
+	 * Builds the "Missing (Friends Chat)" block - moved into the Friends Chat tab (alongside the
+	 * activity log) rather than living under Callers, since it's about friends chat membership in
+	 * general, not specifically about configured callers.
+	 */
+	private JPanel buildMissingMembersSection()
+	{
+		JPanel section = new JPanel();
+		section.setLayout(new BoxLayout(section, BoxLayout.Y_AXIS));
+		section.setBackground(ColorScheme.DARK_GRAY_COLOR);
+		section.setAlignmentX(LEFT_ALIGNMENT);
+		section.setMaximumSize(new Dimension(PluginPanel.PANEL_WIDTH, Integer.MAX_VALUE));
+
+		JLabel missingTitle = new JLabel("Missing");
 		missingTitle.setForeground(Color.WHITE);
 		missingTitle.setFont(FontManager.getRunescapeBoldFont());
 
@@ -163,13 +326,12 @@ public class PrepToolsPanel extends PluginPanel
 		missingHeader.setBackground(ColorScheme.DARK_GRAY_COLOR);
 		missingHeader.setAlignmentX(LEFT_ALIGNMENT);
 		missingHeader.setMaximumSize(new Dimension(PluginPanel.PANEL_WIDTH, Integer.MAX_VALUE));
-		missingHeader.setBorder(new EmptyBorder(14, 0, 4, 0));
 		missingHeader.add(missingTitle, BorderLayout.WEST);
 		missingHeader.add(copyMissingButton, BorderLayout.EAST);
 
-		// Width-clamped like `instructions` above, not a plain JLabel - a JLabel doesn't wrap on
-		// its own, and this sentence is long enough to run past the sidebar's width and get cut
-		// off instead of wrapping to a second line.
+		// Width-clamped like `instructions` elsewhere - a JLabel doesn't wrap on its own, and this
+		// sentence is long enough to run past the sidebar's width and get cut off instead of
+		// wrapping to a second line.
 		JTextArea missingSubtitle = createWidthClampedTextArea("Friends chat members not in your current game view:");
 		missingSubtitle.setForeground(ColorScheme.LIGHT_GRAY_COLOR);
 		missingSubtitle.setBorder(new EmptyBorder(0, 0, 6, 0));
@@ -177,24 +339,12 @@ public class PrepToolsPanel extends PluginPanel
 		missingArea = createWidthClampedTextArea("(none)");
 		missingArea.setForeground(Color.WHITE);
 
-		add(title);
-		add(instructions);
-		add(listPanel);
-		add(addCallerPanel);
-		add(missingHeader);
-		add(missingSubtitle);
-		add(missingArea);
-
-		add(buildSnipeListSection());
-		add(buildFriendsChatLogSection());
-		add(buildTeamCapeNamesSection());
-		add(buildLocationMapperSection());
-
-		add(Box.createVerticalGlue());
-
-		rebuild(new ArrayList<>());
-		rebuildSnipeList(new ArrayList<>());
-		rebuildTeamCapeNames(new HashMap<>());
+		section.add(missingHeader);
+		section.add(Box.createVerticalStrut(TIER_GAP));
+		section.add(missingSubtitle);
+		section.add(Box.createVerticalStrut(TIER_GAP));
+		section.add(missingArea);
+		return section;
 	}
 
 	/**
@@ -240,6 +390,54 @@ public class PrepToolsPanel extends PluginPanel
 		area.setFont(FontManager.getRunescapeSmallFont());
 		area.setAlignmentX(LEFT_ALIGNMENT);
 		return area;
+	}
+
+	// ============================================================================================
+	// Shared title/description/input-row styling - three visually distinct tiers repeated across
+	// every tab (a bold heading, a muted explanatory paragraph, then the actual controls), given a
+	// consistent look everywhere rather than each section inventing its own spacing/colour by hand:
+	// titles get a brand-orange underline (matching MaterialTab's own selected-tab underline, so it
+	// reads as "the same accent colour" rather than a new one), descriptions get a left accent
+	// stripe (a blockquote-style treatment - visually marks it as "read this," not "click this").
+	// Gaps between all three tiers are explicit Box.createVerticalStrut() calls at each call site,
+	// not border insets baked into these components - insets alone didn't read as real spacing.
+	// Input rows deliberately do NOT get a background/border box (tried that, asked to remove it) -
+	// styleInputRow() below is spacing-only now.
+	// ============================================================================================
+
+	static final int TIER_GAP = 10;
+
+	private JLabel createSectionTitle(String text, int topInset)
+	{
+		JLabel title = new JLabel(text);
+		title.setForeground(Color.WHITE);
+		title.setFont(FontManager.getRunescapeBoldFont());
+		title.setAlignmentX(LEFT_ALIGNMENT);
+		title.setBorder(BorderFactory.createCompoundBorder(
+			BorderFactory.createMatteBorder(0, 0, 2, 0, ColorScheme.BRAND_ORANGE),
+			new EmptyBorder(topInset, 0, 4, 0)));
+		return title;
+	}
+
+	private JTextArea createDescriptionArea(String text)
+	{
+		JTextArea area = createWidthClampedTextArea(text);
+		area.setForeground(ColorScheme.LIGHT_GRAY_COLOR);
+		area.setBorder(BorderFactory.createCompoundBorder(
+			BorderFactory.createMatteBorder(0, 2, 0, 0, ColorScheme.MEDIUM_GRAY_COLOR),
+			new EmptyBorder(1, 8, 0, 2)));
+		return area;
+	}
+
+	/**
+	 * Padding-only "spacing, not a box" treatment for an already-built input row (a text field +
+	 * button, a spinner + field + button, etc.) - no background/border, just breathing room inside
+	 * the row itself. The gap BEFORE this row (separating it from the description above) is a
+	 * Box.createVerticalStrut() at the call site, same as every other tier gap.
+	 */
+	private void styleInputRow(JPanel row)
+	{
+		row.setBorder(new EmptyBorder(2, 0, 2, 0));
 	}
 
 	/**
@@ -478,18 +676,12 @@ public class PrepToolsPanel extends PluginPanel
 		section.setAlignmentX(LEFT_ALIGNMENT);
 		section.setMaximumSize(new Dimension(PluginPanel.PANEL_WIDTH, Integer.MAX_VALUE));
 
-		JLabel title = new JLabel("Snipe List");
-		title.setForeground(Color.WHITE);
-		title.setFont(FontManager.getRunescapeBoldFont());
-		title.setAlignmentX(LEFT_ALIGNMENT);
-		title.setBorder(new EmptyBorder(14, 0, 6, 0));
+		JLabel title = createSectionTitle("Snipe List", 0);
 
-		JTextArea instructions = createWidthClampedTextArea(
+		JTextArea instructions = createDescriptionArea(
 			"Always highlighted on sight, regardless of caller/target status. "
 				+ "Shift-right-click a player in game and choose 'Add to snipe list', "
 				+ "or type a name below.");
-		instructions.setForeground(ColorScheme.LIGHT_GRAY_COLOR);
-		instructions.setBorder(new EmptyBorder(0, 0, 8, 0));
 
 		snipeListPanel.setLayout(new GridLayout(0, 1, 0, 6));
 		snipeListPanel.setBackground(ColorScheme.DARK_GRAY_COLOR);
@@ -504,16 +696,18 @@ public class PrepToolsPanel extends PluginPanel
 		addSnipeButton.addActionListener(e -> addSnipeFromField());
 
 		JPanel addSnipePanel = new JPanel(new BorderLayout(4, 0));
-		addSnipePanel.setBackground(ColorScheme.DARK_GRAY_COLOR);
 		addSnipePanel.setAlignmentX(LEFT_ALIGNMENT);
 		addSnipePanel.setMaximumSize(new Dimension(PluginPanel.PANEL_WIDTH, Integer.MAX_VALUE));
-		addSnipePanel.setBorder(new EmptyBorder(8, 0, 0, 0));
 		addSnipePanel.add(addSnipeField, BorderLayout.CENTER);
 		addSnipePanel.add(addSnipeButton, BorderLayout.EAST);
+		styleInputRow(addSnipePanel);
 
 		section.add(title);
+		section.add(Box.createVerticalStrut(TIER_GAP));
 		section.add(instructions);
+		section.add(Box.createVerticalStrut(TIER_GAP));
 		section.add(snipeListPanel);
+		section.add(Box.createVerticalStrut(TIER_GAP));
 		section.add(addSnipePanel);
 		return section;
 	}
@@ -596,7 +790,108 @@ public class PrepToolsPanel extends PluginPanel
 	}
 
 	// ============================================================================================
-	// Friends chat log
+	// Clan IDs - see MENU_ORDER_PID_INVESTIGATION.md at the repo root for what a player's id is and
+	// why the min/max of a stack matter for right-click menu Attack-option exposure. Clan/FC members
+	// only (not enemies) - confirmed with the user that OSRS's own friendly-fire protection means an
+	// enemy's menu on your team's pile is built exclusively from your team's ids, so an enemy's own
+	// id is never a factor in who on your side is exposed.
+	// ============================================================================================
+
+	private static final Color CALLER_HIGHLIGHT_COLOR = new Color(230, 180, 60);
+	private static final Color ID_RISK_COLOR = new Color(220, 100, 90);
+
+	private JPanel buildClanIdsSection()
+	{
+		JPanel section = new JPanel();
+		section.setLayout(new BoxLayout(section, BoxLayout.Y_AXIS));
+		section.setBackground(ColorScheme.DARK_GRAY_COLOR);
+		section.setAlignmentX(LEFT_ALIGNMENT);
+		section.setMaximumSize(new Dimension(PluginPanel.PANEL_WIDTH, Integer.MAX_VALUE));
+
+		JLabel title = createSectionTitle("Clan IDs", 0);
+
+		JTextArea instructions = createDescriptionArea(
+			"You + friends chat members currently on screen, sorted by id. "
+				+ "The lowest and highest id in the list are both flagged - whichever one ends up "
+				+ "the literal top menu entry depends on whether the person clicking is standing in "
+				+ "your stack or not, so both stay flagged rather than picking one. "
+				+ "Current understanding, not a guarantee - see MENU_ORDER_PID_INVESTIGATION.md.");
+
+		clanIdsListPanel.setLayout(new GridLayout(0, 1, 0, 4));
+		clanIdsListPanel.setBackground(ColorScheme.DARK_GRAY_COLOR);
+		clanIdsListPanel.setAlignmentX(LEFT_ALIGNMENT);
+		clanIdsListPanel.setMaximumSize(new Dimension(PluginPanel.PANEL_WIDTH, Integer.MAX_VALUE));
+
+		section.add(title);
+		section.add(Box.createVerticalStrut(TIER_GAP));
+		section.add(instructions);
+		section.add(Box.createVerticalStrut(TIER_GAP));
+		section.add(clanIdsListPanel);
+		updateClanIds(Collections.emptyList());
+		return section;
+	}
+
+	/**
+	 * Rebuilds the Clan IDs row list from scratch every call - unlike the caller/snipe lists (which
+	 * only rebuild on a config change and get cheap per-tick label updates in between), the id order
+	 * itself changes as players move on/off screen or relog, so there's no stable "same set of rows,
+	 * just update status text" split to make here. Called once per tick; cheap at clan-sized lists.
+	 */
+	void updateClanIds(List<ClanIdRow> rows)
+	{
+		clanIdsListPanel.removeAll();
+
+		if (rows.isEmpty())
+		{
+			JLabel empty = new JLabel("(no friends chat members on screen)");
+			empty.setForeground(ColorScheme.LIGHT_GRAY_COLOR);
+			empty.setFont(FontManager.getRunescapeSmallFont());
+			clanIdsListPanel.add(empty);
+			revalidate();
+			repaint();
+			return;
+		}
+
+		int minId = rows.get(0).id;
+		int maxId = rows.get(rows.size() - 1).id;
+
+		for (ClanIdRow row : rows)
+		{
+			boolean atRiskId = rows.size() > 1 && (row.id == minId || row.id == maxId);
+			clanIdsListPanel.add(buildClanIdRow(row, atRiskId));
+		}
+
+		revalidate();
+		repaint();
+	}
+
+	private JPanel buildClanIdRow(ClanIdRow row, boolean atRiskId)
+	{
+		JPanel rowPanel = new JPanel(new BorderLayout(6, 0));
+		rowPanel.setBackground(atRiskId ? ColorScheme.DARKER_GRAY_COLOR : ColorScheme.DARK_GRAY_COLOR);
+		rowPanel.setBorder(atRiskId
+			? BorderFactory.createCompoundBorder(
+				BorderFactory.createMatteBorder(0, 2, 0, 0, ID_RISK_COLOR),
+				BorderFactory.createEmptyBorder(2, 4, 2, 2))
+			: BorderFactory.createEmptyBorder(2, 6, 2, 2));
+
+		String displayName = row.isYou ? row.name + " (you)" : row.name;
+		JLabel nameLabel = new JLabel(displayName);
+		nameLabel.setFont(row.isCaller ? FontManager.getRunescapeBoldFont() : FontManager.getRunescapeFont());
+		nameLabel.setForeground(row.isCaller ? CALLER_HIGHLIGHT_COLOR : Color.WHITE);
+
+		JLabel idLabel = new JLabel("id " + row.id);
+		idLabel.setFont(FontManager.getRunescapeSmallFont());
+		idLabel.setForeground(atRiskId ? ID_RISK_COLOR : ColorScheme.LIGHT_GRAY_COLOR);
+
+		rowPanel.add(nameLabel, BorderLayout.CENTER);
+		rowPanel.add(idLabel, BorderLayout.EAST);
+		return rowPanel;
+	}
+
+	// ============================================================================================
+	// Friends Chat tab - who's missing from view, plus a join/leave/death activity log. Both are
+	// about friends chat membership in general (not specifically callers), so they live together.
 	// ============================================================================================
 
 	private JPanel buildFriendsChatLogSection()
@@ -607,22 +902,31 @@ public class PrepToolsPanel extends PluginPanel
 		section.setAlignmentX(LEFT_ALIGNMENT);
 		section.setMaximumSize(new Dimension(PluginPanel.PANEL_WIDTH, Integer.MAX_VALUE));
 
-		JLabel title = new JLabel("Friends Chat Log");
+		JLabel pageTitle = createSectionTitle("Friends Chat", 0);
+
+		JLabel title = new JLabel("Log");
 		title.setForeground(Color.WHITE);
 		title.setFont(FontManager.getRunescapeBoldFont());
-		title.setAlignmentX(LEFT_ALIGNMENT);
-		title.setBorder(new EmptyBorder(14, 0, 6, 0));
 
-		JTextArea subtitle = createWidthClampedTextArea("Newest first. Join/leave/death activity, with a timestamp.");
-		subtitle.setForeground(ColorScheme.LIGHT_GRAY_COLOR);
-		subtitle.setBorder(new EmptyBorder(0, 0, 6, 0));
+		copyFriendsChatLogButton = createSmallButton("Copy", "Copy the friends chat log to clipboard, one entry per line");
+		copyFriendsChatLogButton.setEnabled(false);
+		copyFriendsChatLogButton.addActionListener(e -> copyFriendsChatLogToClipboard());
+
+		JPanel header = new JPanel(new BorderLayout());
+		header.setBackground(ColorScheme.DARK_GRAY_COLOR);
+		header.setAlignmentX(LEFT_ALIGNMENT);
+		header.setMaximumSize(new Dimension(PluginPanel.PANEL_WIDTH, Integer.MAX_VALUE));
+		header.add(title, BorderLayout.WEST);
+		header.add(copyFriendsChatLogButton, BorderLayout.EAST);
+
+		JTextArea subtitle = createDescriptionArea("Newest first. Join/leave/death activity, with a timestamp.");
 
 		friendsChatLogArea = createWidthClampedTextArea("(no activity yet)");
 		friendsChatLogArea.setForeground(Color.WHITE);
 
 		// Fixed-height scroll pane rather than letting the log grow the whole sidebar unbounded -
 		// with up to friendsChatLogMaxEntries (200 by default) lines, an unclamped panel would make
-		// everything below it (the Location Mapper) require excessive scrolling to reach.
+		// everything below it require excessive scrolling to reach.
 		JScrollPane scrollPane = new JScrollPane(friendsChatLogArea,
 			ScrollPaneConstants.VERTICAL_SCROLLBAR_AS_NEEDED, ScrollPaneConstants.HORIZONTAL_SCROLLBAR_NEVER);
 		scrollPane.setAlignmentX(LEFT_ALIGNMENT);
@@ -630,8 +934,14 @@ public class PrepToolsPanel extends PluginPanel
 		scrollPane.setPreferredSize(new Dimension(PluginPanel.PANEL_WIDTH, LOG_SCROLL_HEIGHT));
 		scrollPane.setMaximumSize(new Dimension(PluginPanel.PANEL_WIDTH, LOG_SCROLL_HEIGHT));
 
-		section.add(title);
+		section.add(pageTitle);
+		section.add(Box.createVerticalStrut(TIER_GAP));
+		section.add(buildMissingMembersSection());
+		section.add(Box.createVerticalStrut(TIER_GAP * 2));
+		section.add(header);
+		section.add(Box.createVerticalStrut(TIER_GAP));
 		section.add(subtitle);
+		section.add(Box.createVerticalStrut(TIER_GAP));
 		section.add(scrollPane);
 		return section;
 	}
@@ -642,6 +952,12 @@ public class PrepToolsPanel extends PluginPanel
 	 */
 	void updateFriendsChatLog(Deque<FriendsChatLogEntry> log)
 	{
+		// Copied rather than aliased, same reasoning as updateMissingMembers() above - the plugin
+		// mutates its own deque on the client thread, and the Copy button can be clicked from the
+		// EDT at any time.
+		lastFriendsChatLog = new ArrayList<>(log);
+		copyFriendsChatLogButton.setEnabled(!log.isEmpty());
+
 		if (log.isEmpty())
 		{
 			friendsChatLogArea.setText("(no activity yet)");
@@ -654,6 +970,25 @@ public class PrepToolsPanel extends PluginPanel
 			sb.append(entry.displayText).append('\n');
 		}
 		friendsChatLogArea.setText(sb.toString().trim());
+	}
+
+	/**
+	 * Copies the current Friends Chat Log to the system clipboard, one entry per line - same idiom
+	 * as copyMissingToClipboard() above.
+	 */
+	private void copyFriendsChatLogToClipboard()
+	{
+		if (lastFriendsChatLog.isEmpty())
+		{
+			return;
+		}
+
+		StringBuilder sb = new StringBuilder();
+		for (FriendsChatLogEntry entry : lastFriendsChatLog)
+		{
+			sb.append(entry.displayText).append('\n');
+		}
+		Toolkit.getDefaultToolkit().getSystemClipboard().setContents(new StringSelection(sb.toString().trim()), null);
 	}
 
 	// ============================================================================================
@@ -670,17 +1005,11 @@ public class PrepToolsPanel extends PluginPanel
 		section.setAlignmentX(LEFT_ALIGNMENT);
 		section.setMaximumSize(new Dimension(PluginPanel.PANEL_WIDTH, Integer.MAX_VALUE));
 
-		JLabel title = new JLabel("Team Capes");
-		title.setForeground(Color.WHITE);
-		title.setFont(FontManager.getRunescapeBoldFont());
-		title.setAlignmentX(LEFT_ALIGNMENT);
-		title.setBorder(new EmptyBorder(14, 0, 6, 0));
+		JLabel title = createSectionTitle("Team Capes", 0);
 
-		JTextArea instructions = createWidthClampedTextArea(
+		JTextArea instructions = createDescriptionArea(
 			"Custom name shown below a team cape's icon (max 5 characters). "
 				+ "Team numbers without a name here just show the icon.");
-		instructions.setForeground(ColorScheme.LIGHT_GRAY_COLOR);
-		instructions.setBorder(new EmptyBorder(0, 0, 8, 0));
 
 		teamCapeNumberSpinner.setFont(FontManager.getRunescapeSmallFont());
 		((JSpinner.DefaultEditor) teamCapeNumberSpinner.getEditor()).getTextField().setColumns(3);
@@ -694,22 +1023,24 @@ public class PrepToolsPanel extends PluginPanel
 		saveButton.addActionListener(e -> saveTeamCapeNameFromFields());
 
 		JPanel entryPanel = new JPanel(new BorderLayout(4, 0));
-		entryPanel.setBackground(ColorScheme.DARK_GRAY_COLOR);
 		entryPanel.setAlignmentX(LEFT_ALIGNMENT);
 		entryPanel.setMaximumSize(new Dimension(PluginPanel.PANEL_WIDTH, Integer.MAX_VALUE));
 		entryPanel.add(teamCapeNumberSpinner, BorderLayout.WEST);
 		entryPanel.add(teamCapeNameField, BorderLayout.CENTER);
 		entryPanel.add(saveButton, BorderLayout.EAST);
+		styleInputRow(entryPanel);
 
 		teamCapeNamesPanel.setLayout(new GridLayout(0, 1, 0, 4));
 		teamCapeNamesPanel.setBackground(ColorScheme.DARK_GRAY_COLOR);
 		teamCapeNamesPanel.setAlignmentX(LEFT_ALIGNMENT);
 		teamCapeNamesPanel.setMaximumSize(new Dimension(PluginPanel.PANEL_WIDTH, Integer.MAX_VALUE));
-		teamCapeNamesPanel.setBorder(new EmptyBorder(8, 0, 0, 0));
 
 		section.add(title);
+		section.add(Box.createVerticalStrut(TIER_GAP));
 		section.add(instructions);
+		section.add(Box.createVerticalStrut(TIER_GAP));
 		section.add(entryPanel);
+		section.add(Box.createVerticalStrut(TIER_GAP));
 		section.add(teamCapeNamesPanel);
 		return section;
 	}
@@ -804,19 +1135,13 @@ public class PrepToolsPanel extends PluginPanel
 		section.setAlignmentX(LEFT_ALIGNMENT);
 		section.setMaximumSize(new Dimension(PluginPanel.PANEL_WIDTH, Integer.MAX_VALUE));
 
-		JLabel title = new JLabel("Location Mapper");
-		title.setForeground(Color.WHITE);
-		title.setFont(FontManager.getRunescapeBoldFont());
-		title.setAlignmentX(LEFT_ALIGNMENT);
-		title.setBorder(new EmptyBorder(14, 0, 6, 0));
+		JLabel title = createSectionTitle("Location Mapper", 0);
 
-		JTextArea instructions = createWidthClampedTextArea(
+		JTextArea instructions = createDescriptionArea(
 			"Walk to a landmark, click Set Corner A, walk to the opposite "
 				+ "corner of the area, click Set Corner B, name it, then Save. "
 				+ "The saved box is used to detect and spam your location. "
 				+ "Click ✎ on a saved area below to edit its name or coordinates directly.");
-		instructions.setForeground(ColorScheme.LIGHT_GRAY_COLOR);
-		instructions.setBorder(new EmptyBorder(0, 0, 8, 0));
 
 		currentCoordLabel.setForeground(Color.WHITE);
 		currentCoordLabel.setFont(FontManager.getRunescapeSmallFont());
@@ -846,12 +1171,25 @@ public class PrepToolsPanel extends PluginPanel
 		setCornerBButton.addActionListener(e -> plugin.setLocationCornerB());
 
 		JPanel cornerButtonsPanel = new JPanel(new GridLayout(1, 2, 6, 0));
-		cornerButtonsPanel.setBackground(ColorScheme.DARK_GRAY_COLOR);
 		cornerButtonsPanel.setAlignmentX(LEFT_ALIGNMENT);
 		cornerButtonsPanel.setMaximumSize(new Dimension(PluginPanel.PANEL_WIDTH, Integer.MAX_VALUE));
-		cornerButtonsPanel.setBorder(new EmptyBorder(6, 0, 6, 0));
+		cornerButtonsPanel.setBorder(new EmptyBorder(6, 0, 0, 0));
 		cornerButtonsPanel.add(setCornerAButton);
 		cornerButtonsPanel.add(setCornerBButton);
+
+		// The live coordinate readouts + capture buttons are one linked "tool" - grouped into a
+		// single input card rather than four separate loose labels, so it's visually obvious they
+		// belong together and are distinct from the plain-background instructions above.
+		JPanel coordCard = new JPanel();
+		coordCard.setLayout(new BoxLayout(coordCard, BoxLayout.Y_AXIS));
+		coordCard.setAlignmentX(LEFT_ALIGNMENT);
+		coordCard.setMaximumSize(new Dimension(PluginPanel.PANEL_WIDTH, Integer.MAX_VALUE));
+		coordCard.add(currentCoordLabel);
+		coordCard.add(hoveredCoordLabel);
+		coordCard.add(cornerALabel);
+		coordCard.add(cornerBLabel);
+		coordCard.add(cornerButtonsPanel);
+		styleInputRow(coordCard);
 
 		newLocationNameField.setToolTipText("Name for this area, e.g. Ferox Enclave");
 		newLocationNameField.setFont(FontManager.getRunescapeSmallFont());
@@ -861,17 +1199,13 @@ public class PrepToolsPanel extends PluginPanel
 		saveLocationButton.addActionListener(e -> saveLocationFromField());
 
 		JPanel saveLocationPanel = new JPanel(new BorderLayout(4, 0));
-		saveLocationPanel.setBackground(ColorScheme.DARK_GRAY_COLOR);
 		saveLocationPanel.setAlignmentX(LEFT_ALIGNMENT);
 		saveLocationPanel.setMaximumSize(new Dimension(PluginPanel.PANEL_WIDTH, Integer.MAX_VALUE));
 		saveLocationPanel.add(newLocationNameField, BorderLayout.CENTER);
 		saveLocationPanel.add(saveLocationButton, BorderLayout.EAST);
+		styleInputRow(saveLocationPanel);
 
-		JLabel savedTitle = new JLabel("Saved Locations");
-		savedTitle.setForeground(Color.WHITE);
-		savedTitle.setFont(FontManager.getRunescapeBoldFont());
-		savedTitle.setAlignmentX(LEFT_ALIGNMENT);
-		savedTitle.setBorder(new EmptyBorder(10, 0, 6, 0));
+		JLabel savedTitle = createSectionTitle("Saved Locations", 0);
 
 		savedLocationsPanel.setLayout(new GridLayout(0, 1, 0, 4));
 		savedLocationsPanel.setBackground(ColorScheme.DARK_GRAY_COLOR);
@@ -879,14 +1213,15 @@ public class PrepToolsPanel extends PluginPanel
 		savedLocationsPanel.setMaximumSize(new Dimension(PluginPanel.PANEL_WIDTH, Integer.MAX_VALUE));
 
 		section.add(title);
+		section.add(Box.createVerticalStrut(TIER_GAP));
 		section.add(instructions);
-		section.add(currentCoordLabel);
-		section.add(hoveredCoordLabel);
-		section.add(cornerALabel);
-		section.add(cornerBLabel);
-		section.add(cornerButtonsPanel);
+		section.add(Box.createVerticalStrut(TIER_GAP));
+		section.add(coordCard);
+		section.add(Box.createVerticalStrut(TIER_GAP));
 		section.add(saveLocationPanel);
+		section.add(Box.createVerticalStrut(TIER_GAP * 2));
 		section.add(savedTitle);
+		section.add(Box.createVerticalStrut(TIER_GAP));
 		section.add(savedLocationsPanel);
 		return section;
 	}
@@ -1034,14 +1369,59 @@ public class PrepToolsPanel extends PluginPanel
 		JTextField maxYField = new JTextField(String.valueOf(location.maxY));
 		JTextField planeField = new JTextField(String.valueOf(location.plane));
 
+		// Live preview (a distinct colour, drawn by WildernessLocationDebugOverlay) of what Save
+		// would produce, refreshed on every change - arrow-key nudge or direct typing - rather than
+		// only once you actually click Save. Corners don't need to be pre-sorted here any more than
+		// they do for Save itself (see this method's own class doc above) - min()/max() below do
+		// that, same as PrepToolsPlugin#updateWildernessLocation does for the real save.
+		Runnable pushPreview = () ->
+		{
+			try
+			{
+				int x1 = Integer.parseInt(minXField.getText().trim());
+				int y1 = Integer.parseInt(minYField.getText().trim());
+				int x2 = Integer.parseInt(maxXField.getText().trim());
+				int y2 = Integer.parseInt(maxYField.getText().trim());
+				int plane = Integer.parseInt(planeField.getText().trim());
+				String previewName = nameField.getText();
+				plugin.updateLocationPreview(
+					previewName == null || previewName.trim().isEmpty() ? location.name : previewName.trim(),
+					Math.min(x1, x2), Math.min(y1, y2), Math.max(x1, x2), Math.max(y1, y2), plane);
+			}
+			catch (NumberFormatException ex)
+			{
+				// Invalid/incomplete numeric input mid-edit - leave the last valid preview showing
+				// rather than clearing it, so a brief empty field while retyping doesn't flicker.
+			}
+		};
+
+		installArrowKeyAdjust(minXField, pushPreview);
+		installArrowKeyAdjust(minYField, pushPreview);
+		installArrowKeyAdjust(maxXField, pushPreview);
+		installArrowKeyAdjust(maxYField, pushPreview);
+		installArrowKeyAdjust(planeField, pushPreview);
+		nameField.addKeyListener(new KeyAdapter()
+		{
+			@Override
+			public void keyReleased(KeyEvent e)
+			{
+				pushPreview.run();
+			}
+		});
+		pushPreview.run();
+
 		JPanel coordsGrid = new JPanel(new GridLayout(3, 2, 4, 2));
 		coordsGrid.setBackground(ColorScheme.DARKER_GRAY_COLOR);
 		coordsGrid.setAlignmentX(LEFT_ALIGNMENT);
 		coordsGrid.setMaximumSize(new Dimension(PluginPanel.PANEL_WIDTH, Integer.MAX_VALUE));
-		coordsGrid.add(buildLabeledField("Corner A X", minXField));
-		coordsGrid.add(buildLabeledField("Corner A Y", minYField));
-		coordsGrid.add(buildLabeledField("Corner B X", maxXField));
-		coordsGrid.add(buildLabeledField("Corner B Y", maxYField));
+		// Cardinal + axis, not "Corner A X"/"Corner B X" - these fields already store normalized
+		// min/max (see the class doc above), and X increases east/Y increases north in OSRS's own
+		// coordinate system, so "West"/"South" (min) and "East"/"North" (max) are both accurate and
+		// far more obvious at a glance than an arbitrary "A"/"B" label ever was.
+		coordsGrid.add(buildLabeledField("West X (min)", minXField));
+		coordsGrid.add(buildLabeledField("South Y (min)", minYField));
+		coordsGrid.add(buildLabeledField("East X (max)", maxXField));
+		coordsGrid.add(buildLabeledField("North Y (max)", maxYField));
 		coordsGrid.add(buildLabeledField("Plane", planeField));
 
 		JButton saveButton = createSmallButton("Save", "Save changes to this area");
@@ -1062,6 +1442,7 @@ public class PrepToolsPanel extends PluginPanel
 				int plane = Integer.parseInt(planeField.getText().trim());
 
 				editingWildernessLocation = null;
+				plugin.clearLocationPreview();
 				plugin.updateWildernessLocation(location, newName, corner1X, corner1Y, corner2X, corner2Y, plane);
 			}
 			catch (NumberFormatException ex)
@@ -1074,6 +1455,7 @@ public class PrepToolsPanel extends PluginPanel
 		cancelButton.addActionListener(e ->
 		{
 			editingWildernessLocation = null;
+			plugin.clearLocationPreview();
 			rebuildSavedLocations();
 		});
 
@@ -1090,6 +1472,47 @@ public class PrepToolsPanel extends PluginPanel
 		row.add(coordsGrid);
 		row.add(buttonsRow);
 		return row;
+	}
+
+	/**
+	 * Up/Down arrow keys nudge a numeric text field's value by +-1 - standard spinner-style
+	 * behaviour, applied to plain JTextFields here rather than swapping them for JSpinners, since
+	 * these fields already need to accept direct typing too (pasting/typing a whole new coordinate
+	 * at once) and a JSpinner's up/down buttons would take real estate this compact edit form
+	 * doesn't have room for. Consumes the key event so it doesn't also move the caret. onChange
+	 * fires after every arrow-key nudge AND every other key release (typing), so callers get exactly
+	 * one place to hook "the value might have changed."
+	 */
+	private void installArrowKeyAdjust(JTextField field, Runnable onChange)
+	{
+		field.addKeyListener(new KeyAdapter()
+		{
+			@Override
+			public void keyPressed(KeyEvent e)
+			{
+				if (e.getKeyCode() != KeyEvent.VK_UP && e.getKeyCode() != KeyEvent.VK_DOWN)
+				{
+					return;
+				}
+
+				try
+				{
+					int value = Integer.parseInt(field.getText().trim());
+					field.setText(String.valueOf(value + (e.getKeyCode() == KeyEvent.VK_UP ? 1 : -1)));
+				}
+				catch (NumberFormatException ex)
+				{
+					// Not currently a valid number - nothing sensible to nudge, leave it as typed.
+				}
+				e.consume();
+			}
+
+			@Override
+			public void keyReleased(KeyEvent e)
+			{
+				onChange.run();
+			}
+		});
 	}
 
 	private JPanel buildLabeledField(String label, JTextField field)

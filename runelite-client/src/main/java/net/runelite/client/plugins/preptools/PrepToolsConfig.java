@@ -19,7 +19,7 @@ public interface PrepToolsConfig extends Config
 	@ConfigSection(
 		name = "Callers",
 		description = "Who to highlight as callers, and how they look.",
-		position = 10,
+		position = 3,
 		closedByDefault = true
 	)
 	String callersSection = "callersSection";
@@ -110,7 +110,7 @@ public interface PrepToolsConfig extends Config
 	@ConfigSection(
 		name = "Snipe List",
 		description = "Players to always highlight on sight, regardless of caller/target status.",
-		position = 15,
+		position = 6,
 		closedByDefault = true
 	)
 	String snipeListSection = "snipeListSection";
@@ -141,6 +141,22 @@ public interface PrepToolsConfig extends Config
 		return Color.RED;
 	}
 
+	@ConfigItem(
+		keyName = "prioritiseAttackForSnipes",
+		name = "Prioritise attack option",
+		description = "<html>Forces 'Attack' to the top of the right-click menu<br>"
+			+ "for a snipe list hit, so they're always left-click<br>"
+			+ "attackable even in a crowd. See the Menu section's<br>"
+			+ "'Attack priority order' if a target/pile and a snipe<br>"
+			+ "ever land on the same tile.</html>",
+		position = 3,
+		section = "snipeListSection"
+	)
+	default boolean prioritiseAttackForSnipes()
+	{
+		return true;
+	}
+
 	// --- Overlay section (shared rendering style for every highlight category) ---
 
 	@ConfigSection(
@@ -150,7 +166,7 @@ public interface PrepToolsConfig extends Config
 			+ "outline weight, name font, and dot size. Colours stay<br>"
 			+ "per-category, set in the Callers/Target/Pile Finder<br>"
 			+ "sections instead.</html>",
-		position = 5,
+		position = 2,
 		closedByDefault = true
 	)
 	String overlaySection = "overlaySection";
@@ -224,7 +240,7 @@ public interface PrepToolsConfig extends Config
 	@ConfigSection(
 		name = "Target",
 		description = "The primary caller's target - who they're attacking or following.",
-		position = 20,
+		position = 4,
 		closedByDefault = true
 	)
 	String targetSection = "targetSection";
@@ -293,12 +309,54 @@ public interface PrepToolsConfig extends Config
 		return 1500;
 	}
 
+	// --- Menu section ---
+
+	@ConfigSection(
+		name = "Menu",
+		description = "Right-click menu tweaks that aren't tied to callers/targets specifically.",
+		position = 7,
+		closedByDefault = true
+	)
+	String menuSection = "menuSection";
+
+	@ConfigItem(
+		keyName = "shiftClickWalkUnderAttackablePlayers",
+		name = "Shift-click Walk here",
+		description = "<html>Shift-click an attackable player to walk under/through them<br>"
+			+ "instead of attacking - same idea as RuneLite's own shift-click<br>"
+			+ "Walk here for NPCs/objects (Menu Entry Swapper), extended to<br>"
+			+ "players you could attack, which vanilla RuneLite doesn't support.</html>",
+		position = 1,
+		section = "menuSection"
+	)
+	default boolean shiftClickWalkUnderAttackablePlayers()
+	{
+		return false;
+	}
+
+	@ConfigItem(
+		keyName = "attackPriorityOrder",
+		name = "Attack priority order",
+		description = "<html>When a target, a pile hit, and a snipe list hit all land<br>"
+			+ "on the same tile, this decides which one's 'Attack' wins the<br>"
+			+ "top of the menu. Each category's own prioritisation can still<br>"
+			+ "be turned off individually (Target section, Pile Finder<br>"
+			+ "section, Snipe List section) - this only breaks the tie<br>"
+			+ "between whichever categories are actually still enabled.</html>",
+		position = 2,
+		section = "menuSection"
+	)
+	default AttackPriorityOrder attackPriorityOrder()
+	{
+		return AttackPriorityOrder.TARGET_PILE_SNIPE;
+	}
+
 	// --- Targeted player (friends chat) section ---
 
 	@ConfigSection(
 		name = "Pile Finder",
 		description = "Detects a player being piled on by your team, even if uncalled.",
-		position = 30,
+		position = 5,
 		closedByDefault = true
 	)
 	String targetedPlayerSection = "targetedPlayerSection";
@@ -642,7 +700,7 @@ public interface PrepToolsConfig extends Config
 	@ConfigSection(
 		name = "Team Capes",
 		description = "Custom names for team cape numbers, shown alongside the vanilla team cape counter.",
-		position = 40,
+		position = 8,
 		closedByDefault = true
 	)
 	String teamCapeSection = "teamCapeSection";
@@ -693,7 +751,7 @@ public interface PrepToolsConfig extends Config
 	@ConfigSection(
 		name = "Friends Chat Log",
 		description = "A newest-first log of friends chat join/leave/death activity, shown in the sidebar panel.",
-		position = 45,
+		position = 9,
 		closedByDefault = true
 	)
 	String friendsChatLogSection = "friendsChatLogSection";
@@ -722,25 +780,27 @@ public interface PrepToolsConfig extends Config
 		return 200;
 	}
 
-	// --- Chat spam section ---
+	// --- Pile Spam section --- (renamed from "Chat Spam"; keyNames below deliberately kept as
+	// chatSpamHotkey/chatSpamPrefix so anyone who already configured a custom hotkey/prefix doesn't
+	// lose it - only the section/method names, and the removed channel option, actually changed)
 
 	@ConfigSection(
-		name = "Chat Spam",
-		description = "Quickly post the name of whoever you're following into chat.",
-		position = 50,
+		name = "Pile Spam",
+		description = "Quickly post the name of whoever you're following/piling into public chat.",
+		position = 10,
 		closedByDefault = true
 	)
-	String chatSpamSection = "chatSpamSection";
+	String pileSpamSection = "pileSpamSection";
 
 	@ConfigItem(
 		keyName = "chatSpamHotkey",
 		name = "Hotkey",
 		description = "<html>While following/interacting with a player, pressing this<br>"
-			+ "types their name into chat. You still press Enter yourself.</html>",
+			+ "sends their name straight to public/game chat.</html>",
 		position = 1,
-		section = "chatSpamSection"
+		section = "pileSpamSection"
 	)
-	default Keybind chatSpamHotkey()
+	default Keybind pileSpamHotkey()
 	{
 		return new Keybind(KeyEvent.VK_F12, 0);
 	}
@@ -750,23 +810,23 @@ public interface PrepToolsConfig extends Config
 		name = "Prefix",
 		description = "<html>Text placed before the name, e.g. 'EoP' produces<br>'EoP Matt M'.</html>",
 		position = 2,
-		section = "chatSpamSection"
+		section = "pileSpamSection"
 	)
-	default String chatSpamPrefix()
+	default String pileSpamPrefix()
 	{
 		return "";
 	}
 
-	// --- Location Tools section ---
+	// --- Location Spam section ---
 
 	@ConfigSection(
-		name = "Location Tools",
+		name = "Location Spam",
 		description = "<html>Detects roughly where in the wilderness you are (from a<br>"
 			+ "user-built list of named areas) and lets you spam it into<br>"
 			+ "chat. Also holds the location-mapping tool in the sidebar<br>"
 			+ "panel, for building/editing that list from your own<br>"
 			+ "in-game coordinates.</html>",
-		position = 55,
+		position = 11,
 		closedByDefault = true
 	)
 	String locationSection = "locationSection";
@@ -786,8 +846,8 @@ public interface PrepToolsConfig extends Config
 	@ConfigItem(
 		keyName = "locationSpamHotkey",
 		name = "Location hotkey",
-		description = "<html>Pressing this types your current wilderness location<br>"
-			+ "into chat. You still press Enter yourself.</html>",
+		description = "<html>Pressing this sends your current wilderness location straight<br>"
+			+ "to chat, formatted as 'Location: Ferox Enclave, 15'.</html>",
 		position = 2,
 		section = "locationSection"
 	)
@@ -797,15 +857,15 @@ public interface PrepToolsConfig extends Config
 	}
 
 	@ConfigItem(
-		keyName = "locationSpamPrefix",
-		name = "Prefix",
-		description = "<html>Text placed before the location, e.g. 'Loc:' produces<br>'Loc: Ferox Enclave (level 15)'.</html>",
+		keyName = "locationSpamChannel",
+		name = "Channel",
+		description = "Which chat channel the hotkey sends to.",
 		position = 3,
 		section = "locationSection"
 	)
-	default String locationSpamPrefix()
+	default ChatSpamChannel locationSpamChannel()
 	{
-		return "";
+		return ChatSpamChannel.FRIENDS_CHAT;
 	}
 
 	// --- Teleblock Timers section ---
@@ -813,7 +873,7 @@ public interface PrepToolsConfig extends Config
 	@ConfigSection(
 		name = "Teleblock Timers",
 		description = "Countdown shown when a player - including you - gets tele-blocked.",
-		position = 75,
+		position = 13,
 		closedByDefault = true
 	)
 	String teleblockSection = "teleblockSection";
@@ -874,7 +934,7 @@ public interface PrepToolsConfig extends Config
 	@ConfigSection(
 		name = "Debug",
 		description = "Diagnostic logging - only needed if something isn't working.",
-		position = 100,
+		position = 14,
 		closedByDefault = true
 	)
 	String debugSection = "debugSection";
@@ -895,12 +955,14 @@ public interface PrepToolsConfig extends Config
 
 	@ConfigItem(
 		keyName = "showWildernessLocationOverlay",
-		name = "Show location boxes",
+		name = "Show/edit wilderness locations",
 		description = "<html>Helper for building the wilderness location list (see the<br>"
 			+ "sidebar's Location Mapper tool). Draws every saved area's<br>"
-			+ "outer border on your current plane, labelled with its name.<br>"
-			+ "Purely a mapping aid - functional, not pretty. Turn on<br>"
-			+ "temporarily while mapping, then off.</html>",
+			+ "outer border on your current plane, labelled with its name,<br>"
+			+ "plus a live preview (different colour) while editing one in<br>"
+			+ "the sidebar. Also enables shift-right-click on the ground to<br>"
+			+ "set Corner A/B directly, without needing the sidebar buttons.<br>"
+			+ "Turn on temporarily while mapping, then off.</html>",
 		position = 2,
 		section = "debugSection"
 	)
@@ -914,7 +976,7 @@ public interface PrepToolsConfig extends Config
 	@ConfigSection(
 		name = "Freeze Timers",
 		description = "Countdown shown when a player - including you - gets frozen.",
-		position = 70,
+		position = 12,
 		closedByDefault = true
 	)
 	String freezeSection = "freezeSection";

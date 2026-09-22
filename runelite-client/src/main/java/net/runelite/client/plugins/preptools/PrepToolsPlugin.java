@@ -12,6 +12,7 @@ import java.util.ArrayDeque;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
+import java.util.Comparator;
 import java.util.Deque;
 import java.util.HashMap;
 import java.util.HashSet;
@@ -19,6 +20,7 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 import javax.inject.Inject;
@@ -40,9 +42,9 @@ import net.runelite.api.ScriptID;
 import net.runelite.api.Skill;
 import net.runelite.api.SpriteID;
 import net.runelite.api.Tile;
-import net.runelite.api.VarClientStr;
 import net.runelite.api.coords.WorldPoint;
 import net.runelite.api.events.AnimationChanged;
+import net.runelite.api.events.ClientTick;
 import net.runelite.api.events.FriendsChatMemberJoined;
 import net.runelite.api.events.FriendsChatMemberLeft;
 import net.runelite.api.events.GameTick;
@@ -61,6 +63,8 @@ import net.runelite.client.chat.QueuedMessage;
 import net.runelite.client.config.ConfigManager;
 import net.runelite.client.eventbus.Subscribe;
 import net.runelite.client.events.ConfigChanged;
+import net.runelite.client.game.ItemManager;
+import net.runelite.client.game.SpriteManager;
 import net.runelite.client.input.KeyManager;
 import net.runelite.client.plugins.Plugin;
 import net.runelite.client.plugins.PluginDescriptor;
@@ -213,6 +217,12 @@ public class PrepToolsPlugin extends Plugin
 
 	@Inject
 	private ClientToolbar clientToolbar;
+
+	@Inject
+	private SpriteManager spriteManager;
+
+	@Inject
+	private ItemManager itemManager;
 
 	private PrepToolsPanel panel;
 	private NavigationButton navButton;
@@ -411,11 +421,22 @@ public class PrepToolsPlugin extends Plugin
 	 * as JSON via ConfigManager (see loadWildernessLocations()/saveWildernessLocations()) rather than
 	 * a visible multi-line ConfigItem - editing a list of rectangles as raw text isn't something
 	 * anyone wants to hand-type, so the panel's buttons are the only intended way to build it up.
-	 * Also read by WildernessLocationDebugOverlay (the Debug section's "Show location boxes"
-	 * toggle) to draw each saved area's border in-game.
+	 * Also read by WildernessLocationDebugOverlay (the Debug section's "Show/edit wilderness
+	 * locations" toggle) to draw each saved area's border in-game.
+	 *
+	 * BUG FIX: was a plain ArrayList - WildernessLocationDebugOverlay.render() iterates this on the
+	 * game's own render thread, while every mutation (saveLocationFromPanel/removeWildernessLocation/
+	 * updateWildernessLocation) happens on the Swing EDT via a sidebar button click. A render pass
+	 * landing mid-mutation threw ConcurrentModificationException (confirmed via a stack trace caught
+	 * by OverlayRenderer.safeRender() while testing the Location Mapper) - not a crash, since
+	 * safeRender() catches it, but it meant that frame's overlay silently didn't draw anything,
+	 * easily read as "the corner I just set doesn't seem to have worked." CopyOnWriteArrayList is the
+	 * standard fix for exactly this shape of problem (read-heavy from one thread, rarely mutated from
+	 * another) - the list here is always small (a handful of user-mapped areas), so copy-on-write's
+	 * mutation cost is irrelevant.
 	 */
 	@Getter
-	private List<WildernessLocation> wildernessLocations = new ArrayList<>();
+	private List<WildernessLocation> wildernessLocations = new CopyOnWriteArrayList<>();
 
 	/**
 	 * The local player's WorldPoint as of the most recent game tick - cached here (rather than read
@@ -464,7 +485,7 @@ public class PrepToolsPlugin extends Plugin
 	@Getter
 	private boolean prayerBoosted;
 
-	private final HotkeyListener chatSpamHotkeyListener = new HotkeyListener(() -> config.chatSpamHotkey())
+	private final HotkeyListener pileSpamHotkeyListener = new HotkeyListener(() -> config.pileSpamHotkey())
 	{
 		@Override
 		public void hotkeyPressed()
@@ -499,12 +520,12 @@ public class PrepToolsPlugin extends Plugin
 		overlayManager.add(teleblockOverlay);
 		overlayManager.add(teamCapeOverlay);
 		overlayManager.add(wildernessLocationDebugOverlay);
-		keyManager.registerKeyListener(chatSpamHotkeyListener);
+		keyManager.registerKeyListener(pileSpamHotkeyListener);
 		keyManager.registerKeyListener(locationSpamHotkeyListener);
 
 		loadWildernessLocations();
 
-		panel = new PrepToolsPanel(this);
+		panel = new PrepToolsPanel(this, spriteManager, itemManager);
 		navButton = NavigationButton.builder()
 			.tooltip("PvP Tools")
 			.icon(createNavIcon())
@@ -531,7 +552,7 @@ public class PrepToolsPlugin extends Plugin
 		overlayManager.remove(teleblockOverlay);
 		overlayManager.remove(teamCapeOverlay);
 		overlayManager.remove(wildernessLocationDebugOverlay);
-		keyManager.unregisterKeyListener(chatSpamHotkeyListener);
+		keyManager.unregisterKeyListener(pileSpamHotkeyListener);
 		keyManager.unregisterKeyListener(locationSpamHotkeyListener);
 		clientToolbar.removeNavigation(navButton);
 		clearState();
@@ -628,6 +649,7 @@ public class PrepToolsPlugin extends Plugin
 
 		panel.updateStatus(onScreenStandardNames, primaryCaller != null ? Text.standardize(primaryCaller.getName()) : null);
 		panel.updateMissingMembers(missingFriendsChatMembers);
+		panel.updateClanIds(computeClanIdRows(onScreenStandardNames));
 
 		Set<String> onScreenSnipeNames = new HashSet<>();
 		for (Player player : snipedPlayers)
@@ -1389,6 +1411,88 @@ public class PrepToolsPlugin extends Plugin
 	}
 
 	/**
+	 * Builds the sidebar's "Clan IDs" tab data: your own player id plus every friends chat member
+	 * currently on screen, sorted ascending by id so the two extremes (the min and max - both
+	 * candidates for landing on the literal default Attack menu slot, see
+	 * MENU_ORDER_PID_INVESTIGATION.md) are visually obvious at the top and bottom of the list.
+	 *
+	 * @param onScreenCallerStandardNames Text.standardize()-d names of on-screen configured callers
+	 *                                    (primaryCaller + backupCallers) - already computed once per
+	 *                                    tick by the onGameTick caller, reused here rather than
+	 *                                    rebuilt, to flag which rows are also callers.
+	 */
+	private List<ClanIdRow> computeClanIdRows(Set<String> onScreenCallerStandardNames)
+	{
+		List<ClanIdRow> rows = new ArrayList<>();
+
+		Player local = client.getLocalPlayer();
+		if (local != null && local.getName() != null)
+		{
+			rows.add(new ClanIdRow(local.getName(), local.getId(), true,
+				onScreenCallerStandardNames.contains(Text.standardize(local.getName()))));
+		}
+
+		Set<String> friendsChatMemberNames = getFriendsChatMemberNames();
+		for (Player player : client.getPlayers())
+		{
+			if (player == local || player.getName() == null)
+			{
+				continue;
+			}
+
+			String standardName = Text.standardize(player.getName());
+			if (friendsChatMemberNames.contains(standardName))
+			{
+				rows.add(new ClanIdRow(player.getName(), player.getId(), false,
+					onScreenCallerStandardNames.contains(standardName)));
+			}
+		}
+
+		rows.sort(Comparator.comparingInt(row -> row.id));
+		return rows;
+	}
+
+	/**
+	 * Shift-click "Walk here" for attackable players - vanilla RuneLite's MenuEntrySwapperPlugin
+	 * already offers this for NPCs, objects, and ground items (its own
+	 * npcShiftClickWalkHere/objectShiftClickWalkHere/groundItemShiftClickWalkHere settings), but has
+	 * no equivalent for players at all - confirmed by reading that plugin's source directly: there's
+	 * no PLAYER_MENU_TYPES handling anywhere in its shift-click swap logic. This fills that gap for
+	 * the one case PvP Tools actually needs it: maneuvering precisely through/under a pile without
+	 * misclicking an Attack.
+	 *
+	 * DELIBERATELY on ClientTick, not PostMenuSort, despite onPostMenuSort's own doc comment above
+	 * explaining exactly why an earlier version of THIS plugin's menu handling had to move off
+	 * ClientTick (edits made there were silently overwritten by the game's own later internal sort).
+	 * That bug was about reordering/relabeling entries - trying to override what the sort had
+	 * already decided. setDeprioritized() is different in kind: MenuEntry's own javadoc describes it
+	 * as an input the sort itself consults ("sorted in the menu to be below the other menu
+	 * entries"), so it has to be set BEFORE that sort runs to have any effect - setting it in
+	 * PostMenuSort, after the sort already ran, would be the too-late version of the same mistake in
+	 * reverse. MenuEntrySwapperPlugin.onClientTick() is the proven reference for this exact
+	 * technique (its NPC/object/ground-item Walk-here swaps all work this way); the isMenuOpen()
+	 * guard below matches it as well, so a menu already on screen never gets its priority order
+	 * changed out from under the cursor.
+	 */
+	@Subscribe
+	public void onClientTick(ClientTick clientTick)
+	{
+		if (!config.shiftClickWalkUnderAttackablePlayers() || client.isMenuOpen()
+			|| !client.isKeyPressed(KeyCode.KC_SHIFT))
+		{
+			return;
+		}
+
+		for (MenuEntry entry : client.getMenuEntries())
+		{
+			if (entry.getPlayer() != null && "Attack".equalsIgnoreCase(stripMenuTags(entry.getOption())))
+			{
+				entry.setDeprioritized(true);
+			}
+		}
+	}
+
+	/**
 	 * Recolours "Attack" and manually-cast freeze spell menu options, prioritises "Attack" against
 	 * the caller's target/a pile hit, and blocks a freeze spell against a teammate - all in one
 	 * pass over the fully-built menu.
@@ -1470,7 +1574,9 @@ public class PrepToolsPlugin extends Plugin
 		}
 
 		List<MenuEntry> filtered = new ArrayList<>(menuEntries.length);
-		int priorityIndex = -1;
+		int targetIndex = -1;
+		int pileIndex = -1;
+		int snipeIndex = -1;
 		int anyEnemyAttackIndex = -1;
 		boolean teammateRiskRemoved = false;
 
@@ -1502,22 +1608,35 @@ public class PrepToolsPlugin extends Plugin
 					}
 				}
 
-				// Target attack-priority wins over a pile hit if a player happens to be both
-				// (targetedPlayers only ever contains non-FC players who aren't the target anyway,
-				// but this keeps the two conditions clearly independent regardless).
-				if ((config.prioritiseTargetAttack() && targets.contains(player))
-					|| (config.prioritiseAttackForPiles() && targetedPlayers.contains(player)))
+				// Target/pile/snipe are tracked independently (rather than one shared priorityIndex
+				// overwritten by whichever matches last) so the configured AttackPriorityOrder can
+				// deliberately choose between them below, instead of an undocumented "last one the
+				// loop happened to see wins" tie-break.
+				boolean isPriorityHit = false;
+				if (config.prioritiseTargetAttack() && targets.contains(player))
 				{
-					priorityIndex = filtered.size();
+					targetIndex = filtered.size();
+					isPriorityHit = true;
 				}
-				// BUG FIX: an enemy who isn't specifically the caller's tracked target or a
-				// detected pile (e.g. just another player stacked on the same tile as a teammate)
-				// never set priorityIndex, so if that same menu also stripped out a teammate's
-				// freeze-spell entry, the code below fell all the way through to promoting
-				// "Cancel" - even though attacking that enemy is obviously a better default than
-				// cancelling. Tracked separately from priorityIndex so an explicit target/pile
-				// priority still always wins if both are present.
-				else if (player != local && !isOwnTeamMember(player))
+				if (config.prioritiseAttackForPiles() && targetedPlayers.contains(player))
+				{
+					pileIndex = filtered.size();
+					isPriorityHit = true;
+				}
+				if (config.prioritiseAttackForSnipes() && snipedPlayers.contains(player))
+				{
+					snipeIndex = filtered.size();
+					isPriorityHit = true;
+				}
+
+				// BUG FIX: an enemy who isn't specifically the caller's tracked target, a detected
+				// pile, or a snipe hit (e.g. just another player stacked on the same tile as a
+				// teammate) never set any of the three indices above, so if that same menu also
+				// stripped out a teammate's freeze-spell entry, the code below fell all the way
+				// through to promoting "Cancel" - even though attacking that enemy is obviously a
+				// better default than cancelling. Tracked separately so an explicit target/pile/
+				// snipe priority still always wins if any of them are present.
+				if (!isPriorityHit && player != local && !isOwnTeamMember(player))
 				{
 					anyEnemyAttackIndex = filtered.size();
 				}
@@ -1567,6 +1686,8 @@ public class PrepToolsPlugin extends Plugin
 				filtered.add(entry);
 			}
 		}
+
+		int priorityIndex = resolvePriorityIndex(config.attackPriorityOrder(), targetIndex, pileIndex, snipeIndex);
 
 		// Recolouring alone (the common case - no reorder/removal needed) already applied live via
 		// entry.setOption() above; only a structural change (reorder/removal) needs setMenuEntries().
@@ -1717,6 +1838,44 @@ public class PrepToolsPlugin extends Plugin
 	}
 
 	/**
+	 * Picks which of target/pile/snipe wins the default Attack slot, per the configured
+	 * AttackPriorityOrder - the first category in that order whose index is actually present (>= 0)
+	 * wins. Returns -1 if none of the three matched anything in this menu.
+	 */
+	private static int resolvePriorityIndex(AttackPriorityOrder order, int targetIndex, int pileIndex, int snipeIndex)
+	{
+		switch (order)
+		{
+			case TARGET_SNIPE_PILE:
+				return firstPositive(targetIndex, snipeIndex, pileIndex);
+			case PILE_TARGET_SNIPE:
+				return firstPositive(pileIndex, targetIndex, snipeIndex);
+			case PILE_SNIPE_TARGET:
+				return firstPositive(pileIndex, snipeIndex, targetIndex);
+			case SNIPE_TARGET_PILE:
+				return firstPositive(snipeIndex, targetIndex, pileIndex);
+			case SNIPE_PILE_TARGET:
+				return firstPositive(snipeIndex, pileIndex, targetIndex);
+			case TARGET_PILE_SNIPE:
+			default:
+				return firstPositive(targetIndex, pileIndex, snipeIndex);
+		}
+	}
+
+	private static int firstPositive(int a, int b, int c)
+	{
+		if (a >= 0)
+		{
+			return a;
+		}
+		if (b >= 0)
+		{
+			return b;
+		}
+		return c;
+	}
+
+	/**
 	 * Moves the entry at the given index to the end of the array (in place) - the default
 	 * left-click action - shifting everything after it left by one to fill the gap.
 	 */
@@ -1783,6 +1942,47 @@ public class PrepToolsPlugin extends Plugin
 				.setTarget(entry.getTarget())
 				.setType(MenuAction.RUNELITE)
 				.onClick(e -> addToSnipeList(player.getName()));
+		}
+
+		// Shift-right-click the ground to set Corner A/B directly, gated behind the same setting
+		// that shows the location boxes overlay (showWildernessLocationOverlay) - both are the same
+		// "actively mapping wilderness areas right now" mode, not something to leave cluttering the
+		// menu otherwise. Anchored on the WALK entry (always present exactly once) purely to find
+		// where in the menu to insert the new options - the clicked tile itself comes from
+		// getSelectedSceneTile() (ie. "last right clicked tile"), NOT from decoding the WALK entry's
+		// own param0/param1 as scene coordinates via WorldPoint.fromScene(). That was the original
+		// approach here and it's wrong: unlike object-click entries (tree, bookcase, compost bin -
+		// see e.g. HerbiboarPlugin/KourendLibraryPlugin), a WALK entry's params aren't the clicked
+		// tile's scene x/y, so treating them as such landed hundreds of tiles from the real click.
+		// GroundMarkerPlugin's own shift-right-click "Mark tile" (RuneLite core, the proven reference
+		// for this exact idiom) reads getSelectedSceneTile() instead - same fix here.
+		if (config.showWildernessLocationOverlay())
+		{
+			Tile selectedTile = client.getTopLevelWorldView().getSelectedSceneTile();
+			WorldPoint clicked = selectedTile != null ? selectedTile.getWorldLocation() : null;
+
+			for (int idx = entries.length - 1; idx >= 0 && clicked != null; idx--)
+			{
+				MenuEntry entry = entries[idx];
+				if (entry.getType() != MenuAction.WALK)
+				{
+					continue;
+				}
+
+				client.createMenuEntry(idx)
+					.setOption("Set Corner A")
+					.setTarget("")
+					.setType(MenuAction.RUNELITE)
+					.onClick(e -> setLocationCornerA(clicked));
+
+				client.createMenuEntry(idx)
+					.setOption("Set Corner B")
+					.setTarget("")
+					.setType(MenuAction.RUNELITE)
+					.onClick(e -> setLocationCornerB(clicked));
+
+				break;
+			}
 		}
 	}
 
@@ -1958,11 +2158,40 @@ public class PrepToolsPlugin extends Plugin
 		return names;
 	}
 
+	// client.runScript(ScriptID.CHAT_SEND, ...)'s "modes" argument, by destination channel.
+	// CONFIRMED (in game, this session) that CHAT_MODE_FRIENDS_CHAT/CHAT_MODE_CLAN_CHAT are the
+	// right two values for those two channels - they were initially assigned the other way around
+	// (a guess, since neither RuneLite's own source/javadoc nor a web search turned up the literal
+	// values) and swapped once real testing showed Location Spam's Friends Chat/Clan Chat option
+	// landed in the wrong channel. CHAT_MODE_PUBLIC is still an UNVERIFIED guess, following the same
+	// "small distinct int per channel" reasoning that got the other two right - flag it if Pile Spam
+	// doesn't land in public/game chat.
+	private static final int CHAT_MODE_PUBLIC = 0;
+	private static final int CHAT_MODE_FRIENDS_CHAT = 2;
+	private static final int CHAT_MODE_CLAN_CHAT = 1;
+
 	/**
-	 * Posts the name of the player you're currently following/interacting with into the chat
-	 * input box, prefixed with the configured text. This PRE-FILLS the chat input only - it does
-	 * not press Enter for you, so you still send the message yourself as a final, deliberate
-	 * action (same as if you'd typed it by hand).
+	 * Sends a chat message on the given raw mode, exactly as if the player had typed it and pressed
+	 * Enter themselves - client.runScript(ScriptID.CHAT_SEND, ...) is the same script RuneLite's own
+	 * core ChatInputManager calls when it intercepts a REAL Enter keypress
+	 * (net.runelite.client.chat.ChatInputManager#sendChatboxInput - the only other call site of this
+	 * script found anywhere in this codebase). Must run on the client thread.
+	 */
+	private void sendChatMessage(String message, int mode)
+	{
+		client.runScript(ScriptID.CHAT_SEND, message, mode, 0, 0, -1);
+	}
+
+	private void sendChatMessage(String message, ChatSpamChannel channel)
+	{
+		sendChatMessage(message, channel == ChatSpamChannel.CLAN_CHAT ? CHAT_MODE_CLAN_CHAT : CHAT_MODE_FRIENDS_CHAT);
+	}
+
+	/**
+	 * Sends the name of the player you're currently following/interacting with to chat, prefixed
+	 * with the configured text. Always public/game chat - unlike Location Spam, there's no channel
+	 * choice here: this is meant to be read by whoever's actually looking at your screen/piling with
+	 * you in the moment, not routed to a specific coordination channel.
 	 */
 	private void postFollowedPlayerNameToChat()
 	{
@@ -1990,19 +2219,12 @@ public class PrepToolsPlugin extends Plugin
 				return;
 			}
 
-			String prefix = config.chatSpamPrefix();
+			String prefix = config.pileSpamPrefix();
 			String message = (prefix == null || prefix.trim().isEmpty())
 				? targetName
 				: prefix.trim() + " " + targetName;
 
-			client.setVarcStrValue(VarClientStr.CHATBOX_TYPED_TEXT, message);
-
-			// Setting the var alone updates the underlying value (proven by Enter still working
-			// even when nothing visibly changed) but doesn't tell the chat widget to redraw -
-			// that redraw is normally only triggered by the client's own keyboard input handling.
-			// This is the same script call real RuneLite plugins use after writing to
-			// CHATBOX_TYPED_TEXT to force the visible text to actually refresh immediately.
-			client.runScript(ScriptID.CHAT_PROMPT_INIT);
+			sendChatMessage(message, CHAT_MODE_PUBLIC);
 		});
 	}
 
@@ -2599,7 +2821,7 @@ public class PrepToolsPlugin extends Plugin
 		String json = configManager.getConfiguration(PrepToolsConfig.GROUP, WILDERNESS_LOCATIONS_CONFIG_KEY);
 		if (json == null || json.trim().isEmpty())
 		{
-			wildernessLocations = defaultWildernessLocations();
+			wildernessLocations = new CopyOnWriteArrayList<>(defaultWildernessLocations());
 			saveWildernessLocations();
 			return;
 		}
@@ -2609,12 +2831,12 @@ public class PrepToolsPlugin extends Plugin
 			List<WildernessLocation> parsed = gson.fromJson(json, new TypeToken<List<WildernessLocation>>()
 			{
 			}.getType());
-			wildernessLocations = parsed != null ? parsed : new ArrayList<>();
+			wildernessLocations = new CopyOnWriteArrayList<>(parsed != null ? parsed : new ArrayList<>());
 		}
 		catch (RuntimeException e)
 		{
 			log.warn("PvP Tools: failed to parse saved wilderness locations, resetting to defaults", e);
-			wildernessLocations = defaultWildernessLocations();
+			wildernessLocations = new CopyOnWriteArrayList<>(defaultWildernessLocations());
 			saveWildernessLocations();
 		}
 	}
@@ -2650,13 +2872,28 @@ public class PrepToolsPlugin extends Plugin
 	 */
 	void setLocationCornerA()
 	{
-		locationCornerA = lastKnownWorldPoint;
-		pushLocationMapperUpdate();
+		setLocationCornerA(lastKnownWorldPoint);
 	}
 
 	void setLocationCornerB()
 	{
-		locationCornerB = lastKnownWorldPoint;
+		setLocationCornerB(lastKnownWorldPoint);
+	}
+
+	/**
+	 * Explicit-point overloads of the above - used by the shift-right-click-on-ground "Set Corner
+	 * A/B" menu options (see onMenuOpened()), which capture the clicked tile rather than the local
+	 * player's own position.
+	 */
+	void setLocationCornerA(WorldPoint point)
+	{
+		locationCornerA = point;
+		pushLocationMapperUpdate();
+	}
+
+	void setLocationCornerB(WorldPoint point)
+	{
+		locationCornerB = point;
 		pushLocationMapperUpdate();
 	}
 
@@ -2669,6 +2906,25 @@ public class PrepToolsPlugin extends Plugin
 	{
 		panel.updateLocationMapper(lastKnownWorldPoint, currentWildernessLevel, currentLocationName,
 			hoveredWorldPoint, hoveredLocationName, locationCornerA, locationCornerB);
+	}
+
+	/**
+	 * The location currently being edited in the sidebar's Location Mapper edit form, if any - see
+	 * updateLocationPreview()/clearLocationPreview() (called from PrepToolsPanel on every keystroke/
+	 * arrow-key adjustment while editing) and WildernessLocationDebugOverlay, which renders this in
+	 * a distinct colour from the already-saved boxes. Null whenever nothing's being edited.
+	 */
+	@Getter
+	private WildernessLocation previewWildernessLocation;
+
+	void updateLocationPreview(String name, int minX, int minY, int maxX, int maxY, int plane)
+	{
+		previewWildernessLocation = new WildernessLocation(name, minX, minY, maxX, maxY, plane);
+	}
+
+	void clearLocationPreview()
+	{
+		previewWildernessLocation = null;
 	}
 
 	/**
@@ -2746,8 +3002,10 @@ public class PrepToolsPlugin extends Plugin
 	}
 
 	/**
-	 * Types the current wilderness location (name and/or level, whatever's known) into the chat
-	 * input box - prefill only, same "you still press Enter" model as postFollowedPlayerNameToChat().
+	 * Fixed format, no configurable prefix: "Location: W318, Ferox Enclave, lvl 15 wild" (world,
+	 * then name, then the wilderness level if known - the "lvl N wild" part is dropped entirely,
+	 * comma and all, if you're not in the wilderness). Sent on the configured channel
+	 * (PrepToolsConfig#locationSpamChannel).
 	 */
 	private void postLocationToChat()
 	{
@@ -2760,20 +3018,14 @@ public class PrepToolsPlugin extends Plugin
 				return;
 			}
 
-			StringBuilder sb = new StringBuilder();
-			String prefix = config.locationSpamPrefix();
-			if (prefix != null && !prefix.trim().isEmpty())
-			{
-				sb.append(prefix.trim()).append(' ');
-			}
-			sb.append(name != null ? name : "Wilderness");
+			StringBuilder sb = new StringBuilder("Location: W").append(client.getWorld())
+				.append(", ").append(name != null ? name : "Wilderness");
 			if (level != null)
 			{
-				sb.append(" (level ").append(level).append(')');
+				sb.append(", lvl ").append(level).append(" wild");
 			}
 
-			client.setVarcStrValue(VarClientStr.CHATBOX_TYPED_TEXT, sb.toString());
-			client.runScript(ScriptID.CHAT_PROMPT_INIT);
+			sendChatMessage(sb.toString(), config.locationSpamChannel());
 		});
 	}
 

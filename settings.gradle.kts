@@ -23,6 +23,13 @@
  * SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
  */
 
+plugins {
+    // Lets Gradle auto-download and cache (under ~/.gradle/jdks, no sudo/system install) a JDK 17+
+    // on demand for toolchain-based tasks - specifically runelite-client's jpackage tasks, which
+    // need jpackage (JDK 14+) even though the app itself still targets Java 11.
+    id("org.gradle.toolchains.foojay-resolver-convention") version "0.8.0"
+}
+
 rootProject.name = "runelite"
 
 // these two have artifact ids that don't match their project directory names

@@ -106,8 +106,12 @@ public class TeamCapeOverlay extends OverlayPanel
 	 * are WILDERNESS_CAPE_1 + 2 per step, team capes above that use the "zero" cape range (3 per
 	 * step) instead - two different in-game item ranges for historical reasons, not something this
 	 * plugin controls.
+	 *
+	 * Static + package-visible so PrepToolsPanel can reuse it too (the "Capes" sidebar tab's icon -
+	 * team cape items are the only real source of a colourful, recognisable cape icon; the generic
+	 * equipment-slot sprite tried first rendered blank/placeholder, not an actual cape).
 	 */
-	private int teamCapeItemId(int teamNumber)
+	static int teamCapeItemId(int teamNumber)
 	{
 		int teamcapeNumber = teamNumber - 1;
 		if (teamcapeNumber < 50)

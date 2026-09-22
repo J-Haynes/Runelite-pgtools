@@ -1,0 +1,83 @@
+name: Package
+
+# Manual "Run workflow" button (Actions tab) - builds all three installers and attaches them to
+# this run as downloadable Actions artifacts, no public release. Good for a quick test build.
+#
+# Pushing a tag like "v1.0.0" additionally publishes those same files to a GitHub Release - the
+# actual public "click here to download" link for someone who isn't going to dig through the
+# Actions tab. See CLAUDE.md's "Packaging for non-technical users" section for the jpackage side
+# of this (the two Gradle tasks this workflow calls, and their known limitations).
+on:
+  workflow_dispatch: {}
+  push:
+    tags:
+      - "v*"
+
+jobs:
+  package:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-24.04
+            artifact-glob: runelite-client/build/jpackage/installer/*.deb
+          - os: windows-latest
+            artifact-glob: runelite-client/build/jpackage/installer/*.exe
+          - os: macos-latest
+            artifact-glob: runelite-client/build/jpackage/installer/*.dmg
+
+    runs-on: ${{ matrix.os }}
+
+    permissions:
+      contents: write # only actually used by the release-publish step below, on a tag push
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      # Matches CI.yml - JDK 11 is what actually builds/compiles the client on every OS. jpackage
+      # itself needs a JDK 14+; the Gradle toolchain wired up in settings.gradle.kts auto-downloads
+      # a JDK 17 for just that step, same as it does on a local machine - no second setup-java
+      # step needed here.
+      - name: Set up JDK 11
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 11
+
+      - name: Setup Gradle
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: wrapper
+
+      - name: Install fakeroot (Linux, needed for .deb packaging)
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y fakeroot
+
+      # jpackage's --type exe needs the WiX Toolset (v3). windows-latest runners normally ship
+      # with it already, but this installs it on demand instead of assuming - cheap insurance
+      # against a GitHub-side image change silently breaking the Windows build.
+      - name: Ensure WiX Toolset is available (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          if (-not (Get-Command candle.exe -ErrorAction SilentlyContinue)) {
+            choco install wixtoolset --no-progress -y
+            $wixBin = Get-ChildItem "$env:ProgramFiles (x86)\WiX Toolset*\bin" -Directory | Select-Object -First 1
+            Add-Content -Path $env:GITHUB_PATH -Value $wixBin.FullName
+          }
+
+      - name: Build installer
+        run: ./gradlew :client:jpackageInstaller
+
+      - name: Upload build artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: runelite-pvp-tools-${{ matrix.os }}
+          path: ${{ matrix.artifact-glob }}
+
+      - name: Publish to release
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: ${{ matrix.artifact-glob }}
