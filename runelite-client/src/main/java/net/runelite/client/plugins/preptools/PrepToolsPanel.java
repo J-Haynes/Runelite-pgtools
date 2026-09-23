@@ -7,6 +7,7 @@ import java.awt.Dimension;
 import java.awt.GridLayout;
 import java.awt.Image;
 import java.awt.Insets;
+import java.awt.Rectangle;
 import java.awt.Toolkit;
 import java.awt.datatransfer.StringSelection;
 import java.awt.event.ComponentAdapter;
@@ -36,6 +37,7 @@ import javax.swing.JScrollPane;
 import javax.swing.JSpinner;
 import javax.swing.JTextArea;
 import javax.swing.JTextField;
+import javax.swing.Scrollable;
 import javax.swing.ScrollPaneConstants;
 import javax.swing.SpinnerNumberModel;
 import javax.swing.SwingConstants;
@@ -168,6 +170,13 @@ public class PrepToolsPanel extends PluginPanel
 
 	PrepToolsPanel(PrepToolsPlugin plugin, SpriteManager spriteManager, ItemManager itemManager)
 	{
+		// false = don't let PluginPanel wrap this whole panel in its own outer scroll pane - each tab
+		// already has its own (wrapTabContent()). BUG FIX: with both, a tab taller than the sidebar
+		// (Location, with its long saved list) grew to full height inside the OUTER pane, so its
+		// inner pane had nothing to scroll - yet still swallowed every mouse-wheel event over the
+		// content. Only dragging the outer scrollbar worked. Same as TimeTrackingPanel (RuneLite
+		// core), the model for this tab/scroll layout.
+		super(false);
 		this.plugin = plugin;
 		this.spriteManager = spriteManager;
 		this.itemManager = itemManager;
@@ -274,7 +283,7 @@ public class PrepToolsPanel extends PluginPanel
 	 */
 	private JScrollPane wrapTabContent(JPanel content)
 	{
-		JPanel wrapped = new JPanel(new BorderLayout());
+		JPanel wrapped = new ViewportWidthPanel();
 		wrapped.setBackground(ColorScheme.DARK_GRAY_COLOR);
 		wrapped.setBorder(new EmptyBorder(8, 10, 10, 10));
 		wrapped.add(content, BorderLayout.NORTH);
@@ -285,6 +294,52 @@ public class PrepToolsPanel extends PluginPanel
 		scroller.setBorder(BorderFactory.createEmptyBorder());
 		scroller.getVerticalScrollBar().setPreferredSize(new Dimension(10, 0));
 		return scroller;
+	}
+
+	/**
+	 * A tab's scrollable content: always exactly as wide as the visible area, so content can
+	 * never end up wider than the sidebar and get clipped on the right, and text areas wrap to the
+	 * real width. Also scrolls a sensible amount per mouse-wheel notch - Swing's default for a plain
+	 * JPanel is 1 pixel.
+	 */
+	private static class ViewportWidthPanel extends JPanel implements Scrollable
+	{
+		private static final int SCROLL_UNIT = 16;
+
+		ViewportWidthPanel()
+		{
+			super(new BorderLayout());
+		}
+
+		@Override
+		public Dimension getPreferredScrollableViewportSize()
+		{
+			return getPreferredSize();
+		}
+
+		@Override
+		public int getScrollableUnitIncrement(Rectangle visibleRect, int orientation, int direction)
+		{
+			return SCROLL_UNIT;
+		}
+
+		@Override
+		public int getScrollableBlockIncrement(Rectangle visibleRect, int orientation, int direction)
+		{
+			return Math.max(SCROLL_UNIT, visibleRect.height - SCROLL_UNIT);
+		}
+
+		@Override
+		public boolean getScrollableTracksViewportWidth()
+		{
+			return true;
+		}
+
+		@Override
+		public boolean getScrollableTracksViewportHeight()
+		{
+			return false;
+		}
 	}
 
 	/**
@@ -2023,11 +2078,5 @@ public class PrepToolsPanel extends PluginPanel
 		wrapper.add(labelComponent, BorderLayout.WEST);
 		wrapper.add(field, BorderLayout.CENTER);
 		return wrapper;
-	}
-
-	@Override
-	public Dimension getPreferredSize()
-	{
-		return new Dimension(PluginPanel.PANEL_WIDTH, super.getPreferredSize().height);
 	}
 }

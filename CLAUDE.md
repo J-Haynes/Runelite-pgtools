@@ -27,8 +27,10 @@ client with similar team-coordination features. Core pieces:
   colour, but sharing one rendering style (shape/outline width/font/dot size — the config's
   "Overlay" section, `PrepToolsConfig#highlightShape()` etc.) so every highlighted player looks
   visually consistent no matter which category put them there. Priority when a player qualifies
-  for more than one at once is pile finder < caller < target (`PrepToolsPlugin#computeHighlightColors()`),
-  i.e. a target overrides its own pile-finder highlight.
+  for more than one at once, lowest to highest: backup caller < snipe list < pile finder < primary
+  caller < target (`PrepToolsPlugin#rebuildHighlightStyles()`, cached once per tick;
+  `#computeHighlightStyles()` adds the per-frame new-target flash on top) - e.g. a target overrides
+  its own pile-finder highlight.
   - **Caller** — the primary caller and any backup callers from the caller list get an outline
     (default green for primary, a separate colour for backups), driven entirely by the configured
     caller list matching on-screen player names (`PrepToolsPlugin#updateCallersAndTargets()`).
@@ -43,7 +45,7 @@ client with similar team-coordination features. Core pieces:
     target, how many of your own team (FC/clan members, callers, you) are simultaneously interacting
     with the same non-team player (`PrepToolsPlugin#updateTargetedPlayers()`); once that count meets a configurable
     threshold (`targetedPlayerThreshold()`, default low but user-settable), that player is
-    highlighted even though nobody explicitly called them. FC-on-FC interactions (sparring) and
+    highlighted even though nobody explicitly called them. Team-on-team interactions (sparring) and
     interactions targeting a configured caller are excluded from the count so callers can never
     accidentally trip their own team's pile finder. Needs teammates on screen to count (a
     friends chat *or* clan - either works). Can also be prioritised to left-click Attack
@@ -183,7 +185,9 @@ sidebar's own tab order. The sidebar (`PrepToolsPanel.java`) is a `MaterialTabGr
 3-column grid (Callers/Snipe/Spam, Clan IDs/FC/Capes, Location - 3/3/1; 4 columns was tried and
 cut every label off at sidebar width), icon+label
 centred in each cell. Every tab's icon is a **real in-game image**, not a bundled file (the plugin's
-only resource is the multi-lines data JSON - no image assets) - a UI sprite via
+only resources are two data files - `multi_lines.json` and `wilderness_locations.json` in
+`runelite-client/src/main/resources/net/runelite/client/plugins/preptools/` - no image assets; the
+installer icons in `runelite-client/jpackage/` are packaging-only) - a UI sprite via
 `SpriteManager#getSpriteAsync()` (`PrepToolsPanel#loadTabIcon()`) for six of them, but Capes uses an actual team cape **item** icon via `ItemManager`
 (`#loadTabItemIcon()`, `TeamCapeOverlay.teamCapeItemId(30)`) since the generic equipment-slot sprite
 tried first rendered as a blank placeholder, not a real cape. Every section follows the same
@@ -194,8 +198,17 @@ background/border box - tried a boxed-card look, asked to remove it while keepin
 
 ## Open questions / unverified
 
+Everything built but not yet confirmed in game / on a real machine - move an item into the relevant
+section (or delete it) once the user confirms it:
+
 - **Multi Lines' wilderness areas and extended-scene heights** - see the Multi Lines entry and the
-  `WorldLines` lesson; neither has been checked in game yet.
+  `WorldLines` lesson.
+- **The fixed `.deb` on the user's other machine** - fixed and validated locally (desktop file,
+  `apt-get install --simulate`, packaged client launched on its Java 11), but the machine where it
+  failed hasn't retried yet.
+- **Windows `.exe` and macOS `.dmg`** - never built on this machine (jpackage can't cross-compile);
+  only a Package workflow run proves them. That includes the WiX PATH fix (below), the `.ico`/`.icns`
+  icons, and jpackage 17's launcher running the bundled Java 11 runtime on those OSes.
 
 ## Build & run
 
@@ -203,7 +216,14 @@ background/border box - tried a boxed-card look, asked to remove it while keepin
 ./gradlew :client:compileJava     # compile-check only
 ./gradlew :client:shadowJar       # build runelite-client/build/libs/client-*-shaded.jar
 ./run-runelite.sh                 # launch the locally built client (2x UI scale)
+
+./gradlew :client:test            # unit tests (incl. WildernessLocationStoreTest) - run before pushing
+./gradlew :client:checkstyleMain  # style rules CI enforces
+./gradlew :buildAll               # what CI actually runs (ci/build.sh): compile, checkstyle, tests, javadoc
 ```
+
+`:buildAll` passing locally is NOT enough for Javadoc - this machine's JDK only warns where CI
+errors; see the strict Javadoc check in the lessons below.
 
 **Always ask before killing/relaunching the running dev client**, even after rebuilding the jar and
 even mid-task. Rebuilding is fine to do without asking — that's non-disruptive. Restarting the
@@ -367,26 +387,39 @@ These cost real debugging time to find. Don't rediscover them the hard way:
   `java.util.zip.ZipException: ZipFile invalid LOC header (bad signature)`, then a
   `NoClassDefFoundError`/`ClassNotFoundException` for whatever class was needed, then the client
   hangs (high sustained CPU, no further log output - a thread stuck after failing to recover).
-  Rebuilding itself is still fine to do freely without asking (per the rule below) - the risk is
+  Rebuilding is still fine to do without asking (per the rule in Build & run above) - the risk is
   specifically leaving the *old* process running across a rebuild and then continuing to interact
-  with it. If the client freezes after a rebuild, this is the first thing to check in
-  `~/.runelite/logs/client.log`.
+  with it. **Restart procedure (once the user has OK'd it): stop the client first, then
+  `shadowJar`, then launch** - never rebuild under a client you're about to keep using. Match the
+  process with a pattern that can't match your own shell (e.g. `ps -eo pid,args | grep "[j]ava -jar
+  runelite-client/build/libs"`) - a plain `pgrep -f` on the jar path also matched and killed the
+  shell running the command once. If the client freezes after a rebuild, this is the first thing to
+  check in `~/.runelite/logs/client.log`.
 - **A plain `ArrayList` read by an `Overlay#render()` (game render thread) and mutated by a sidebar
   button click (Swing EDT) will eventually throw `ConcurrentModificationException`.** Hit this with
-  `wildernessLocations`: `WildernessLocationDebugOverlay.render()` iterates it every frame while
-  it's on screen, while `saveLocationFromPanel()`/`removeWildernessLocation()`/
-  `updateWildernessLocation()` add/remove from the EDT. `OverlayRenderer.safeRender()` catches the
+  the wilderness location list: `WildernessLocationDebugOverlay.render()` iterates it every frame
+  while sidebar buttons add/remove/edit from the EDT. `OverlayRenderer.safeRender()` catches the
   exception so it doesn't crash the client, but that frame's overlay silently draws nothing - easy
-  to misread as "the button/menu action didn't do anything" rather than "it worked, the overlay just
-  skipped a frame." `CopyOnWriteArrayList` is the fix (small, rarely-mutated, read-heavy-from-
-  another-thread list - the standard case for it); a single simple reference field (`WorldPoint`,
-  not a collection) read cross-thread without synchronization is fine as-is elsewhere in this plugin
-  (e.g. `lastKnownWorldPoint`) - reference assignment is atomic, this is specifically a
-  collection-structural-mutation problem.
+  to misread as "the button didn't do anything" rather than "it worked, the overlay skipped a
+  frame." Current fix: `WildernessLocationStore` never mutates the list it hands out - every change
+  builds a new unmodifiable list and swaps a `volatile` reference, so readers always iterate a
+  stable snapshot. (`CopyOnWriteArrayList` was the first fix and works too.) A single simple
+  reference field read cross-thread without synchronization (e.g. `lastKnownWorldPoint`) is fine -
+  reference assignment is atomic; this is specifically a collection-structural-mutation problem.
 - **`ScriptID.CHAT_SEND`'s "modes" integer, all CONFIRMED in game:** public = 0 (Spammer/Pile
   Spam), clan chat = 1, friends chat = 2 (`PrepToolsPlugin`'s `CHAT_MODE_*` constants). Neither
   RuneLite's source/docs nor a web search had the literal values - they were guessed (FC/clan
   initially swapped) and fixed by testing.
+- **A `PluginPanel` with its own per-tab scroll panes must call `super(false)`.** The default
+  `PluginPanel()` constructor wraps the whole panel in an outer `JScrollPane`. Nested inside that,
+  a tab taller than the sidebar grows to full height in the OUTER pane, so its own inner pane has
+  nothing to scroll - but still swallows every mouse-wheel event over the content, so the tab only
+  scrolls by dragging the outer scrollbar (the Location tab once its list got long). `PrepToolsPanel`
+  now calls `super(false)` like `TimeTrackingPanel` (RuneLite core), doesn't override
+  `getPreferredSize()` (PluginPanel's own width already leaves room for a scrollbar), and each tab's
+  content is a `ViewportWidthPanel` (`Scrollable`: tracks the viewport width so content can't end up
+  wider than the sidebar, 16px per wheel notch instead of Swing's 1px default). **Fix CONFIRMED in
+  game.**
 - **Never expose a list the sidebar edits as a visible text `@ConfigItem` - mark it
   `hidden = true`.** RuneLite's settings panel (`ConfigPanel#createTextField`) saves a text field on
   *focus-lost* with whatever text it loaded when opened, and never refreshes on outside changes. So

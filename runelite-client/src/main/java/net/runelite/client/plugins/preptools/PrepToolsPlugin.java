@@ -208,7 +208,7 @@ public class PrepToolsPlugin extends Plugin
 
 	/**
 	 * How fast the new-target flash blinks between the flash colour and the normal target colour,
-	 * in computeHighlightColors(). Shared by both CallerTargetOverlay and CallerNameOverlay so
+	 * in computeHighlightStyles(). Shared by both CallerTargetOverlay and CallerNameOverlay so
 	 * their blinking stays in sync.
 	 */
 	private static final long TARGET_FLASH_BLINK_PERIOD_MILLIS = 200;
