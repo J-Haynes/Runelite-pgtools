@@ -131,12 +131,22 @@ client with similar team-coordination features. Core pieces:
     (orange, ↺ reverts), `hidden` shipped ids (✕ on a shipped row hides it; "Restore" un-hides).
     These survive shipped-map updates. `reconcile()` drops personal entries a new shipped map has
     made redundant (edit equal to the shipped value, addition now shipped).
-  - **Updating the shipped map:** the mapper (the user) edits in game, clicks **Export** on the
-    Location tab (clipboard + `~/.runelite/pvptools-exports/wilderness_locations-<time>.json`, which
-    doubles as a backup), and that file replaces `wilderness_locations.json` - commit, rebuild,
-    Package. The export keeps the file's header, including the OpenOSRS licence notice (required
-    by its licence, and `WildernessLocationStoreTest` fails without it). The test also checks ids
-    are unique and boxes valid, so a bad data file fails CI, not users' installs.
+  - **Updating the shipped map (confirmed with the user as the intended workflow):**
+    1. The user maps in game - every add/edit/hide is saved as a *user setting* in their own
+       profile (personal layer), NOT in the plugin. Nobody else sees it yet.
+    2. They click **Export** on the Location tab: the *whole merged list* (shipped + their
+       changes) goes to the clipboard and to `~/.runelite/pvptools-exports/wilderness_locations-<time>.json`
+       (every export doubles as a backup).
+    3. That file becomes the new bundled map:
+       `cp ~/.runelite/pvptools-exports/wilderness_locations-<time>.json runelite-client/src/main/resources/net/runelite/client/plugins/preptools/wilderness_locations.json`
+       then `./gradlew :client:test --tests 'net.runelite.client.plugins.preptools.*'`, commit, push,
+       and run the Package workflow so installers carry it.
+    4. On the user's next client start, `reconcile()` sees their personal changes are now part of
+       the shipped map and drops them - the list shows all-white (shipped) again. Nothing is lost.
+    The export keeps the file's header, including the OpenOSRS licence notice (required by its
+    licence - `WildernessLocationStoreTest` fails without it), and the test checks ids are unique
+    and boxes valid, so a bad data file fails CI, not users' installs. Always `git diff --stat`
+    the data file before committing - a sudden big drop in entries means a wrong/old export.
   - **Migration:** a profile from before this existed has one flat list under the old key
     `wildernessLocationsJson`. It's converted once: entries identical to a shipped box, to one of
     the five old starter boxes, or to an original OpenOSRS import are stock data and dropped;
