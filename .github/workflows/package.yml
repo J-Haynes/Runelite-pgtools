@@ -61,9 +61,14 @@ jobs:
         if: runner.os == 'Windows'
         shell: pwsh
         run: |
+          # Get-Item (not Get-ChildItem -Directory, which listed the folders INSIDE bin - there are
+          # none, so nothing was ever added to PATH) resolves the wildcard to the bin folder itself.
+          # Fails loudly if it's still not found, rather than letting jpackage fail later with a
+          # less obvious "WiX not found" error.
           if (-not (Get-Command candle.exe -ErrorAction SilentlyContinue)) {
             choco install wixtoolset --no-progress -y
-            $wixBin = Get-ChildItem "$env:ProgramFiles (x86)\WiX Toolset*\bin" -Directory | Select-Object -First 1
+            $wixBin = Get-Item "${env:ProgramFiles(x86)}\WiX Toolset*\bin" | Select-Object -First 1
+            if (-not $wixBin) { throw "WiX Toolset bin folder not found after install" }
             Add-Content -Path $env:GITHUB_PATH -Value $wixBin.FullName
           }
 
