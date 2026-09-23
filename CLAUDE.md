@@ -117,20 +117,40 @@ client with similar team-coordination features. Core pieces:
   every box containing a point: **highest priority, then smallest area (most specific), then list
   order** - the first one is the resolved location, the rest show in the Mapper as "Also in (lost on
   priority)". Before priorities, it was purely first-in-list, so a big box saved first swallowed
-  every smaller box inside it. Hand-mapped boxes default to P0 (spinner next to the name field when
+  every smaller box inside it. New boxes default to P0 (spinner next to the name field when
   saving; "Priority" field in the ✎ edit form); the saved list displays sorted by priority then
   name (display only - saved order is untouched, it's the last tie-break). The sidebar's own help
   text explains the same rule - keep the two in sync.
-  **Starter locations:** 59 wilderness boxes from OpenOSRS's `WorldLocation` enum (archived fork
-  `JourneyDeprecated/OpenOSRS`, Jan 2020, PK-caller slang like "13s", "19s", "44s", "Gap"), in
-  `OpenOsrsWildernessLocations.java` (its licence notice must stay verbatim at the top of that
-  file). Imported at **P-1** so the user's own boxes always win where they overlap; appended once to
-  an existing list (name clashes skipped), guarded by the raw config key
-  `openOsrsLocationsImported` so deleting one sticks. Upstream passed each box's *north* y as a
-  south-west-anchored `WorldArea` origin (its own lookups were a box-height too far north) - the
-  import uses the corners as written, which is clearly the intent. Pre-dates Ferox Enclave: entries
-  around it (e.g. "13s") are likely stale - the user prefers to delete bad ones by hand. Another
-  source not used: the game cache's world-map labels (`cache` module) - current, but points only.
+  **The location list ships with the plugin (two layers - `WildernessLocationStore`):**
+  - *Shipped:* `runelite-client/src/main/resources/net/runelite/client/plugins/preptools/wilderness_locations.json`
+    - the team's map, the same for every install (dev client and jpackage installers alike).
+    Every entry has a stable `id`. It started as the user's own mapping (141 boxes on 2026-09-24),
+    including the 53 OpenOSRS starter boxes they chose to keep (P-1).
+  - *Personal:* saved in the user's RuneLite profile under `wildernessLocationsUserLayer` - only
+    their own changes: `added` (ids `u-...`, shown green), `edits` to shipped entries keyed by id
+    (orange, ↺ reverts), `hidden` shipped ids (✕ on a shipped row hides it; "Restore" un-hides).
+    These survive shipped-map updates. `reconcile()` drops personal entries a new shipped map has
+    made redundant (edit equal to the shipped value, addition now shipped).
+  - **Updating the shipped map:** the mapper (the user) edits in game, clicks **Export** on the
+    Location tab (clipboard + `~/.runelite/pvptools-exports/wilderness_locations-<time>.json`, which
+    doubles as a backup), and that file replaces `wilderness_locations.json` - commit, rebuild,
+    Package. The export keeps the file's header, including the OpenOSRS licence notice (required
+    by its licence, and `WildernessLocationStoreTest` fails without it). The test also checks ids
+    are unique and boxes valid, so a bad data file fails CI, not users' installs.
+  - **Migration:** a profile from before this existed has one flat list under the old key
+    `wildernessLocationsJson`. It's converted once: entries identical to a shipped box, to one of
+    the five old starter boxes, or to an original OpenOSRS import are stock data and dropped;
+    anything else becomes a personal addition. The old key is left in place as a backup.
+  - **Can't silently lose data:** an unreadable personal layer is copied to
+    `wildernessLocationsUserLayerUnreadable` before anything can save over it. (The old code
+    reset to defaults and saved over the list on a parse failure.) The user also keeps manual
+    backups in `~/runelite-pvptools-backups/`.
+  - OpenOSRS source details: `OpenOsrsWildernessLocations.java` (licence notice verbatim at the top)
+    is now only used by the migration. Upstream passed each box's *north* y as a south-west-anchored
+    `WorldArea` origin, so its own lookups sat a box-height too far north - the corners as written
+    are used. Pre-dates Ferox Enclave, so entries near it may be stale; the user edits/deletes them
+    by hand. A source not used: the game cache's world-map labels (`cache` module) - current, but
+    points only.
 - **Team cape overlay** — like vanilla RuneLite's "Teams" plugin, but with a custom name per team
   number (`PrepToolsConfig#teamCapeNames`).
 - **Right-click menu integration** — prioritises/recolours Attack and freeze-spell casts (target,

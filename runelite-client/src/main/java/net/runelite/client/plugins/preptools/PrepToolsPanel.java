@@ -155,7 +155,16 @@ public class PrepToolsPanel extends PluginPanel
 	private JTextArea overlapsArea;
 	private final JPanel savedLocationsPanel = new JPanel();
 	private List<WildernessLocation> lastWildernessLocations = Collections.emptyList();
-	private WildernessLocation editingWildernessLocation;
+	// Id (not instance) of the location open in the edit form - the store hands out a fresh merged
+	// list on every change, so instance identity doesn't survive a save.
+	private String editingWildernessLocationId;
+	private int lastHiddenLocationCount;
+	private final JLabel hiddenLocationsLabel = new JLabel();
+	private final JButton restoreHiddenButton = new JButton();
+	private JTextArea exportStatusArea;
+
+	private static final Color LOCATION_EDITED_COLOR = ColorScheme.BRAND_ORANGE;
+	private static final Color LOCATION_YOURS_COLOR = new Color(80, 200, 80);
 
 	PrepToolsPanel(PrepToolsPlugin plugin, SpriteManager spriteManager, ItemManager itemManager)
 	{
@@ -1493,9 +1502,17 @@ public class PrepToolsPanel extends PluginPanel
 		JTextArea priorityHelp = createDescriptionArea(
 			"Overlapping areas: when you're inside more than one box, the one with the "
 				+ "HIGHEST priority (P) wins. On equal priority the smaller box wins (the more "
-				+ "specific place), then whichever is higher in the list. Boxes you map default "
-				+ "to P0; the imported starter locations are P-1, so yours win over them. "
+				+ "specific place), then whichever is higher in the list. New boxes default to P0; "
+				+ "the OpenOSRS starter locations are P-1, so mapped ones win over them. "
 				+ "\"Also in\" under Current lists the boxes that lost.");
+
+		JTextArea shippedHelp = createDescriptionArea(
+			"The list comes with the plugin (the team's shared map, white). Your changes sit on "
+				+ "top and are kept when the plugin updates: boxes you add (green), shipped boxes "
+				+ "you edit (orange - ↺ undoes the edit), and shipped boxes you remove (hidden - "
+				+ "Restore brings them back). Export copies the whole list to the clipboard and "
+				+ "saves it to ~/.runelite/pvptools-exports - that file is how the shipped map "
+				+ "gets updated, and doubles as a backup.");
 
 		overlapsArea = createWidthClampedTextArea("");
 		overlapsArea.setForeground(ColorScheme.LIGHT_GRAY_COLOR);
@@ -1572,7 +1589,35 @@ public class PrepToolsPanel extends PluginPanel
 		saveLocationPanel.add(saveLocationEast, BorderLayout.EAST);
 		styleInputRow(saveLocationPanel);
 
-		JLabel savedTitle = createSectionTitle("Saved Locations", 0);
+		JLabel savedTitle = createSectionTitle("Locations", 0);
+
+		JButton exportButton = createSmallButton("Export", "Copy the whole list (shipped file format) to the clipboard and save it to ~/.runelite/pvptools-exports");
+		exportButton.addActionListener(e -> exportLocations());
+
+		hiddenLocationsLabel.setFont(FontManager.getRunescapeSmallFont());
+		hiddenLocationsLabel.setForeground(ColorScheme.LIGHT_GRAY_COLOR);
+		restoreHiddenButton.setText("Restore");
+		restoreHiddenButton.setToolTipText("Bring back every shipped location you've removed");
+		restoreHiddenButton.setFont(FontManager.getRunescapeSmallFont());
+		restoreHiddenButton.setMargin(new Insets(0, 3, 0, 3));
+		restoreHiddenButton.setFocusable(false);
+		restoreHiddenButton.addActionListener(e -> plugin.restoreHiddenWildernessLocations());
+
+		JPanel hiddenPanel = new JPanel(new BorderLayout(4, 0));
+		hiddenPanel.setBackground(ColorScheme.DARK_GRAY_COLOR);
+		hiddenPanel.add(hiddenLocationsLabel, BorderLayout.CENTER);
+		hiddenPanel.add(restoreHiddenButton, BorderLayout.EAST);
+
+		JPanel locationsToolbar = new JPanel(new BorderLayout(6, 0));
+		locationsToolbar.setBackground(ColorScheme.DARK_GRAY_COLOR);
+		locationsToolbar.setAlignmentX(LEFT_ALIGNMENT);
+		locationsToolbar.setMaximumSize(new Dimension(PluginPanel.PANEL_WIDTH, Integer.MAX_VALUE));
+		locationsToolbar.add(hiddenPanel, BorderLayout.CENTER);
+		locationsToolbar.add(exportButton, BorderLayout.EAST);
+
+		exportStatusArea = createWidthClampedTextArea("");
+		exportStatusArea.setForeground(ColorScheme.LIGHT_GRAY_COLOR);
+		exportStatusArea.setVisible(false);
 
 		// BoxLayout, not GridLayout: GridLayout makes every row as tall as the tallest, so opening
 		// one row's edit form stretched every other row to match - fine with a handful of saved
@@ -1588,11 +1633,16 @@ public class PrepToolsPanel extends PluginPanel
 		section.add(Box.createVerticalStrut(TIER_GAP));
 		section.add(priorityHelp);
 		section.add(Box.createVerticalStrut(TIER_GAP));
+		section.add(shippedHelp);
+		section.add(Box.createVerticalStrut(TIER_GAP));
 		section.add(coordCard);
 		section.add(Box.createVerticalStrut(TIER_GAP));
 		section.add(saveLocationPanel);
 		section.add(Box.createVerticalStrut(TIER_GAP * 2));
 		section.add(savedTitle);
+		section.add(Box.createVerticalStrut(TIER_GAP));
+		section.add(locationsToolbar);
+		section.add(exportStatusArea);
 		section.add(Box.createVerticalStrut(TIER_GAP));
 		section.add(savedLocationsPanel);
 		return section;
@@ -1661,20 +1711,39 @@ public class PrepToolsPanel extends PluginPanel
 		return corner == null ? "(not set)" : corner.getX() + ", " + corner.getY() + ", plane " + corner.getPlane();
 	}
 
+	private void exportLocations()
+	{
+		String json = plugin.exportWildernessLocations();
+		Toolkit.getDefaultToolkit().getSystemClipboard().setContents(new StringSelection(json), null);
+		java.io.File file = plugin.saveWildernessLocationsExport(json);
+		exportStatusArea.setText("Exported " + lastWildernessLocations.size() + " locations to the clipboard"
+			+ (file != null ? " and " + file.getAbsolutePath() : " (couldn't save a file copy - see the log)")
+			+ ". To update the shipped map, replace wilderness_locations.json in the plugin with it.");
+		exportStatusArea.setVisible(true);
+		revalidate();
+		repaint();
+	}
+
 	/**
-	 * Rebuilds the "Saved Locations" list with edit/delete buttons per entry. Called at startup and
-	 * whenever a location is added/removed/edited. Caches the list so rebuildSavedLocations() (the
-	 * edit/cancel toggle) can rebuild locally without needing a round trip through the plugin.
+	 * Rebuilds the locations list with edit/delete buttons per entry. Called at startup and
+	 * whenever a location is added/removed/edited/restored. Caches the list so
+	 * rebuildSavedLocations() (the edit/cancel toggle) can rebuild locally without needing a round
+	 * trip through the plugin.
 	 */
-	void updateWildernessLocations(List<WildernessLocation> locations)
+	void updateWildernessLocations(List<WildernessLocation> locations, int hiddenCount)
 	{
 		lastWildernessLocations = locations;
+		lastHiddenLocationCount = hiddenCount;
 		rebuildSavedLocations();
 	}
 
 	private void rebuildSavedLocations()
 	{
 		savedLocationsPanel.removeAll();
+
+		hiddenLocationsLabel.setText(lastWildernessLocations.size() + " locations"
+			+ (lastHiddenLocationCount > 0 ? ", " + lastHiddenLocationCount + " hidden" : ""));
+		restoreHiddenButton.setVisible(lastHiddenLocationCount > 0);
 
 		// Shown highest priority first, then alphabetically - easier to find one among dozens than
 		// save order is. Display only: the saved list itself keeps its order (the final tie-break).
@@ -1684,7 +1753,7 @@ public class PrepToolsPanel extends PluginPanel
 
 		for (WildernessLocation location : sorted)
 		{
-			JPanel row = location == editingWildernessLocation
+			JPanel row = location.id.equals(editingWildernessLocationId)
 				? buildLocationEditRow(location)
 				: buildLocationViewRow(location);
 			row.setAlignmentX(LEFT_ALIGNMENT);
@@ -1704,11 +1773,27 @@ public class PrepToolsPanel extends PluginPanel
 		row.setBorder(BorderFactory.createEmptyBorder(1, 2, 1, 2));
 
 		JLabel nameLabel = new JLabel(location.name);
-		nameLabel.setForeground(Color.WHITE);
 		nameLabel.setFont(FontManager.getRunescapeSmallFont());
+		String originText;
+		switch (location.origin)
+		{
+			case EDITED:
+				nameLabel.setForeground(LOCATION_EDITED_COLOR);
+				originText = "shipped, edited by you";
+				break;
+			case YOURS:
+				nameLabel.setForeground(LOCATION_YOURS_COLOR);
+				originText = "added by you";
+				break;
+			case SHIPPED:
+			default:
+				nameLabel.setForeground(Color.WHITE);
+				originText = "shipped";
+				break;
+		}
 		nameLabel.setToolTipText(
 			"(" + location.minX + "," + location.minY + ") - (" + location.maxX + "," + location.maxY + "), plane "
-				+ location.plane + ", priority " + location.priority);
+				+ location.plane + ", priority " + location.priority + " - " + originText);
 
 		JLabel priorityLabel = new JLabel("P" + location.priority);
 		priorityLabel.setFont(FontManager.getRunescapeSmallFont());
@@ -1719,16 +1804,25 @@ public class PrepToolsPanel extends PluginPanel
 		JButton editButton = createSmallButton("✎", "Edit " + location.name);
 		editButton.addActionListener(e ->
 		{
-			editingWildernessLocation = location;
+			editingWildernessLocationId = location.id;
 			rebuildSavedLocations();
 		});
 
-		JButton deleteButton = createSmallButton("✕", "Remove " + location.name);
+		boolean yours = location.origin == WildernessLocation.Origin.YOURS;
+		JButton deleteButton = createSmallButton("✕", yours
+			? "Delete " + location.name
+			: "Hide " + location.name + " (shipped - Restore brings it back)");
 		deleteButton.setForeground(new Color(220, 80, 80));
-		deleteButton.addActionListener(e -> plugin.removeWildernessLocation(location));
+		deleteButton.addActionListener(e -> plugin.removeWildernessLocation(location.id));
 
-		JPanel buttons = new JPanel(new GridLayout(1, 2, 4, 0));
+		JPanel buttons = new JPanel(new GridLayout(1, 0, 4, 0));
 		buttons.setBackground(ColorScheme.DARK_GRAY_COLOR);
+		if (location.origin == WildernessLocation.Origin.EDITED)
+		{
+			JButton revertButton = createSmallButton("↺", "Undo your edit - back to the shipped " + location.name);
+			revertButton.addActionListener(e -> plugin.revertWildernessLocation(location.id));
+			buttons.add(revertButton);
+		}
 		buttons.add(editButton);
 		buttons.add(deleteButton);
 
@@ -1842,9 +1936,9 @@ public class PrepToolsPanel extends PluginPanel
 				int plane = Integer.parseInt(planeField.getText().trim());
 				int priority = Integer.parseInt(priorityField.getText().trim());
 
-				editingWildernessLocation = null;
+				editingWildernessLocationId = null;
 				plugin.clearLocationPreview();
-				plugin.updateWildernessLocation(location, newName, corner1X, corner1Y, corner2X, corner2Y, plane, priority);
+				plugin.updateWildernessLocation(location.id, newName, corner1X, corner1Y, corner2X, corner2Y, plane, priority);
 			}
 			catch (NumberFormatException ex)
 			{
@@ -1855,7 +1949,7 @@ public class PrepToolsPanel extends PluginPanel
 		JButton cancelButton = createSmallButton("Cancel", "Discard changes");
 		cancelButton.addActionListener(e ->
 		{
-			editingWildernessLocation = null;
+			editingWildernessLocationId = null;
 			plugin.clearLocationPreview();
 			rebuildSavedLocations();
 		});

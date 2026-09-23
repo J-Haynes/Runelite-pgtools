@@ -1,18 +1,23 @@
 package net.runelite.client.plugins.preptools;
 
 import com.google.gson.Gson;
-import com.google.gson.reflect.TypeToken;
 import com.google.inject.Provides;
 import java.awt.Color;
 import java.awt.Font;
 import java.awt.Graphics2D;
 import java.awt.RenderingHints;
 import java.awt.image.BufferedImage;
+import java.io.File;
+import java.io.IOException;
+import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
+import java.text.SimpleDateFormat;
 import java.util.ArrayDeque;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
 import java.util.Comparator;
+import java.util.Date;
 import java.util.Deque;
 import java.util.HashMap;
 import java.util.HashSet;
@@ -20,7 +25,6 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
-import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.ThreadLocalRandom;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
@@ -65,6 +69,7 @@ import net.runelite.api.widgets.WidgetUtil;
 import net.runelite.client.callback.ClientThread;
 import net.runelite.client.chat.ChatMessageManager;
 import net.runelite.client.chat.QueuedMessage;
+import net.runelite.client.RuneLite;
 import net.runelite.client.config.ConfigManager;
 import net.runelite.client.eventbus.Subscribe;
 import net.runelite.client.events.ConfigChanged;
@@ -122,14 +127,6 @@ public class PrepToolsPlugin extends Plugin
 	 * Unanchored + find() reads the level regardless of anything appended after it.
 	 */
 	private static final Pattern WILDERNESS_LEVEL_PATTERN = Pattern.compile("Level: (\\d+)");
-
-	private static final String WILDERNESS_LOCATIONS_CONFIG_KEY = "wildernessLocationsJson";
-
-	/**
-	 * Set once the OpenOSRS starter locations (OpenOsrsWildernessLocations) have been appended to
-	 * the saved list, so deleting one of them sticks instead of it coming back next startup.
-	 */
-	private static final String OPENOSRS_LOCATIONS_IMPORTED_CONFIG_KEY = "openOsrsLocationsImported";
 
 	/**
 	 * Hard cap on a team cape's custom name length. Enforced twice: here at parse time (so it
@@ -453,27 +450,18 @@ public class PrepToolsPlugin extends Plugin
 	private final Map<Player, TeleblockState> teleblockStates = new HashMap<>();
 
 	/**
-	 * User-built list of named wilderness areas (PrepToolsPanel's "Location Mapper" tool), used by
-	 * findLocationName() to resolve the local player's current WorldPoint to a place name. Persisted
-	 * as JSON via ConfigManager (see loadWildernessLocations()/saveWildernessLocations()) rather than
-	 * a visible multi-line ConfigItem - editing a list of rectangles as raw text isn't something
-	 * anyone wants to hand-type, so the panel's buttons are the only intended way to build it up.
-	 * Also read by WildernessLocationDebugOverlay (the Debug section's "Show/edit wilderness
-	 * locations" toggle) to draw each saved area's border in-game.
-	 *
-	 * BUG FIX: was a plain ArrayList - WildernessLocationDebugOverlay.render() iterates this on the
-	 * game's own render thread, while every mutation (saveLocationFromPanel/removeWildernessLocation/
-	 * updateWildernessLocation) happens on the Swing EDT via a sidebar button click. A render pass
-	 * landing mid-mutation threw ConcurrentModificationException (confirmed via a stack trace caught
-	 * by OverlayRenderer.safeRender() while testing the Location Mapper) - not a crash, since
-	 * safeRender() catches it, but it meant that frame's overlay silently didn't draw anything,
-	 * easily read as "the corner I just set doesn't seem to have worked." CopyOnWriteArrayList is the
-	 * standard fix for exactly this shape of problem (read-heavy from one thread, rarely mutated from
-	 * another) - the list here is always small (a handful of user-mapped areas), so copy-on-write's
-	 * mutation cost is irrelevant.
+	 * The wilderness location list - the shipped map bundled in the plugin plus this user's
+	 * personal changes on top; see WildernessLocationStore. Its merged list is replaced wholesale
+	 * on every change (never mutated), so WildernessLocationDebugOverlay can iterate it on the
+	 * render thread while a sidebar button changes it from the Swing EDT - the
+	 * ConcurrentModificationException a plain shared ArrayList once caused here can't recur.
 	 */
-	@Getter
-	private List<WildernessLocation> wildernessLocations = new CopyOnWriteArrayList<>();
+	private WildernessLocationStore locationStore;
+
+	List<WildernessLocation> getWildernessLocations()
+	{
+		return locationStore != null ? locationStore.getLocations() : Collections.emptyList();
+	}
 
 	/**
 	 * The local player's WorldPoint as of the most recent game tick - cached here (rather than read
@@ -578,7 +566,21 @@ public class PrepToolsPlugin extends Plugin
 		overlayManager.add(multiLinesOverlay);
 		multiLinesOverlay.load();
 
-		loadWildernessLocations();
+		locationStore = new WildernessLocationStore(new WildernessLocationStore.Storage()
+		{
+			@Override
+			public String get(String key)
+			{
+				return configManager.getConfiguration(PrepToolsConfig.GROUP, key);
+			}
+
+			@Override
+			public void set(String key, String value)
+			{
+				configManager.setConfiguration(PrepToolsConfig.GROUP, key, value);
+			}
+		}, gson);
+		locationStore.load();
 
 		panel = new PrepToolsPanel(this, spriteManager, itemManager);
 		navButton = NavigationButton.builder()
@@ -591,7 +593,7 @@ public class PrepToolsPlugin extends Plugin
 		panel.rebuild(parseCallerEntries(config.callers()));
 		panel.rebuildSnipeList(parseNameList(config.snipeList()));
 		panel.rebuildTeamCapeNames(parseTeamCapeNames(config.teamCapeNames()));
-		panel.updateWildernessLocations(wildernessLocations);
+		pushWildernessLocations();
 		panel.rebuildSpamMessages(parseSpamMessages(config.spamMessages()), config.selectedSpamMessage(), config.spamRandom());
 
 		clearState();
@@ -3336,7 +3338,7 @@ public class PrepToolsPlugin extends Plugin
 	}
 
 	/**
-	 * Resolves a WorldPoint to a user-named area, if it falls inside one of wildernessLocations.
+	 * Resolves a WorldPoint to a named area, if it falls inside one of getWildernessLocations().
 	 */
 	private String findLocationName(WorldPoint point)
 	{
@@ -3354,7 +3356,7 @@ public class PrepToolsPlugin extends Plugin
 	private List<WildernessLocation> findContainingLocations(WorldPoint point)
 	{
 		List<WildernessLocation> matches = new ArrayList<>();
-		for (WildernessLocation location : wildernessLocations)
+		for (WildernessLocation location : getWildernessLocations())
 		{
 			if (location.contains(point.getX(), point.getY(), point.getPlane()))
 			{
@@ -3366,93 +3368,6 @@ public class PrepToolsPlugin extends Plugin
 		matches.sort(Comparator.<WildernessLocation>comparingInt(l -> -l.priority)
 			.thenComparingLong(WildernessLocation::area));
 		return matches;
-	}
-
-	/**
-	 * Loads wildernessLocations from config (see WILDERNESS_LOCATIONS_CONFIG_KEY's doc for why this
-	 * is a raw config key rather than a visible ConfigItem), seeding a handful of default areas on
-	 * first run.
-	 */
-	private void loadWildernessLocations()
-	{
-		String json = configManager.getConfiguration(PrepToolsConfig.GROUP, WILDERNESS_LOCATIONS_CONFIG_KEY);
-		if (json == null || json.trim().isEmpty())
-		{
-			wildernessLocations = new CopyOnWriteArrayList<>(defaultWildernessLocations());
-			saveWildernessLocations();
-			return;
-		}
-
-		try
-		{
-			List<WildernessLocation> parsed = gson.fromJson(json, new TypeToken<List<WildernessLocation>>()
-			{
-			}.getType());
-			wildernessLocations = new CopyOnWriteArrayList<>(parsed != null ? parsed : new ArrayList<>());
-			importOpenOsrsLocationsOnce();
-		}
-		catch (RuntimeException e)
-		{
-			log.warn("PvP Tools: failed to parse saved wilderness locations, resetting to defaults", e);
-			wildernessLocations = new CopyOnWriteArrayList<>(defaultWildernessLocations());
-			saveWildernessLocations();
-		}
-	}
-
-	/**
-	 * One-time append of the OpenOSRS starter locations to an existing saved list (fresh installs
-	 * get them via defaultWildernessLocations() instead). Skips any name already saved, so a box
-	 * mapped by hand under the same name is never duplicated or overwritten.
-	 */
-	private void importOpenOsrsLocationsOnce()
-	{
-		if (Boolean.parseBoolean(configManager.getConfiguration(PrepToolsConfig.GROUP, OPENOSRS_LOCATIONS_IMPORTED_CONFIG_KEY)))
-		{
-			return;
-		}
-
-		Set<String> existingNames = new HashSet<>();
-		for (WildernessLocation location : wildernessLocations)
-		{
-			existingNames.add(Text.standardize(location.name));
-		}
-
-		for (WildernessLocation location : OpenOsrsWildernessLocations.locations())
-		{
-			if (existingNames.add(Text.standardize(location.name)))
-			{
-				wildernessLocations.add(location);
-			}
-		}
-
-		saveWildernessLocations();
-		configManager.setConfiguration(PrepToolsConfig.GROUP, OPENOSRS_LOCATIONS_IMPORTED_CONFIG_KEY, true);
-	}
-
-	private void saveWildernessLocations()
-	{
-		configManager.setConfiguration(PrepToolsConfig.GROUP, WILDERNESS_LOCATIONS_CONFIG_KEY, gson.toJson(wildernessLocations));
-	}
-
-	/**
-	 * A handful of rough, eyeballed-not-surveyed starter boxes - just enough for the "Location
-	 * Mapper" sidebar tool to have something to show/build on immediately, per CLAUDE.md's own
-	 * note that this feature should "start with a very simple structure" if precise wilderness
-	 * coordinate data is hard to come by. Walk to a real landmark, use Set Corner A/B + Save in the
-	 * panel, and either replace one of these or add alongside it - that hands-on process is the
-	 * actual intended way this list gets built out and verified, not these numbers.
-	 */
-	private List<WildernessLocation> defaultWildernessLocations()
-	{
-		List<WildernessLocation> defaults = new ArrayList<>();
-		defaults.add(new WildernessLocation("Ferox Enclave", 3125, 3607, 3160, 3638, 0));
-		defaults.add(new WildernessLocation("Wilderness Volcano", 3345, 3903, 3390, 3936, 0));
-		defaults.add(new WildernessLocation("Lava Maze", 3050, 3810, 3070, 3830, 0));
-		defaults.add(new WildernessLocation("Graveyard of Shadows", 3160, 3660, 3180, 3680, 0));
-		defaults.add(new WildernessLocation("Mage Arena Bank", 3090, 3940, 3110, 3960, 0));
-		defaults.addAll(OpenOsrsWildernessLocations.locations());
-		configManager.setConfiguration(PrepToolsConfig.GROUP, OPENOSRS_LOCATIONS_IMPORTED_CONFIG_KEY, true);
-		return defaults;
 	}
 
 	/**
@@ -3543,53 +3458,93 @@ public class PrepToolsPlugin extends Plugin
 		int minY = Math.min(locationCornerA.getY(), locationCornerB.getY());
 		int maxY = Math.max(locationCornerA.getY(), locationCornerB.getY());
 
-		wildernessLocations.add(new WildernessLocation(name.trim(), minX, minY, maxX, maxY, locationCornerA.getPlane(), priority));
-		saveWildernessLocations();
+		locationStore.add(name.trim(), minX, minY, maxX, maxY, locationCornerA.getPlane(), priority);
 
 		locationCornerA = null;
 		locationCornerB = null;
-		panel.updateWildernessLocations(wildernessLocations);
+		pushWildernessLocations();
 		pushLocationMapperUpdate();
 	}
 
 	/**
-	 * Called by the sidebar panel's delete button next to a saved location.
+	 * Called by the sidebar panel's delete button next to a saved location: hides a shipped
+	 * location (restorable), deletes one of the user's own.
 	 */
-	void removeWildernessLocation(WildernessLocation location)
+	void removeWildernessLocation(String id)
 	{
-		if (wildernessLocations.remove(location))
-		{
-			saveWildernessLocations();
-			panel.updateWildernessLocations(wildernessLocations);
-		}
+		locationStore.remove(id);
+		pushWildernessLocations();
 	}
 
 	/**
-	 * Called by the sidebar panel's per-row "Save" button while editing an existing saved
-	 * location. The two corners are taken exactly like saveLocationFromPanel() takes
-	 * locationCornerA/B - arbitrary points, not already-sorted min/max - and normalized into a
-	 * min/max box the same way, so editing an area behaves identically to how it was first drawn.
-	 * Mutates the existing WildernessLocation instance in place (rather than replacing it in the
-	 * list) so identity-based lookups elsewhere (e.g. the panel's edit-in-progress tracking) keep
-	 * working across the edit.
+	 * Called by the sidebar panel's per-row "Save" button while editing a saved location. The two
+	 * corners are taken exactly like saveLocationFromPanel() takes locationCornerA/B - arbitrary
+	 * points, not already-sorted min/max - and normalized into a min/max box the same way.
 	 */
-	void updateWildernessLocation(WildernessLocation location, String name, int corner1X, int corner1Y, int corner2X, int corner2Y, int plane, int priority)
+	void updateWildernessLocation(String id, String name, int corner1X, int corner1Y, int corner2X, int corner2Y, int plane, int priority)
 	{
-		if (name == null || name.trim().isEmpty() || !wildernessLocations.contains(location))
+		if (name == null || name.trim().isEmpty())
 		{
 			return;
 		}
 
-		location.name = name.trim();
-		location.minX = Math.min(corner1X, corner2X);
-		location.maxX = Math.max(corner1X, corner2X);
-		location.minY = Math.min(corner1Y, corner2Y);
-		location.maxY = Math.max(corner1Y, corner2Y);
-		location.plane = plane;
-		location.priority = priority;
+		locationStore.update(id, name.trim(), Math.min(corner1X, corner2X), Math.min(corner1Y, corner2Y),
+			Math.max(corner1X, corner2X), Math.max(corner1Y, corner2Y), plane, priority);
+		pushWildernessLocations();
+	}
 
-		saveWildernessLocations();
-		panel.updateWildernessLocations(wildernessLocations);
+	/**
+	 * Called by the sidebar's revert button on an edited shipped location.
+	 */
+	void revertWildernessLocation(String id)
+	{
+		locationStore.revert(id);
+		pushWildernessLocations();
+	}
+
+	void restoreHiddenWildernessLocations()
+	{
+		locationStore.restoreHidden();
+		pushWildernessLocations();
+	}
+
+	/**
+	 * Called by the sidebar's Export button: the full merged list in the shipped file's format,
+	 * a drop-in replacement for wilderness_locations.json.
+	 */
+	String exportWildernessLocations()
+	{
+		return locationStore.export();
+	}
+
+	/**
+	 * Saves an export as a timestamped file under ~/.runelite/pvptools-exports/ - so every export
+	 * doubles as a backup of the user's mapping. Returns the file, or null if it couldn't be written.
+	 */
+	File saveWildernessLocationsExport(String json)
+	{
+		try
+		{
+			File dir = new File(RuneLite.RUNELITE_DIR, "pvptools-exports");
+			if (!dir.isDirectory() && !dir.mkdirs())
+			{
+				return null;
+			}
+			String stamp = new SimpleDateFormat("yyyyMMdd-HHmmss").format(new Date());
+			File file = new File(dir, "wilderness_locations-" + stamp + ".json");
+			Files.write(file.toPath(), json.getBytes(StandardCharsets.UTF_8));
+			return file;
+		}
+		catch (IOException e)
+		{
+			log.warn("PvP Tools: couldn't write wilderness locations export", e);
+			return null;
+		}
+	}
+
+	private void pushWildernessLocations()
+	{
+		panel.updateWildernessLocations(locationStore.getLocations(), locationStore.getHiddenCount());
 	}
 
 	/**

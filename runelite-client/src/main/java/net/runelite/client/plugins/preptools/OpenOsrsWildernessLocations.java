@@ -13,8 +13,10 @@ import java.util.ArrayList;
 import java.util.List;
 
 /**
- * Starter wilderness locations, imported once into the Location Mapper's saved list (see
- * PrepToolsPlugin#loadWildernessLocations()). Names and coordinates are the wilderness entries of
+ * The original OpenOSRS starter wilderness locations. The 53 the team kept are now part of the
+ * shipped map (wilderness_locations.json, priority -1); this list is only used by
+ * WildernessLocationStore's one-time migration, to recognise these entries in an old saved list as
+ * stock data rather than a user's own work. Names and coordinates are the wilderness entries of
  * OpenOSRS's net.runelite.client.game.WorldLocation enum (archived fork JourneyDeprecated/OpenOSRS,
  * last changed January 2020) - its licence notice above is kept verbatim, as it requires.
  *
@@ -24,9 +26,8 @@ import java.util.List;
  * written are what's clearly intended, so that's what's used here.
  *
  * Pre-dates Ferox Enclave (2020) and every wilderness change since - expect stale entries around
- * Ferox especially (e.g. "13s", the old Clan Wars portal). All are imported at IMPORTED_PRIORITY,
- * below the default priority of anything mapped by hand, so a user's own boxes always win where
- * they overlap.
+ * Ferox especially (e.g. "13s", the old Clan Wars portal). They were imported at
+ * IMPORTED_PRIORITY, below hand-mapped boxes, so those always win where they overlap.
  */
 final class OpenOsrsWildernessLocations
 {
