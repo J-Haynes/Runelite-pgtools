@@ -21,6 +21,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.CopyOnWriteArrayList;
+import java.util.concurrent.ThreadLocalRandom;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 import javax.inject.Inject;
@@ -31,6 +32,7 @@ import net.runelite.api.ChatMessageType;
 import net.runelite.api.Client;
 import net.runelite.api.FriendsChatManager;
 import net.runelite.api.FriendsChatMember;
+import net.runelite.api.GameState;
 import net.runelite.api.GraphicID;
 import net.runelite.api.HeadIcon;
 import net.runelite.api.KeyCode;
@@ -42,11 +44,14 @@ import net.runelite.api.ScriptID;
 import net.runelite.api.Skill;
 import net.runelite.api.SpriteID;
 import net.runelite.api.Tile;
+import net.runelite.api.Varbits;
 import net.runelite.api.coords.WorldPoint;
+import net.runelite.api.events.ActorDeath;
 import net.runelite.api.events.AnimationChanged;
 import net.runelite.api.events.ClientTick;
 import net.runelite.api.events.FriendsChatMemberJoined;
 import net.runelite.api.events.FriendsChatMemberLeft;
+import net.runelite.api.events.GameStateChanged;
 import net.runelite.api.events.GameTick;
 import net.runelite.api.events.GraphicChanged;
 import net.runelite.api.events.MenuOpened;
@@ -71,6 +76,7 @@ import net.runelite.client.plugins.PluginDescriptor;
 import net.runelite.client.ui.ClientToolbar;
 import net.runelite.client.ui.NavigationButton;
 import net.runelite.client.ui.overlay.OverlayManager;
+import net.runelite.client.ui.overlay.infobox.InfoBoxManager;
 import net.runelite.client.util.ColorUtil;
 import net.runelite.client.util.HotkeyListener;
 import net.runelite.client.util.Text;
@@ -85,6 +91,7 @@ public class PrepToolsPlugin extends Plugin
 {
 	private static final String ADD_CALLER = "Add caller";
 	private static final String ADD_TO_SNIPE_LIST = "Add to snipe list";
+	private static final String DISABLED_CALLER_PREFIX = "!";
 
 	/**
 	 * Human death animations (forward/backward fall) - used to detect a friends chat member dying
@@ -105,14 +112,24 @@ public class PrepToolsPlugin extends Plugin
 	private static final int TELEBLOCK_DURATION_TICKS_PROTECTED = 250;
 
 	/**
-	 * Matches the wilderness level widget's text (e.g. "Level: 15") - same pattern
-	 * CombatLevelPlugin uses to read InterfaceID.PvpIcons.WILDERNESSLEVEL, which is the game's own
-	 * calculation rather than a coordinate-based formula this plugin would have to keep in sync
-	 * with wilderness geometry itself.
+	 * Matches the wilderness level widget's text (e.g. "Level: 15") - InterfaceID.PvpIcons.
+	 * WILDERNESSLEVEL, the game's own calculation rather than a coordinate-based formula.
+	 *
+	 * BUG FIX: was anchored ("^Level: (\\d+)$", copied from CombatLevelPlugin) and used with
+	 * matches(). But CombatLevelPlugin itself - with its "wilderness attack level range" option on,
+	 * which is the default - rewrites this very widget's text to "Level: 15<br>81-111", so the
+	 * anchored pattern never matched and Location Spam silently lost its "lvl N wild" part.
+	 * Unanchored + find() reads the level regardless of anything appended after it.
 	 */
-	private static final Pattern WILDERNESS_LEVEL_PATTERN = Pattern.compile("^Level: (\\d+)$");
+	private static final Pattern WILDERNESS_LEVEL_PATTERN = Pattern.compile("Level: (\\d+)");
 
 	private static final String WILDERNESS_LOCATIONS_CONFIG_KEY = "wildernessLocationsJson";
+
+	/**
+	 * Set once the OpenOSRS starter locations (OpenOsrsWildernessLocations) have been appended to
+	 * the saved list, so deleting one of them sticks instead of it coming back next startup.
+	 */
+	private static final String OPENOSRS_LOCATIONS_IMPORTED_CONFIG_KEY = "openOsrsLocationsImported";
 
 	/**
 	 * Hard cap on a team cape's custom name length. Enforced twice: here at parse time (so it
@@ -255,6 +272,12 @@ public class PrepToolsPlugin extends Plugin
 	private WildernessLocationDebugOverlay wildernessLocationDebugOverlay;
 
 	@Inject
+	private MultiLinesOverlay multiLinesOverlay;
+
+	@Inject
+	private InfoBoxManager infoBoxManager;
+
+	@Inject
 	private PrepToolsConfig config;
 
 	@Inject
@@ -299,6 +322,20 @@ public class PrepToolsPlugin extends Plugin
 	 */
 	@Getter
 	private final Map<Player, String> callerNicknames = new HashMap<>();
+
+	/**
+	 * Text.standardize()-d names of EVERY configured caller, enabled or disabled - refreshed every
+	 * tick in updateCallersAndTargets(). A disabled caller isn't calling right now, but they're
+	 * still on your team, so team checks (isOwnTeamMember(), pile finder, opponent counts) use this
+	 * rather than primaryCaller/backupCallers, which only hold enabled on-screen callers.
+	 */
+	private Set<String> configuredCallerStandardNames = Collections.emptySet();
+
+	/**
+	 * Standardized real name -> nickname, for every configured caller that has one (enabled or
+	 * not) - used by the Clan IDs tab to show "Name (Nickname)".
+	 */
+	private Map<String, String> configuredCallerNicknames = Collections.emptyMap();
 
 	/**
 	 * Players (any player, including the local player) currently believed to be frozen, mapped
@@ -452,6 +489,12 @@ public class PrepToolsPlugin extends Plugin
 	@Getter
 	private String currentLocationName;
 
+	/**
+	 * The locations you're also inside but which LOST to currentLocationName, in resolution order,
+	 * as "Name (P<priority>)" - Location Mapper readout only.
+	 */
+	private List<String> currentLocationOverlaps = Collections.emptyList();
+
 	@Getter
 	private Integer currentWildernessLevel;
 
@@ -494,6 +537,15 @@ public class PrepToolsPlugin extends Plugin
 		}
 	};
 
+	private final HotkeyListener spamHotkeyListener = new HotkeyListener(() -> config.spamHotkey())
+	{
+		@Override
+		public void hotkeyPressed()
+		{
+			postSpamMessageToChat();
+		}
+	};
+
 	private final HotkeyListener locationSpamHotkeyListener = new HotkeyListener(() -> config.locationSpamHotkey())
 	{
 		@Override
@@ -522,6 +574,9 @@ public class PrepToolsPlugin extends Plugin
 		overlayManager.add(wildernessLocationDebugOverlay);
 		keyManager.registerKeyListener(pileSpamHotkeyListener);
 		keyManager.registerKeyListener(locationSpamHotkeyListener);
+		keyManager.registerKeyListener(spamHotkeyListener);
+		overlayManager.add(multiLinesOverlay);
+		multiLinesOverlay.load();
 
 		loadWildernessLocations();
 
@@ -537,6 +592,7 @@ public class PrepToolsPlugin extends Plugin
 		panel.rebuildSnipeList(parseNameList(config.snipeList()));
 		panel.rebuildTeamCapeNames(parseTeamCapeNames(config.teamCapeNames()));
 		panel.updateWildernessLocations(wildernessLocations);
+		panel.rebuildSpamMessages(parseSpamMessages(config.spamMessages()), config.selectedSpamMessage(), config.spamRandom());
 
 		clearState();
 	}
@@ -554,6 +610,10 @@ public class PrepToolsPlugin extends Plugin
 		overlayManager.remove(wildernessLocationDebugOverlay);
 		keyManager.unregisterKeyListener(pileSpamHotkeyListener);
 		keyManager.unregisterKeyListener(locationSpamHotkeyListener);
+		keyManager.unregisterKeyListener(spamHotkeyListener);
+		overlayManager.remove(multiLinesOverlay);
+		multiLinesOverlay.clear();
+		removeMemberCountInfoBoxes();
 		clientToolbar.removeNavigation(navButton);
 		clearState();
 	}
@@ -581,6 +641,8 @@ public class PrepToolsPlugin extends Plugin
 		primaryCaller = null;
 		backupCallers.clear();
 		callerNicknames.clear();
+		configuredCallerStandardNames = Collections.emptySet();
+		configuredCallerNicknames = Collections.emptyMap();
 		targets.clear();
 		targetedPlayers.clear();
 		currentOpponents.clear();
@@ -608,6 +670,7 @@ public class PrepToolsPlugin extends Plugin
 		teleblockStates.clear();
 		lastKnownWorldPoint = null;
 		currentLocationName = null;
+		currentLocationOverlaps = Collections.emptyList();
 		currentWildernessLevel = null;
 		hoveredWorldPoint = null;
 		hoveredLocationName = null;
@@ -615,6 +678,8 @@ public class PrepToolsPlugin extends Plugin
 		locationCornerB = null;
 		strengthBoosted = false;
 		prayerBoosted = false;
+		lastSpamMessage = null;
+		lastSpamSentMillis = 0;
 	}
 
 	@Subscribe
@@ -630,6 +695,7 @@ public class PrepToolsPlugin extends Plugin
 		updateFreezeTimers();
 		updateTeleblockTimers();
 		updateTeamCapeCounts();
+		updateMemberCountInfoBoxes();
 		updatePlayerStatBoosts();
 		updateLocation();
 		rebuildHighlightStyles(config);
@@ -687,6 +753,29 @@ public class PrepToolsPlugin extends Plugin
 		else if ("teamCapeNames".equals(event.getKey()))
 		{
 			panel.rebuildTeamCapeNames(parseTeamCapeNames(config.teamCapeNames()));
+		}
+		else if ("spamMessages".equals(event.getKey()) || "selectedSpamMessage".equals(event.getKey())
+			|| "spamRandom".equals(event.getKey()))
+		{
+			panel.rebuildSpamMessages(parseSpamMessages(config.spamMessages()), config.selectedSpamMessage(), config.spamRandom());
+		}
+	}
+
+	/**
+	 * Multi lines are clipped to the loaded scene, so they need rebuilding whenever the scene
+	 * itself changes (login, hop, crossing a region boundary all re-post LOGGED_IN) - same trigger
+	 * NpcAggroAreaPlugin (RuneLite core) uses for its own scene-clipped lines.
+	 */
+	@Subscribe
+	public void onGameStateChanged(GameStateChanged event)
+	{
+		if (event.getGameState() == GameState.LOGGED_IN)
+		{
+			multiLinesOverlay.rebuildSceneLines();
+		}
+		else if (event.getGameState() == GameState.LOGIN_SCREEN || event.getGameState() == GameState.HOPPING)
+		{
+			removeMemberCountInfoBoxes();
 		}
 	}
 
@@ -765,6 +854,99 @@ public class PrepToolsPlugin extends Plugin
 	}
 
 	/**
+	 * Called by the sidebar's caller edit form: renames a caller and/or changes their nickname,
+	 * keeping their list position and enabled state. A blank nickname removes it. Returns false
+	 * (nothing saved) if the new name is empty or already belongs to a different caller.
+	 * Package-private since PrepToolsPanel lives in this same package.
+	 */
+	boolean editCaller(String oldRealName, String newRawName, String newRawNickname)
+	{
+		String newName = newRawName == null ? "" : newRawName.trim();
+		while (newName.startsWith(DISABLED_CALLER_PREFIX))
+		{
+			newName = newName.substring(DISABLED_CALLER_PREFIX.length()).trim();
+		}
+		// ':' and ',' are the config text's own separators - never valid in a name anyway.
+		if (newName.isEmpty() || newName.contains(":") || newName.contains(","))
+		{
+			return false;
+		}
+
+		String nickname = newRawNickname == null ? "" : newRawNickname.replace(",", " ").replace(":", " ").trim();
+
+		List<CallerEntry> entries = parseCallerEntries(config.callers());
+		String oldStandard = Text.standardize(oldRealName);
+		String newStandard = Text.standardize(newName);
+
+		int index = -1;
+		for (int i = 0; i < entries.size(); i++)
+		{
+			String standard = Text.standardize(entries.get(i).name);
+			if (standard.equals(oldStandard))
+			{
+				index = i;
+			}
+			else if (standard.equals(newStandard))
+			{
+				return false;
+			}
+		}
+
+		if (index < 0)
+		{
+			return false;
+		}
+
+		CallerEntry old = entries.get(index);
+		entries.set(index, new CallerEntry(newName, nickname.isEmpty() ? null : nickname, old.enabled));
+
+		// Keep a pin on this caller pointing at them under their new name.
+		if (pinnedCallerName != null && Text.standardize(pinnedCallerName).equals(oldStandard))
+		{
+			pinnedCallerName = newName;
+		}
+
+		configManager.setConfiguration(PrepToolsConfig.GROUP, "callers", serializeCallerEntries(entries));
+		return true;
+	}
+
+	/**
+	 * Called by the sidebar panel's per-row checkbox: keeps the caller in the list but stops them
+	 * being used as a primary/backup caller (no highlight, never primary) while unticked - they
+	 * still count as your team, see configuredCallerStandardNames. Package-private since
+	 * PrepToolsPanel lives in this same package.
+	 */
+	void setCallerEnabled(String realName, boolean enabled)
+	{
+		List<CallerEntry> entries = parseCallerEntries(config.callers());
+		String standardizedName = Text.standardize(realName);
+
+		boolean changed = false;
+		for (int i = 0; i < entries.size(); i++)
+		{
+			CallerEntry entry = entries.get(i);
+			if (Text.standardize(entry.name).equals(standardizedName) && entry.enabled != enabled)
+			{
+				entries.set(i, new CallerEntry(entry.name, entry.nickname, enabled));
+				changed = true;
+			}
+		}
+
+		if (!changed)
+		{
+			return;
+		}
+
+		// Disabling the pinned caller drops the pin, same as removing them does.
+		if (!enabled && pinnedCallerName != null && Text.standardize(pinnedCallerName).equals(standardizedName))
+		{
+			pinnedCallerName = null;
+		}
+
+		configManager.setConfiguration(PrepToolsConfig.GROUP, "callers", serializeCallerEntries(entries));
+	}
+
+	/**
 	 * Renders a list of CallerEntry back into the "Callers" config field's text format - the
 	 * inverse of parseCallerEntries(). Used by moveCaller()/removeCaller() to persist a change.
 	 */
@@ -777,6 +959,10 @@ public class PrepToolsPlugin extends Plugin
 			{
 				sb.append('\n');
 			}
+			if (!entry.enabled)
+			{
+				sb.append(DISABLED_CALLER_PREFIX);
+			}
 			sb.append(entry.name);
 			if (entry.nickname != null)
 			{
@@ -787,9 +973,9 @@ public class PrepToolsPlugin extends Plugin
 	}
 
 	/**
-	 * Whether the given player is on the local player's own team - a configured caller (primary
-	 * or backup) or a friends chat member. Used to optionally exclude own-team players from the
-	 * freeze timer overlay, since AoE freezes landing on teammates aren't useful information.
+	 * Whether the given player is on the local player's own team - a configured caller (enabled or
+	 * not) or a friends chat/clan member (see isTeamChatMember()). Used to exclude own-team players
+	 * from freeze/teleblock timers, freeze-spell menu entries, opponent counts, and pile targets.
 	 */
 	private boolean isOwnTeamMember(Player player)
 	{
@@ -798,12 +984,40 @@ public class PrepToolsPlugin extends Plugin
 			return false;
 		}
 
-		if (player == primaryCaller || backupCallers.contains(player))
+		if (isConfiguredCaller(player))
 		{
 			return true;
 		}
 
-		return getFriendsChatMemberNames().contains(Text.standardize(player.getName()));
+		return isTeamChatMember(player);
+	}
+
+	private boolean isConfiguredCaller(Player player)
+	{
+		return player != null && player.getName() != null
+			&& configuredCallerStandardNames.contains(Text.standardize(player.getName()));
+	}
+
+	/**
+	 * Whether the given player is you, or shares a friends chat OR clan chat with you. Clan counts
+	 * the same as friends chat everywhere in this plugin - teams won't always be running a friends
+	 * chat. Player#isClanMember()/isFriendsChatMember() are the same per-player flags the vanilla
+	 * Team plugin counts with; the standardized FC name set is kept as well, as it was the
+	 * original (and already proven) friends chat check here.
+	 */
+	private boolean isTeamChatMember(Player player)
+	{
+		if (player == null)
+		{
+			return false;
+		}
+
+		if (player == client.getLocalPlayer() || player.isClanMember() || player.isFriendsChatMember())
+		{
+			return true;
+		}
+
+		return player.getName() != null && getFriendsChatMemberNames().contains(Text.standardize(player.getName()));
 	}
 
 	/**
@@ -986,10 +1200,32 @@ public class PrepToolsPlugin extends Plugin
 		callerNicknames.clear();
 		targets.clear();
 
-		List<CallerEntry> entries = parseCallerEntries(config.callers());
+		List<CallerEntry> allEntries = parseCallerEntries(config.callers());
+
+		Set<String> configuredNames = new HashSet<>();
+		Map<String, String> configuredNicknames = new HashMap<>();
+		List<CallerEntry> entries = new ArrayList<>();
+		for (CallerEntry entry : allEntries)
+		{
+			String standardName = Text.standardize(entry.name);
+			configuredNames.add(standardName);
+			if (entry.nickname != null)
+			{
+				configuredNicknames.put(standardName, entry.nickname);
+			}
+
+			// Disabled callers stay in the list (and on the team) but are never primary/backup.
+			if (entry.enabled)
+			{
+				entries.add(entry);
+			}
+		}
+		configuredCallerStandardNames = configuredNames;
+		configuredCallerNicknames = configuredNicknames;
+
 		if (!entries.isEmpty())
 		{
-			// Drop a stale pin if that caller was removed from the list.
+			// Drop a stale pin if that caller was removed from the list (or disabled).
 			if (pinnedCallerName != null)
 			{
 				boolean stillConfigured = false;
@@ -1165,12 +1401,6 @@ public class PrepToolsPlugin extends Plugin
 			return;
 		}
 
-		Set<String> fcNames = getFriendsChatMemberNames();
-		if (fcNames.isEmpty())
-		{
-			return;
-		}
-
 		Map<Player, Integer> attackerCounts = new HashMap<>();
 
 		for (Player player : client.getPlayers())
@@ -1180,7 +1410,7 @@ public class PrepToolsPlugin extends Plugin
 				continue;
 			}
 
-			if (!fcNames.contains(Text.standardize(player.getName())))
+			if (!isOwnTeamMember(player))
 			{
 				continue;
 			}
@@ -1192,16 +1422,11 @@ public class PrepToolsPlugin extends Plugin
 			}
 
 			Player target = (Player) interacting;
-			String targetName = target.getName();
-			if (targetName != null && fcNames.contains(Text.standardize(targetName)))
-			{
-				// Don't count friends-chat-on-friends-chat interactions (e.g. sparring).
-				continue;
-			}
 
-			// Callers are your own team regardless of whether they happen to be in your
-			// friends chat - never count them as a pile target.
-			if (target == primaryCaller || backupCallers.contains(target))
+			// Don't count team-on-team interactions (e.g. sparring), and callers are your own
+			// team regardless of whether they happen to be in your friends chat/clan - never
+			// count any of them as a pile target.
+			if (isOwnTeamMember(target))
 			{
 				continue;
 			}
@@ -1238,8 +1463,6 @@ public class PrepToolsPlugin extends Plugin
 			return;
 		}
 
-		Set<String> fcNames = getFriendsChatMemberNames();
-
 		for (Player player : client.getPlayers())
 		{
 			if (player == null || player.getName() == null)
@@ -1247,14 +1470,8 @@ public class PrepToolsPlugin extends Plugin
 				continue;
 			}
 
-			if (fcNames.contains(Text.standardize(player.getName())))
-			{
-				continue;
-			}
-
-			// Callers are your own team regardless of whether they happen to be in your
-			// friends chat - never count them as an opponent.
-			if (player == primaryCaller || backupCallers.contains(player))
+			// Friends chat, clan, you, and every configured caller are all your own team.
+			if (isOwnTeamMember(player))
 			{
 				continue;
 			}
@@ -1428,28 +1645,32 @@ public class PrepToolsPlugin extends Plugin
 		Player local = client.getLocalPlayer();
 		if (local != null && local.getName() != null)
 		{
-			rows.add(new ClanIdRow(local.getName(), local.getId(), true,
-				onScreenCallerStandardNames.contains(Text.standardize(local.getName()))));
+			rows.add(buildClanIdRow(local, true, onScreenCallerStandardNames));
 		}
 
-		Set<String> friendsChatMemberNames = getFriendsChatMemberNames();
 		for (Player player : client.getPlayers())
 		{
-			if (player == local || player.getName() == null)
+			if (player == null || player == local || player.getName() == null)
 			{
 				continue;
 			}
 
-			String standardName = Text.standardize(player.getName());
-			if (friendsChatMemberNames.contains(standardName))
+			if (isTeamChatMember(player))
 			{
-				rows.add(new ClanIdRow(player.getName(), player.getId(), false,
-					onScreenCallerStandardNames.contains(standardName)));
+				rows.add(buildClanIdRow(player, false, onScreenCallerStandardNames));
 			}
 		}
 
 		rows.sort(Comparator.comparingInt(row -> row.id));
 		return rows;
+	}
+
+	private ClanIdRow buildClanIdRow(Player player, boolean isYou, Set<String> onScreenCallerStandardNames)
+	{
+		String standardName = Text.standardize(player.getName());
+		boolean isCaller = onScreenCallerStandardNames.contains(standardName);
+		String nickname = isCaller ? configuredCallerNicknames.get(standardName) : null;
+		return new ClanIdRow(player.getName(), nickname, player.getId(), isYou, isCaller);
 	}
 
 	/**
@@ -1577,7 +1798,13 @@ public class PrepToolsPlugin extends Plugin
 		int targetIndex = -1;
 		int pileIndex = -1;
 		int snipeIndex = -1;
+		int primaryCallerFollowIndex = -1;
+		int backupCallerFollowIndex = -1;
 		int anyEnemyAttackIndex = -1;
+		// Shift-click Walk here (onClientTick) wins while shift is held - don't hand the default
+		// slot straight back to Follow.
+		boolean prioritiseCallerFollow = config.prioritiseCallerFollow()
+			&& !(config.shiftClickWalkUnderAttackablePlayers() && client.isKeyPressed(KeyCode.KC_SHIFT));
 		boolean teammateRiskRemoved = false;
 
 		for (MenuEntry entry : menuEntries)
@@ -1597,9 +1824,40 @@ public class PrepToolsPlugin extends Plugin
 					entry.getOption(), entry.getTarget(), entry.getType(), player.getName());
 			}
 
-			if ("Attack".equalsIgnoreCase(stripped))
+			boolean isCaller = player == primaryCaller || backupCallers.contains(player);
+
+			if (isCaller && "Follow".equalsIgnoreCase(stripped))
 			{
+				// Callers get their FOLLOW option highlighted (and optionally made left-click)
+				// rather than Attack - following the caller is what the rest of the team actually
+				// wants to do with them.
 				if (highlights != null)
+				{
+					HighlightStyle style = highlights.get(player);
+					if (style != null)
+					{
+						entry.setOption(ColorUtil.wrapWithColorTag("Follow", style.color));
+					}
+				}
+
+				if (prioritiseCallerFollow)
+				{
+					if (player == primaryCaller)
+					{
+						primaryCallerFollowIndex = filtered.size();
+					}
+					else
+					{
+						backupCallerFollowIndex = filtered.size();
+					}
+				}
+
+				filtered.add(entry);
+			}
+			else if ("Attack".equalsIgnoreCase(stripped))
+			{
+				// Never colour Attack on a caller - their Follow gets the colour instead (above).
+				if (highlights != null && !isCaller)
 				{
 					HighlightStyle style = highlights.get(player);
 					if (style != null)
@@ -1689,9 +1947,14 @@ public class PrepToolsPlugin extends Plugin
 
 		int priorityIndex = resolvePriorityIndex(config.attackPriorityOrder(), targetIndex, pileIndex, snipeIndex);
 
+		// A caller's Follow is the next default after a target/pile/snipe Attack - those are an
+		// explicit "hit this player now", so they still win if stacked on the same tile. Primary
+		// caller's Follow beats a backup's if both are in the same menu.
+		int followIndex = primaryCallerFollowIndex >= 0 ? primaryCallerFollowIndex : backupCallerFollowIndex;
+
 		// Recolouring alone (the common case - no reorder/removal needed) already applied live via
 		// entry.setOption() above; only a structural change (reorder/removal) needs setMenuEntries().
-		if (priorityIndex < 0 && !teammateRiskRemoved)
+		if (priorityIndex < 0 && followIndex < 0 && !teammateRiskRemoved)
 		{
 			return;
 		}
@@ -1701,6 +1964,10 @@ public class PrepToolsPlugin extends Plugin
 		if (priorityIndex >= 0)
 		{
 			moveMenuEntryToEnd(result, priorityIndex);
+		}
+		else if (followIndex >= 0)
+		{
+			moveMenuEntryToEnd(result, followIndex);
 		}
 		else if (anyEnemyAttackIndex >= 0)
 		{
@@ -2024,7 +2291,13 @@ public class PrepToolsPlugin extends Plugin
 			return;
 		}
 
+		// A leading '!' is the stored "disabled" marker (see parseCallerEntries()) - never let a
+		// typed one sneak in as part of the name.
 		String trimmed = rawInput.trim();
+		while (trimmed.startsWith(DISABLED_CALLER_PREFIX))
+		{
+			trimmed = trimmed.substring(DISABLED_CALLER_PREFIX.length()).trim();
+		}
 		int colonIndex = trimmed.indexOf(':');
 		String name = colonIndex >= 0 ? trimmed.substring(0, colonIndex).trim() : trimmed;
 		if (name.isEmpty())
@@ -2163,9 +2436,8 @@ public class PrepToolsPlugin extends Plugin
 	// right two values for those two channels - they were initially assigned the other way around
 	// (a guess, since neither RuneLite's own source/javadoc nor a web search turned up the literal
 	// values) and swapped once real testing showed Location Spam's Friends Chat/Clan Chat option
-	// landed in the wrong channel. CHAT_MODE_PUBLIC is still an UNVERIFIED guess, following the same
-	// "small distinct int per channel" reasoning that got the other two right - flag it if Pile Spam
-	// doesn't land in public/game chat.
+	// landed in the wrong channel. CHAT_MODE_PUBLIC = 0 is CONFIRMED too (in game, via the Spammer
+	// hotkey landing in public chat) - it was a guess until then.
 	private static final int CHAT_MODE_PUBLIC = 0;
 	private static final int CHAT_MODE_FRIENDS_CHAT = 2;
 	private static final int CHAT_MODE_CLAN_CHAT = 1;
@@ -2226,6 +2498,162 @@ public class PrepToolsPlugin extends Plugin
 
 			sendChatMessage(message, CHAT_MODE_PUBLIC);
 		});
+	}
+
+	/**
+	 * OSRS's own chat input limit - longer messages get cut off by the game anyway, so the sidebar
+	 * refuses to save one rather than letting it silently truncate mid-word when sent.
+	 */
+	static final int SPAM_MESSAGE_MAX_LENGTH = 80;
+
+	/**
+	 * The last message the Spammer hotkey sent - only used so Random never picks the same message
+	 * twice in a row (with more than one saved). Session-only.
+	 */
+	private String lastSpamMessage;
+
+	/**
+	 * Minimum time between two Spammer sends - an anti-abuse limit, so holding/mashing the hotkey
+	 * can't flood public chat. Spammer only: Pile Spam and Location Spam are deliberately NOT
+	 * limited (they carry time-critical fight information).
+	 */
+	private static final long SPAM_COOLDOWN_MILLIS = 5000;
+
+	/**
+	 * When the Spammer last actually sent a message (0 = never this session). Only touched on the
+	 * client thread, inside postSpamMessageToChat().
+	 */
+	private long lastSpamSentMillis;
+
+	/**
+	 * Spammer hotkey (F10 default): sends the selected saved message - or, with Random on, a
+	 * random one - to public chat. Same send path as Pile Spam.
+	 */
+	private void postSpamMessageToChat()
+	{
+		clientThread.invoke(() ->
+		{
+			List<String> messages = parseSpamMessages(config.spamMessages());
+			if (messages.isEmpty())
+			{
+				return;
+			}
+
+			long now = System.currentTimeMillis();
+			long remainingMillis = lastSpamSentMillis + SPAM_COOLDOWN_MILLIS - now;
+			if (remainingMillis > 0)
+			{
+				// Local-only console line (never sent to chat), so a blocked press isn't mistaken
+				// for the hotkey not working.
+				chatMessageManager.queue(QueuedMessage.builder()
+					.type(ChatMessageType.CONSOLE)
+					.value(String.format("Spammer on cooldown - %.1fs left.", remainingMillis / 1000.0))
+					.build());
+				return;
+			}
+
+			String message;
+			if (config.spamRandom())
+			{
+				List<String> candidates = new ArrayList<>(messages);
+				if (candidates.size() > 1)
+				{
+					candidates.remove(lastSpamMessage);
+				}
+				message = candidates.get(ThreadLocalRandom.current().nextInt(candidates.size()));
+			}
+			else
+			{
+				String selected = config.selectedSpamMessage();
+				message = messages.contains(selected) ? selected : messages.get(0);
+			}
+
+			lastSpamMessage = message;
+			lastSpamSentMillis = now;
+			sendChatMessage(message, CHAT_MODE_PUBLIC);
+		});
+	}
+
+	/**
+	 * Splits PrepToolsConfig#spamMessages into a list - newline-separated ONLY (unlike the name
+	 * lists, a message can legitimately contain commas). Blank lines and exact duplicates dropped.
+	 */
+	private List<String> parseSpamMessages(String raw)
+	{
+		List<String> messages = new ArrayList<>();
+		if (raw == null || raw.trim().isEmpty())
+		{
+			return messages;
+		}
+
+		for (String line : raw.split("\n"))
+		{
+			String trimmed = line.trim();
+			if (!trimmed.isEmpty() && !messages.contains(trimmed))
+			{
+				messages.add(trimmed);
+			}
+		}
+		return messages;
+	}
+
+	/**
+	 * Called by the sidebar's Spam tab "Add" field. The first message ever added also becomes the
+	 * selected one, so the hotkey works straight away. Package-private since PrepToolsPanel lives
+	 * in this same package.
+	 */
+	void addSpamMessageFromPanel(String rawInput)
+	{
+		if (rawInput == null)
+		{
+			return;
+		}
+
+		String message = rawInput.replace('\n', ' ').trim();
+		if (message.isEmpty() || message.length() > SPAM_MESSAGE_MAX_LENGTH)
+		{
+			return;
+		}
+
+		List<String> messages = parseSpamMessages(config.spamMessages());
+		if (messages.contains(message))
+		{
+			return;
+		}
+
+		messages.add(message);
+		configManager.setConfiguration(PrepToolsConfig.GROUP, "spamMessages", String.join("\n", messages));
+
+		if (messages.size() == 1)
+		{
+			setSelectedSpamMessage(message);
+		}
+	}
+
+	void removeSpamMessage(String message)
+	{
+		List<String> messages = parseSpamMessages(config.spamMessages());
+		if (!messages.remove(message))
+		{
+			return;
+		}
+
+		configManager.setConfiguration(PrepToolsConfig.GROUP, "spamMessages", String.join("\n", messages));
+
+		if (message.equals(config.selectedSpamMessage()))
+		{
+			setSelectedSpamMessage(messages.isEmpty() ? "" : messages.get(0));
+		}
+	}
+
+	void setSelectedSpamMessage(String message)
+	{
+		configManager.setConfiguration(PrepToolsConfig.GROUP, "selectedSpamMessage", message == null ? "" : message);
+	}
+
+	void setSpamRandom(boolean random)
+	{
+		configManager.setConfiguration(PrepToolsConfig.GROUP, "spamRandom", random);
 	}
 
 	/**
@@ -2609,6 +3037,85 @@ public class PrepToolsPlugin extends Plugin
 		teamCapeCounts = sorted;
 	}
 
+	private MemberCountInfoBox friendsChatCountInfoBox;
+	private MemberCountInfoBox clanCountInfoBox;
+
+	/**
+	 * Nearby friends chat / clan member counts as infoboxes - same idea (and same sprites) as the
+	 * vanilla Team plugin's counters, but recounted with a plain per-tick scan like the rest of this
+	 * plugin rather than tracking spawn/despawn/join/leave deltas. Excludes yourself, like Team.
+	 * An infobox only exists while its count is above zero, also matching Team.
+	 */
+	private void updateMemberCountInfoBoxes()
+	{
+		int friendsChatCount = 0;
+		int clanCount = 0;
+		Player local = client.getLocalPlayer();
+		for (Player player : client.getPlayers())
+		{
+			if (player == null || player == local)
+			{
+				continue;
+			}
+			if (player.isFriendsChatMember())
+			{
+				friendsChatCount++;
+			}
+			if (player.isClanMember())
+			{
+				clanCount++;
+			}
+		}
+
+		friendsChatCountInfoBox = updateMemberCountInfoBox(friendsChatCountInfoBox,
+			config.showFriendsChatMemberCount() ? friendsChatCount : 0,
+			net.runelite.api.gameval.SpriteID.SideIcons.FRIENDS_CHAT, "friends chat");
+		clanCountInfoBox = updateMemberCountInfoBox(clanCountInfoBox,
+			config.showClanMemberCount() ? clanCount : 0,
+			net.runelite.api.gameval.SpriteID.SideiconsInterface.CLAN, "clan");
+	}
+
+	private MemberCountInfoBox updateMemberCountInfoBox(MemberCountInfoBox infoBox, int count, int spriteId, String label)
+	{
+		if (count <= 0)
+		{
+			if (infoBox != null)
+			{
+				infoBoxManager.removeInfoBox(infoBox);
+			}
+			return null;
+		}
+
+		if (infoBox == null)
+		{
+			BufferedImage image = spriteManager.getSprite(spriteId, 0);
+			if (image == null)
+			{
+				// Sprite not ready yet - try again next tick.
+				return null;
+			}
+			infoBox = new MemberCountInfoBox(image, this, label);
+			infoBoxManager.addInfoBox(infoBox);
+		}
+
+		infoBox.setCount(count);
+		return infoBox;
+	}
+
+	private void removeMemberCountInfoBoxes()
+	{
+		if (friendsChatCountInfoBox != null)
+		{
+			infoBoxManager.removeInfoBox(friendsChatCountInfoBox);
+			friendsChatCountInfoBox = null;
+		}
+		if (clanCountInfoBox != null)
+		{
+			infoBoxManager.removeInfoBox(clanCountInfoBox);
+			clanCountInfoBox = null;
+		}
+	}
+
 	/**
 	 * Parses PrepToolsConfig#teamCapeNames ("TeamNumber:Name" per line/comma) into a lookup map.
 	 * Malformed lines (no colon, or a non-numeric team number) are silently skipped.
@@ -2757,7 +3264,20 @@ public class PrepToolsPlugin extends Plugin
 
 		lastKnownWorldPoint = point;
 		currentWildernessLevel = readWildernessLevelWidget();
-		currentLocationName = findLocationName(point);
+		if (currentWildernessLevel == null)
+		{
+			currentWildernessLevel = computeWildernessLevelFromCoordinates(point);
+		}
+		List<WildernessLocation> matches = findContainingLocations(point);
+		currentLocationName = matches.isEmpty() ? null : matches.get(0).name;
+		// Every other box you're also standing in, in resolution order - shown in the Location
+		// Mapper so it's obvious which box won and why.
+		List<String> overlaps = new ArrayList<>();
+		for (int i = 1; i < matches.size(); i++)
+		{
+			overlaps.add(matches.get(i).name + " (P" + matches.get(i).priority + ")");
+		}
+		currentLocationOverlaps = overlaps;
 
 		// The "hovered tile" readout for the Location Mapper tool - getSelectedSceneTile() is the
 		// same client-tracked "tile under the cursor" state the game itself uses for its own
@@ -2792,23 +3312,59 @@ public class PrepToolsPlugin extends Plugin
 		}
 
 		Matcher m = WILDERNESS_LEVEL_PATTERN.matcher(text);
-		return m.matches() ? Integer.parseInt(m.group(1)) : null;
+		return m.find() ? Integer.parseInt(m.group(1)) : null;
 	}
 
 	/**
-	 * Resolves a WorldPoint to a user-named area, if it falls inside one of wildernessLocations -
-	 * first match wins, so overlapping boxes fall back to whichever was added first.
+	 * Fallback for readWildernessLevelWidget() - only used if the widget can't be read while the
+	 * game's own IN_WILDERNESS varbit says we're in the wilderness (e.g. the widget text format
+	 * changes again in a future revision). The standard formula: 8 tiles per level, starting at
+	 * y=3520 on the surface and y=9920 underground.
+	 */
+	private Integer computeWildernessLevelFromCoordinates(WorldPoint point)
+	{
+		if (client.getVarbitValue(Varbits.IN_WILDERNESS) != 1)
+		{
+			return null;
+		}
+
+		int y = point.getY();
+		int baseY = y >= 9920 ? 9920 : 3520;
+		int level = (y - baseY) / 8 + 1;
+		return level >= 1 ? level : null;
+	}
+
+	/**
+	 * Resolves a WorldPoint to a user-named area, if it falls inside one of wildernessLocations.
 	 */
 	private String findLocationName(WorldPoint point)
 	{
+		List<WildernessLocation> matches = findContainingLocations(point);
+		return matches.isEmpty() ? null : matches.get(0).name;
+	}
+
+	/**
+	 * Every saved location containing the point, best match first - this order IS the priority
+	 * rule: highest priority wins; on a tie, the smallest box (the most specific place - e.g. a
+	 * building inside a wider area); on a tie again, earliest in the list. Before priorities
+	 * existed it was purely "earliest in the list", so a big box saved first silently swallowed
+	 * every smaller box inside it.
+	 */
+	private List<WildernessLocation> findContainingLocations(WorldPoint point)
+	{
+		List<WildernessLocation> matches = new ArrayList<>();
 		for (WildernessLocation location : wildernessLocations)
 		{
 			if (location.contains(point.getX(), point.getY(), point.getPlane()))
 			{
-				return location.name;
+				matches.add(location);
 			}
 		}
-		return null;
+
+		// List.sort is stable, so equal priority + equal area keeps list order.
+		matches.sort(Comparator.<WildernessLocation>comparingInt(l -> -l.priority)
+			.thenComparingLong(WildernessLocation::area));
+		return matches;
 	}
 
 	/**
@@ -2832,6 +3388,7 @@ public class PrepToolsPlugin extends Plugin
 			{
 			}.getType());
 			wildernessLocations = new CopyOnWriteArrayList<>(parsed != null ? parsed : new ArrayList<>());
+			importOpenOsrsLocationsOnce();
 		}
 		catch (RuntimeException e)
 		{
@@ -2839,6 +3396,36 @@ public class PrepToolsPlugin extends Plugin
 			wildernessLocations = new CopyOnWriteArrayList<>(defaultWildernessLocations());
 			saveWildernessLocations();
 		}
+	}
+
+	/**
+	 * One-time append of the OpenOSRS starter locations to an existing saved list (fresh installs
+	 * get them via defaultWildernessLocations() instead). Skips any name already saved, so a box
+	 * mapped by hand under the same name is never duplicated or overwritten.
+	 */
+	private void importOpenOsrsLocationsOnce()
+	{
+		if (Boolean.parseBoolean(configManager.getConfiguration(PrepToolsConfig.GROUP, OPENOSRS_LOCATIONS_IMPORTED_CONFIG_KEY)))
+		{
+			return;
+		}
+
+		Set<String> existingNames = new HashSet<>();
+		for (WildernessLocation location : wildernessLocations)
+		{
+			existingNames.add(Text.standardize(location.name));
+		}
+
+		for (WildernessLocation location : OpenOsrsWildernessLocations.locations())
+		{
+			if (existingNames.add(Text.standardize(location.name)))
+			{
+				wildernessLocations.add(location);
+			}
+		}
+
+		saveWildernessLocations();
+		configManager.setConfiguration(PrepToolsConfig.GROUP, OPENOSRS_LOCATIONS_IMPORTED_CONFIG_KEY, true);
 	}
 
 	private void saveWildernessLocations()
@@ -2862,6 +3449,8 @@ public class PrepToolsPlugin extends Plugin
 		defaults.add(new WildernessLocation("Lava Maze", 3050, 3810, 3070, 3830, 0));
 		defaults.add(new WildernessLocation("Graveyard of Shadows", 3160, 3660, 3180, 3680, 0));
 		defaults.add(new WildernessLocation("Mage Arena Bank", 3090, 3940, 3110, 3960, 0));
+		defaults.addAll(OpenOsrsWildernessLocations.locations());
+		configManager.setConfiguration(PrepToolsConfig.GROUP, OPENOSRS_LOCATIONS_IMPORTED_CONFIG_KEY, true);
 		return defaults;
 	}
 
@@ -2905,7 +3494,7 @@ public class PrepToolsPlugin extends Plugin
 	private void pushLocationMapperUpdate()
 	{
 		panel.updateLocationMapper(lastKnownWorldPoint, currentWildernessLevel, currentLocationName,
-			hoveredWorldPoint, hoveredLocationName, locationCornerA, locationCornerB);
+			currentLocationOverlaps, hoveredWorldPoint, hoveredLocationName, locationCornerA, locationCornerB);
 	}
 
 	/**
@@ -2932,7 +3521,7 @@ public class PrepToolsPlugin extends Plugin
 	 * been typed in. Normalizes the two corners into a min/max box regardless of which corner was
 	 * set first/which direction they're offset from each other.
 	 */
-	void saveLocationFromPanel(String name)
+	void saveLocationFromPanel(String name, int priority)
 	{
 		if (name == null || name.trim().isEmpty() || locationCornerA == null || locationCornerB == null)
 		{
@@ -2953,7 +3542,7 @@ public class PrepToolsPlugin extends Plugin
 		int minY = Math.min(locationCornerA.getY(), locationCornerB.getY());
 		int maxY = Math.max(locationCornerA.getY(), locationCornerB.getY());
 
-		wildernessLocations.add(new WildernessLocation(name.trim(), minX, minY, maxX, maxY, locationCornerA.getPlane()));
+		wildernessLocations.add(new WildernessLocation(name.trim(), minX, minY, maxX, maxY, locationCornerA.getPlane(), priority));
 		saveWildernessLocations();
 
 		locationCornerA = null;
@@ -2983,7 +3572,7 @@ public class PrepToolsPlugin extends Plugin
 	 * list) so identity-based lookups elsewhere (e.g. the panel's edit-in-progress tracking) keep
 	 * working across the edit.
 	 */
-	void updateWildernessLocation(WildernessLocation location, String name, int corner1X, int corner1Y, int corner2X, int corner2Y, int plane)
+	void updateWildernessLocation(WildernessLocation location, String name, int corner1X, int corner1Y, int corner2X, int corner2Y, int plane, int priority)
 	{
 		if (name == null || name.trim().isEmpty() || !wildernessLocations.contains(location))
 		{
@@ -2996,6 +3585,7 @@ public class PrepToolsPlugin extends Plugin
 		location.minY = Math.min(corner1Y, corner2Y);
 		location.maxY = Math.max(corner1Y, corner2Y);
 		location.plane = plane;
+		location.priority = priority;
 
 		saveWildernessLocations();
 		panel.updateWildernessLocations(wildernessLocations);
@@ -3091,11 +3681,6 @@ public class PrepToolsPlugin extends Plugin
 	@Subscribe
 	public void onAnimationChanged(AnimationChanged event)
 	{
-		if (!config.enableFriendsChatLog())
-		{
-			return;
-		}
-
 		Actor actor = event.getActor();
 		if (!(actor instanceof Player) || !PLAYER_DEATH_ANIMATION_IDS.contains(actor.getAnimation()))
 		{
@@ -3103,6 +3688,13 @@ public class PrepToolsPlugin extends Plugin
 		}
 
 		Player player = (Player) actor;
+		clearTimersOnDeath(player);
+
+		if (!config.enableFriendsChatLog())
+		{
+			return;
+		}
+
 		if (player.getName() == null || !getFriendsChatMemberNames().contains(Text.standardize(player.getName())))
 		{
 			return;
@@ -3112,12 +3704,36 @@ public class PrepToolsPlugin extends Plugin
 	}
 
 	/**
+	 * Dying ends both a freeze and a teleblock in game, so drop their icons/countdowns immediately
+	 * rather than leaving them counting down over a respawned (or despawned) player. ActorDeath is
+	 * the primary signal; the death-animation check in onAnimationChanged() is a second, independent
+	 * one - clearing twice is harmless.
+	 */
+	@Subscribe
+	public void onActorDeath(ActorDeath event)
+	{
+		if (event.getActor() instanceof Player)
+		{
+			clearTimersOnDeath((Player) event.getActor());
+		}
+	}
+
+	private void clearTimersOnDeath(Player player)
+	{
+		freezeStates.remove(player);
+		freezeLastKnownLocation.remove(player);
+		teleblockStates.remove(player);
+	}
+
+	/**
 	 * Splits the "Callers" config text into an ordered list of entries, parsing the optional
 	 * ':Nickname' suffix on each line.
 	 *
 	 * Accepted formats per entry (comma or newline separated):
 	 *   Name              - plain caller, no nickname
 	 *   Name:Nickname     - display "Nickname" instead of the real name
+	 *   !Name[:Nickname]  - disabled: kept in the list (and on your team), but never primary/backup
+	 *                       and never highlighted - toggled from the sidebar's per-row checkbox
 	 *
 	 * Note: which caller is PRIMARY is no longer set via this text field at all - it's chosen
 	 * from the sidebar panel (PrepToolsPanel).
@@ -3140,6 +3756,14 @@ public class PrepToolsPlugin extends Plugin
 
 			String name;
 			String nickname = null;
+			boolean enabled = true;
+
+			// OSRS names can't contain '!', so it's safe as a marker.
+			if (trimmed.startsWith(DISABLED_CALLER_PREFIX))
+			{
+				enabled = false;
+				trimmed = trimmed.substring(DISABLED_CALLER_PREFIX.length()).trim();
+			}
 
 			int colonIndex = trimmed.indexOf(':');
 			if (colonIndex >= 0)
@@ -3158,7 +3782,7 @@ public class PrepToolsPlugin extends Plugin
 
 			if (!name.isEmpty())
 			{
-				entries.add(new CallerEntry(name, nickname));
+				entries.add(new CallerEntry(name, nickname, enabled));
 			}
 		}
 
@@ -3172,11 +3796,13 @@ public class PrepToolsPlugin extends Plugin
 	{
 		final String name;
 		final String nickname;
+		final boolean enabled;
 
-		CallerEntry(String name, String nickname)
+		CallerEntry(String name, String nickname, boolean enabled)
 		{
 			this.name = name;
 			this.nickname = nickname;
+			this.enabled = enabled;
 		}
 	}
 }

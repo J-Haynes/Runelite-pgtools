@@ -24,16 +24,21 @@ public interface PrepToolsConfig extends Config
 	)
 	String callersSection = "callersSection";
 
+	// hidden = true on every list the sidebar panel edits (callers, snipe list, team cape names,
+	// spam messages). RuneLite's settings panel saves a text field on focus-lost with whatever text
+	// it loaded when it was opened, and never refreshes when the value changes elsewhere - so
+	// switching sidebar -> settings -> sidebar silently wrote the stale text back over any
+	// sidebar edits made in between (reported as "switching between the sidebar and settings can
+	// destroy the caller list"). The sidebar is the only editor for these now.
 	@ConfigItem(
 		keyName = "callers",
 		name = "Callers",
-		description = "<html>Names to watch, comma or newline separated. List order<br>"
-			+ "sets fallback priority - see the sidebar panel for full<br>"
-			+ "details and to switch who's primary.<br><br>"
-			+ "Add :Nickname after a name to display that instead of<br>"
-			+ "their real name, e.g. 'Xx_Bob_xX:Bob'.</html>",
+		description = "<html>Names to watch, one per line, edited from the sidebar panel.<br>"
+			+ "Format per line: 'Name', 'Name:Nickname', and a leading '!'<br>"
+			+ "marks a caller as disabled (kept in the list, but ignored).</html>",
 		position = 1,
-		section = "callersSection"
+		section = "callersSection",
+		hidden = true
 	)
 	default String callers()
 	{
@@ -95,12 +100,28 @@ public interface PrepToolsConfig extends Config
 		name = "Colour menu options",
 		description = "<html>Recolours the 'Attack' right-click menu option, and any<br>"
 			+ "freeze spell casting option (Snare, Ice Barrage, etc.), to<br>"
-			+ "match a highlighted player's colour - caller, target, pile<br>"
-			+ "finder hit, or backup caller.</html>",
+			+ "match a highlighted player's colour - target, pile finder<br>"
+			+ "hit, or snipe. Callers get their 'Follow' option coloured<br>"
+			+ "instead (see below).</html>",
 		position = 6,
 		section = "callersSection"
 	)
 	default boolean colourAttackOption()
+	{
+		return true;
+	}
+
+	@ConfigItem(
+		keyName = "prioritiseCallerFollow",
+		name = "Prioritise Follow on callers",
+		description = "<html>Makes 'Follow' the left-click option on a caller (primary<br>"
+			+ "or backup) and colours it with their caller colour, instead<br>"
+			+ "of colouring 'Attack'. A target/pile/snipe Attack on the<br>"
+			+ "same tile still wins.</html>",
+		position = 7,
+		section = "callersSection"
+	)
+	default boolean prioritiseCallerFollow()
 	{
 		return true;
 	}
@@ -122,7 +143,8 @@ public interface PrepToolsConfig extends Config
 			+ "Shift-right-click a player in game and choose 'Add to snipe<br>"
 			+ "list' to add them without typing here.</html>",
 		position = 1,
-		section = "snipeListSection"
+		section = "snipeListSection",
+		hidden = true
 	)
 	default String snipeList()
 	{
@@ -364,10 +386,10 @@ public interface PrepToolsConfig extends Config
 	@ConfigItem(
 		keyName = "enableTargetedPlayerDetection",
 		name = "Enable pile finder",
-		description = "<html>Highlights a player if enough of your friends chat<br>"
-			+ "members are interacting with them at once - useful for<br>"
-			+ "spotting a pile even if nobody explicitly called it.<br>"
-			+ "Requires being in a friends chat.</html>",
+		description = "<html>Highlights a player if enough of your team (friends chat<br>"
+			+ "or clan members, plus you) are interacting with them at<br>"
+			+ "once - useful for spotting a pile even if nobody explicitly<br>"
+			+ "called it.</html>",
 		position = 1,
 		section = "targetedPlayerSection"
 	)
@@ -379,7 +401,7 @@ public interface PrepToolsConfig extends Config
 	@ConfigItem(
 		keyName = "targetedPlayerThreshold",
 		name = "Pile threshold",
-		description = "Minimum friends chat members interacting with the same player.",
+		description = "Minimum team members (friends chat/clan, plus you) interacting with the same player.",
 		position = 2,
 		section = "targetedPlayerSection"
 	)
@@ -544,7 +566,7 @@ public interface PrepToolsConfig extends Config
 	@ConfigItem(
 		keyName = "showOpponentPrayers",
 		name = "Show opponent prayers",
-		description = "Shows aggregate overhead prayer counts for every player on screen who is NOT in your friends chat.",
+		description = "Shows aggregate overhead prayer counts for every player on screen who is NOT on your team (friends chat, clan, or a caller).",
 		position = 10,
 		section = "fightInfoSection"
 	)
@@ -556,7 +578,7 @@ public interface PrepToolsConfig extends Config
 	@ConfigItem(
 		keyName = "showOpponentWeapons",
 		name = "Show opponent weapons",
-		description = "Shows aggregate weapon counts for every player on screen who is NOT in your friends chat.",
+		description = "Shows aggregate weapon counts for every player on screen who is NOT on your team (friends chat, clan, or a caller).",
 		position = 11,
 		section = "fightInfoSection"
 	)
@@ -727,7 +749,8 @@ public interface PrepToolsConfig extends Config
 			+ "manage from the sidebar panel's Team Capes editor, which<br>"
 			+ "enforces that limit as you type.</html>",
 		position = 2,
-		section = "teamCapeSection"
+		section = "teamCapeSection",
+		hidden = true
 	)
 	default String teamCapeNames()
 	{
@@ -744,6 +767,34 @@ public interface PrepToolsConfig extends Config
 	default int minimumTeamCapeCount()
 	{
 		return 2;
+	}
+
+	@ConfigItem(
+		keyName = "showFriendsChatMemberCount",
+		name = "Friends chat count",
+		description = "<html>Infobox counting friends chat members near you (in your<br>"
+			+ "loaded game view, not counting yourself) - same as the<br>"
+			+ "vanilla Team plugin's counter.</html>",
+		position = 4,
+		section = "teamCapeSection"
+	)
+	default boolean showFriendsChatMemberCount()
+	{
+		return true;
+	}
+
+	@ConfigItem(
+		keyName = "showClanMemberCount",
+		name = "Clan count",
+		description = "<html>Infobox counting clan members near you (in your loaded<br>"
+			+ "game view, not counting yourself) - same as the vanilla Team<br>"
+			+ "plugin's counter.</html>",
+		position = 5,
+		section = "teamCapeSection"
+	)
+	default boolean showClanMemberCount()
+	{
+		return true;
 	}
 
 	// --- Friends Chat Log section ---
@@ -868,12 +919,205 @@ public interface PrepToolsConfig extends Config
 		return ChatSpamChannel.FRIENDS_CHAT;
 	}
 
+	// --- Spammer section ---
+
+	@ConfigSection(
+		name = "Spammer",
+		description = "<html>A hotkey that sends one of your saved messages to public<br>"
+			+ "chat. Messages are added/selected from the sidebar's Spam tab.</html>",
+		position = 12,
+		closedByDefault = true
+	)
+	String spammerSection = "spammerSection";
+
+	@ConfigItem(
+		keyName = "spamHotkey",
+		name = "Hotkey",
+		description = "Pressing this sends the selected (or a random) saved message to public chat - at most once every 5 seconds.",
+		position = 1,
+		section = "spammerSection"
+	)
+	default Keybind spamHotkey()
+	{
+		return new Keybind(KeyEvent.VK_F10, 0);
+	}
+
+	@ConfigItem(
+		keyName = "spamRandom",
+		name = "Random message",
+		description = "<html>Send a random saved message each press (never the same one<br>"
+			+ "twice in a row) instead of the selected one. Also toggleable<br>"
+			+ "from the sidebar's Spam tab.</html>",
+		position = 2,
+		section = "spammerSection"
+	)
+	default boolean spamRandom()
+	{
+		return false;
+	}
+
+	@ConfigItem(
+		keyName = "spamMessages",
+		name = "Messages",
+		description = "Saved spam messages, one per line - edited from the sidebar's Spam tab.",
+		position = 3,
+		section = "spammerSection",
+		hidden = true
+	)
+	default String spamMessages()
+	{
+		return "";
+	}
+
+	@ConfigItem(
+		keyName = "selectedSpamMessage",
+		name = "Selected message",
+		description = "The saved message the hotkey sends when Random is off - chosen from the sidebar.",
+		position = 4,
+		section = "spammerSection",
+		hidden = true
+	)
+	default String selectedSpamMessage()
+	{
+		return "";
+	}
+
+	// --- Multi Lines section ---
+
+	@ConfigSection(
+		name = "Multi Lines",
+		description = "<html>Draws the borders of multi-combat areas, and the level 20/30<br>"
+			+ "lines, on the ground.</html>",
+		position = 13,
+		closedByDefault = true
+	)
+	String multiLinesSection = "multiLinesSection";
+
+	@ConfigItem(
+		keyName = "showMultiLines",
+		name = "Show multi lines",
+		description = "<html>Outlines every wilderness multi-combat area around you, out<br>"
+			+ "to the GPU plugin's draw distance (data from the Wilderness<br>"
+			+ "Lines plugin). See below to show them outside the wilderness<br>"
+			+ "too.</html>",
+		position = 1,
+		section = "multiLinesSection"
+	)
+	default boolean showMultiLines()
+	{
+		return true;
+	}
+
+	@Alpha
+	@ConfigItem(
+		keyName = "multiLinesColor",
+		name = "Multi lines colour",
+		description = "Colour of the lines bordering multi-combat areas.",
+		position = 2,
+		section = "multiLinesSection"
+	)
+	default Color multiLinesColor()
+	{
+		return Color.RED;
+	}
+
+	@ConfigItem(
+		keyName = "showSpearLines",
+		name = "Show spear lines",
+		description = "<html>Also outline the area you could be dragon-speared (knocked<br>"
+			+ "back) from into a multi-combat area.</html>",
+		position = 3,
+		section = "multiLinesSection"
+	)
+	default boolean showSpearLines()
+	{
+		return false;
+	}
+
+	@Alpha
+	@ConfigItem(
+		keyName = "spearLinesColor",
+		name = "Spear lines colour",
+		description = "Colour of the lines bordering the spear range around multi-combat areas.",
+		position = 4,
+		section = "multiLinesSection"
+	)
+	default Color spearLinesColor()
+	{
+		return Color.ORANGE;
+	}
+
+	@ConfigItem(
+		keyName = "showMultiLinesOutsideWilderness",
+		name = "Show outside the wilderness",
+		description = "<html>Also draw multi (and spear) lines for multi-combat areas<br>"
+			+ "outside the wilderness - data from the Multi-Lines plugin.</html>",
+		position = 5,
+		section = "multiLinesSection"
+	)
+	default boolean showMultiLinesOutsideWilderness()
+	{
+		return false;
+	}
+
+	@ConfigItem(
+		keyName = "showTwentyLine",
+		name = "Show 20 line",
+		description = "<html>Line between wilderness levels 20 and 21 - most teleports<br>"
+			+ "stop working above it. Also drawn in the rev and slayer caves.</html>",
+		position = 6,
+		section = "multiLinesSection"
+	)
+	default boolean showTwentyLine()
+	{
+		return true;
+	}
+
+	@Alpha
+	@ConfigItem(
+		keyName = "twentyLineColor",
+		name = "20 line colour",
+		description = "Colour of the level 20 line.",
+		position = 7,
+		section = "multiLinesSection"
+	)
+	default Color twentyLineColor()
+	{
+		return Color.GREEN;
+	}
+
+	@ConfigItem(
+		keyName = "showThirtyLine",
+		name = "Show 30 line",
+		description = "<html>Line between wilderness levels 30 and 31 - no teleports<br>"
+			+ "work above it. Also drawn in the rev and slayer caves.</html>",
+		position = 8,
+		section = "multiLinesSection"
+	)
+	default boolean showThirtyLine()
+	{
+		return true;
+	}
+
+	@Alpha
+	@ConfigItem(
+		keyName = "thirtyLineColor",
+		name = "30 line colour",
+		description = "Colour of the level 30 line.",
+		position = 9,
+		section = "multiLinesSection"
+	)
+	default Color thirtyLineColor()
+	{
+		return Color.CYAN;
+	}
+
 	// --- Teleblock Timers section ---
 
 	@ConfigSection(
 		name = "Teleblock Timers",
 		description = "Countdown shown when a player - including you - gets tele-blocked.",
-		position = 13,
+		position = 15,
 		closedByDefault = true
 	)
 	String teleblockSection = "teleblockSection";
@@ -920,7 +1164,7 @@ public interface PrepToolsConfig extends Config
 	@ConfigItem(
 		keyName = "hideTeleblockTimersForOwnTeam",
 		name = "Hide for own team",
-		description = "Don't show teleblock timers for your own team - your configured callers and anyone in your friends chat.",
+		description = "Don't show teleblock timers for your own team - your configured callers and anyone in your friends chat or clan.",
 		position = 4,
 		section = "teleblockSection"
 	)
@@ -934,7 +1178,7 @@ public interface PrepToolsConfig extends Config
 	@ConfigSection(
 		name = "Debug",
 		description = "Diagnostic logging - only needed if something isn't working.",
-		position = 14,
+		position = 16,
 		closedByDefault = true
 	)
 	String debugSection = "debugSection";
@@ -976,7 +1220,7 @@ public interface PrepToolsConfig extends Config
 	@ConfigSection(
 		name = "Freeze Timers",
 		description = "Countdown shown when a player - including you - gets frozen.",
-		position = 12,
+		position = 14,
 		closedByDefault = true
 	)
 	String freezeSection = "freezeSection";
@@ -1041,7 +1285,7 @@ public interface PrepToolsConfig extends Config
 		keyName = "hideFreezeTimersForOwnTeam",
 		name = "Hide for own team",
 		description = "<html>Don't show freeze timers for your own team - your configured<br>"
-			+ "callers and anyone in your friends chat - so AoE freezes<br>"
+			+ "callers and anyone in your friends chat or clan - so AoE freezes<br>"
 			+ "landing on teammates don't clutter the screen.</html>",
 		position = 5,
 		section = "freezeSection"
@@ -1056,7 +1300,7 @@ public interface PrepToolsConfig extends Config
 		name = "Prevent freezing teammates",
 		description = "<html>Removes Bind/Snare/Entangle/Ice spell casting options<br>"
 			+ "from the right-click menu when the target is your own<br>"
-			+ "team - a configured caller or a friends chat member - so<br>"
+			+ "team - a configured caller, friends chat or clan member - so<br>"
 			+ "a freezer can't accidentally freeze or immunise a<br>"
 			+ "teammate mid-fight.</html>",
 		position = 6,

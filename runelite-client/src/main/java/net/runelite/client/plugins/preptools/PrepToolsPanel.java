@@ -2,16 +2,20 @@ package net.runelite.client.plugins.preptools;
 
 import java.awt.BorderLayout;
 import java.awt.Color;
+import java.awt.Component;
 import java.awt.Dimension;
 import java.awt.GridLayout;
 import java.awt.Image;
 import java.awt.Insets;
 import java.awt.Toolkit;
 import java.awt.datatransfer.StringSelection;
+import java.awt.event.ComponentAdapter;
+import java.awt.event.ComponentEvent;
 import java.awt.event.KeyAdapter;
 import java.awt.event.KeyEvent;
 import java.util.ArrayList;
 import java.util.Collections;
+import java.util.Comparator;
 import java.util.Deque;
 import java.util.HashMap;
 import java.util.List;
@@ -22,6 +26,7 @@ import javax.swing.BorderFactory;
 import javax.swing.Box;
 import javax.swing.BoxLayout;
 import javax.swing.ButtonGroup;
+import javax.swing.JCheckBox;
 import javax.swing.ImageIcon;
 import javax.swing.JButton;
 import javax.swing.JLabel;
@@ -89,6 +94,15 @@ public class PrepToolsPanel extends PluginPanel
 
 	private final JPanel listPanel = new JPanel();
 	private final JTextField addCallerField = new JTextField();
+
+	// Caller edit form - a separate panel under the list (not an in-row form like the Location
+	// tab's), since listPanel is a GridLayout and one taller row would stretch every row to match.
+	private final JPanel callerEditPanel = new JPanel();
+	private final JLabel callerEditTitle = new JLabel();
+	private final JTextField callerEditNameField = new JTextField();
+	private final JTextField callerEditNicknameField = new JTextField();
+	// Real name of the caller being edited, or null when the form is hidden.
+	private String editingCallerName;
 	// Not final: assigned inside buildCallersSection(), called from the constructor - Java's
 	// definite-assignment checker can't trace a final field's assignment through a delegated method
 	// call, only direct constructor code, even though each is still only ever assigned once here.
@@ -109,6 +123,14 @@ public class PrepToolsPanel extends PluginPanel
 	private final JTextField addSnipeField = new JTextField();
 	private final Map<String, JLabel> snipeStatusLabelsByKey = new HashMap<>();
 
+	// --- Spam ---
+	private final JPanel spamListPanel = new JPanel();
+	private final JTextField addSpamField = new JTextField();
+	private final JCheckBox spamRandomCheckBox = new JCheckBox("Random message each press");
+	private ButtonGroup spamButtonGroup = new ButtonGroup();
+	// Same programmatic-change guard as updatingProgrammatically, for the spam radios/checkbox.
+	private boolean updatingSpamProgrammatically;
+
 	// --- Clan IDs ---
 	private final JPanel clanIdsListPanel = new JPanel();
 
@@ -128,6 +150,9 @@ public class PrepToolsPanel extends PluginPanel
 	private final JLabel cornerALabel = new JLabel();
 	private final JLabel cornerBLabel = new JLabel();
 	private final JTextField newLocationNameField = new JTextField();
+	private final JSpinner newLocationPrioritySpinner = new JSpinner(new SpinnerNumberModel(0, -99, 99, 1));
+	// Not final: built by createWidthClampedTextArea() inside buildLocationMapperSection().
+	private JTextArea overlapsArea;
 	private final JPanel savedLocationsPanel = new JPanel();
 	private List<WildernessLocation> lastWildernessLocations = Collections.emptyList();
 	private WildernessLocation editingWildernessLocation;
@@ -143,6 +168,7 @@ public class PrepToolsPanel extends PluginPanel
 
 		MaterialTab callersTab = new MaterialTab("Callers", tabGroup, wrapTabContent(buildCallersSection()));
 		MaterialTab snipeTab = new MaterialTab("Snipe", tabGroup, wrapTabContent(buildSnipeListSection()));
+		MaterialTab spamTab = new MaterialTab("Spam", tabGroup, wrapTabContent(buildSpamSection()));
 		MaterialTab clanIdsTab = new MaterialTab("Clan IDs", tabGroup, wrapTabContent(buildClanIdsSection()));
 		MaterialTab fcLogTab = new MaterialTab("FC", tabGroup, wrapTabContent(buildFriendsChatLogSection()));
 		MaterialTab capesTab = new MaterialTab("Capes", tabGroup, wrapTabContent(buildTeamCapeNamesSection()));
@@ -151,7 +177,7 @@ public class PrepToolsPanel extends PluginPanel
 		// Centre icon+text within each tab's own grid cell (not just the icon relative to the text -
 		// see loadTabIcon()/loadTabItemIcon() for that part) - applied up front, before the icon even
 		// loads, so nothing shifts once it does.
-		for (MaterialTab tab : new MaterialTab[] {callersTab, snipeTab, clanIdsTab, fcLogTab, capesTab, locationTab})
+		for (MaterialTab tab : new MaterialTab[] {callersTab, snipeTab, spamTab, clanIdsTab, fcLogTab, capesTab, locationTab})
 		{
 			tab.setHorizontalAlignment(SwingConstants.CENTER);
 			tab.setVerticalAlignment(SwingConstants.CENTER);
@@ -166,15 +192,20 @@ public class PrepToolsPanel extends PluginPanel
 		// draws), so that one tab goes through ItemManager instead (loadTabItemIcon()).
 		loadTabIcon(callersTab, SpriteID.TAB_FRIENDS);
 		loadTabIcon(snipeTab, SpriteID.PLAYER_KILLER_SKULL);
+		loadTabIcon(spamTab, SpriteID.OPTIONS_CHAT);
 		loadTabIcon(clanIdsTab, SpriteID.TAB_STATS);
 		loadTabIcon(fcLogTab, SpriteID.TAB_FRIENDS_CHAT);
 		loadTabItemIcon(capesTab, TeamCapeOverlay.teamCapeItemId(30));
 		loadTabIcon(locationTab, SpriteID.MINIMAP_ORB_WORLD_MAP_PLANET);
 
-		tabGroup.setLayout(new GridLayout(2, 3, 4, 4));
+		// 3 columns, as many rows as needed (3/3/1 for seven tabs). Tried 4 columns when the Spam tab
+		// made it seven - at sidebar width that cut every label off ("Loc...", "Cla..."), so wider
+		// cells with an uneven last row it is.
+		tabGroup.setLayout(new GridLayout(0, 3, 4, 4));
 		tabGroup.setBorder(new EmptyBorder(8, 8, 6, 8));
 		tabGroup.addTab(callersTab);
 		tabGroup.addTab(snipeTab);
+		tabGroup.addTab(spamTab);
 		tabGroup.addTab(clanIdsTab);
 		tabGroup.addTab(fcLogTab);
 		tabGroup.addTab(capesTab);
@@ -188,6 +219,7 @@ public class PrepToolsPanel extends PluginPanel
 
 		rebuild(new ArrayList<>());
 		rebuildSnipeList(new ArrayList<>());
+		rebuildSpamMessages(new ArrayList<>(), "", false);
 		rebuildTeamCapeNames(new HashMap<>());
 	}
 
@@ -270,6 +302,10 @@ public class PrepToolsPanel extends PluginPanel
 				+ "to remove someone.\n\n"
 				+ "Add a nickname with \":Nickname\" after a name, e.g. "
 				+ "Xx_Bob_xX:Bob - works in the Add field below the list too.\n\n"
+				+ "Untick the box next to a caller to keep them in the list "
+				+ "but stop using them (no highlight, never primary) - tick it "
+				+ "again to bring them back.\n\n"
+				+ "✎ edits a caller's name or nickname.\n\n"
 				+ "To switch primary right now, just click a name below.");
 
 		listPanel.setLayout(new GridLayout(0, 1, 0, 6));
@@ -297,8 +333,123 @@ public class PrepToolsPanel extends PluginPanel
 		section.add(Box.createVerticalStrut(TIER_GAP));
 		section.add(listPanel);
 		section.add(Box.createVerticalStrut(TIER_GAP));
+		section.add(buildCallerEditPanel());
 		section.add(addCallerPanel);
 		return section;
+	}
+
+	private JPanel buildCallerEditPanel()
+	{
+		callerEditPanel.setLayout(new BoxLayout(callerEditPanel, BoxLayout.Y_AXIS));
+		callerEditPanel.setBackground(ColorScheme.DARKER_GRAY_COLOR);
+		callerEditPanel.setBorder(BorderFactory.createCompoundBorder(
+			BorderFactory.createLineBorder(ColorScheme.MEDIUM_GRAY_COLOR),
+			BorderFactory.createEmptyBorder(4, 4, 4, 4)));
+		callerEditPanel.setAlignmentX(LEFT_ALIGNMENT);
+		callerEditPanel.setMaximumSize(new Dimension(PluginPanel.PANEL_WIDTH, Integer.MAX_VALUE));
+
+		callerEditTitle.setForeground(Color.WHITE);
+		callerEditTitle.setFont(FontManager.getRunescapeBoldFont());
+		callerEditTitle.setAlignmentX(LEFT_ALIGNMENT);
+
+		callerEditNameField.setFont(FontManager.getRunescapeSmallFont());
+		callerEditNameField.setToolTipText("In-game name");
+		callerEditNameField.addActionListener(e -> saveCallerEdit());
+		callerEditNicknameField.setFont(FontManager.getRunescapeSmallFont());
+		callerEditNicknameField.setToolTipText("Nickname shown instead of their name - leave blank for none");
+		callerEditNicknameField.addActionListener(e -> saveCallerEdit());
+
+		JPanel fields = new JPanel(new GridLayout(2, 1, 0, 2));
+		fields.setBackground(ColorScheme.DARKER_GRAY_COLOR);
+		fields.setAlignmentX(LEFT_ALIGNMENT);
+		fields.setMaximumSize(new Dimension(PluginPanel.PANEL_WIDTH, Integer.MAX_VALUE));
+		fields.add(buildLabeledField("Name", callerEditNameField));
+		fields.add(buildLabeledField("Nickname", callerEditNicknameField));
+
+		JButton saveButton = createSmallButton("Save", "Save changes to this caller");
+		saveButton.addActionListener(e -> saveCallerEdit());
+		JButton cancelButton = createSmallButton("Cancel", "Discard changes");
+		cancelButton.addActionListener(e -> closeCallerEdit());
+
+		JPanel buttonsRow = new JPanel(new GridLayout(1, 2, 6, 0));
+		buttonsRow.setBackground(ColorScheme.DARKER_GRAY_COLOR);
+		buttonsRow.setAlignmentX(LEFT_ALIGNMENT);
+		buttonsRow.setMaximumSize(new Dimension(PluginPanel.PANEL_WIDTH, Integer.MAX_VALUE));
+		buttonsRow.setBorder(new EmptyBorder(4, 0, 0, 0));
+		buttonsRow.add(saveButton);
+		buttonsRow.add(cancelButton);
+
+		callerEditPanel.add(callerEditTitle);
+		callerEditPanel.add(Box.createVerticalStrut(4));
+		callerEditPanel.add(fields);
+		callerEditPanel.add(buttonsRow);
+		callerEditPanel.setVisible(false);
+
+		// Wrapper so the gap below the form disappears along with it while hidden.
+		JPanel wrapper = new JPanel();
+		wrapper.setLayout(new BoxLayout(wrapper, BoxLayout.Y_AXIS));
+		wrapper.setBackground(ColorScheme.DARK_GRAY_COLOR);
+		wrapper.setAlignmentX(LEFT_ALIGNMENT);
+		wrapper.setMaximumSize(new Dimension(PluginPanel.PANEL_WIDTH, Integer.MAX_VALUE));
+		wrapper.add(callerEditPanel);
+		Component gap = Box.createVerticalStrut(TIER_GAP);
+		wrapper.add(gap);
+		callerEditPanel.addComponentListener(new ComponentAdapter()
+		{
+			@Override
+			public void componentShown(ComponentEvent e)
+			{
+				gap.setVisible(true);
+			}
+
+			@Override
+			public void componentHidden(ComponentEvent e)
+			{
+				gap.setVisible(false);
+			}
+		});
+		gap.setVisible(false);
+		return wrapper;
+	}
+
+	private void openCallerEdit(String realName, String nickname)
+	{
+		editingCallerName = realName;
+		callerEditTitle.setText("Edit " + realName);
+		callerEditNameField.setText(realName);
+		callerEditNicknameField.setText(nickname == null ? "" : nickname);
+		callerEditPanel.setVisible(true);
+		callerEditNameField.requestFocusInWindow();
+		revalidate();
+		repaint();
+	}
+
+	private void closeCallerEdit()
+	{
+		editingCallerName = null;
+		callerEditPanel.setVisible(false);
+		revalidate();
+		repaint();
+	}
+
+	private void saveCallerEdit()
+	{
+		if (editingCallerName == null)
+		{
+			return;
+		}
+
+		String newName = callerEditNameField.getText();
+		if (newName == null || newName.trim().isEmpty())
+		{
+			return;
+		}
+
+		// Plugin rejects a rename onto another caller's name - leave the form open in that case.
+		if (plugin.editCaller(editingCallerName, newName.trim(), callerEditNicknameField.getText()))
+		{
+			closeCallerEdit();
+		}
 	}
 
 	/**
@@ -449,6 +600,7 @@ public class PrepToolsPanel extends PluginPanel
 		listPanel.removeAll();
 		radiosByKey.clear();
 		statusLabelsByKey.clear();
+		enabledByKey.clear();
 		buttonGroup = new ButtonGroup();
 
 		for (int i = 0; i < entries.size(); i++)
@@ -457,14 +609,22 @@ public class PrepToolsPanel extends PluginPanel
 			String label = entry.nickname != null
 				? entry.nickname + " (" + entry.name + ")"
 				: entry.name;
-			addRow(Text.standardize(entry.name), label, entry.name, i == 0, i == entries.size() - 1);
+			addRow(Text.standardize(entry.name), label, entry.name, entry.nickname, entry.enabled, i == 0, i == entries.size() - 1);
+		}
+
+		// The caller being edited was removed (or renamed) from somewhere else - close the form.
+		if (editingCallerName != null && entries.stream().noneMatch(e -> e.name.equals(editingCallerName)))
+		{
+			closeCallerEdit();
 		}
 
 		revalidate();
 		repaint();
 	}
 
-	private void addRow(String key, String label, String realName, boolean isFirst, boolean isLast)
+	private final Map<String, Boolean> enabledByKey = new HashMap<>();
+
+	private void addRow(String key, String label, String realName, String nickname, boolean enabled, boolean isFirst, boolean isLast)
 	{
 		JPanel row = new JPanel(new BorderLayout(6, 0));
 		row.setBackground(ColorScheme.DARK_GRAY_COLOR);
@@ -475,6 +635,11 @@ public class PrepToolsPanel extends PluginPanel
 		radio.setForeground(Color.WHITE);
 		radio.setFont(FontManager.getRunescapeFont());
 		radio.setToolTipText(realName);
+		radio.setEnabled(enabled);
+		if (!enabled)
+		{
+			radio.setForeground(Color.GRAY);
+		}
 		radio.addActionListener(e ->
 		{
 			if (updatingProgrammatically)
@@ -486,6 +651,22 @@ public class PrepToolsPanel extends PluginPanel
 
 		buttonGroup.add(radio);
 		radiosByKey.put(key, radio);
+		enabledByKey.put(key, enabled);
+
+		JCheckBox enabledBox = new JCheckBox();
+		enabledBox.setSelected(enabled);
+		enabledBox.setBackground(row.getBackground());
+		enabledBox.setFocusable(false);
+		enabledBox.setToolTipText(enabled
+			? "Enabled - untick to keep " + realName + " in the list without using them as a caller"
+			: "Disabled - tick to use " + realName + " as a caller again");
+		enabledBox.addActionListener(e -> plugin.setCallerEnabled(realName, enabledBox.isSelected()));
+
+		JPanel westPanel = new JPanel();
+		westPanel.setLayout(new BoxLayout(westPanel, BoxLayout.X_AXIS));
+		westPanel.setBackground(row.getBackground());
+		westPanel.add(createReorderButtons(realName, isFirst, isLast));
+		westPanel.add(enabledBox);
 
 		JLabel status = new JLabel();
 		status.setFont(FontManager.getRunescapeSmallFont());
@@ -496,9 +677,13 @@ public class PrepToolsPanel extends PluginPanel
 		eastPanel.setBackground(row.getBackground());
 		eastPanel.add(status);
 		eastPanel.add(Box.createHorizontalStrut(4));
+		JButton editButton = createSmallButton("✎", "Edit " + realName + "'s name/nickname");
+		editButton.addActionListener(e -> openCallerEdit(realName, nickname));
+		eastPanel.add(editButton);
+		eastPanel.add(Box.createHorizontalStrut(2));
 		eastPanel.add(createDeleteButton(realName, plugin::removeCaller));
 
-		row.add(createReorderButtons(realName, isFirst, isLast), BorderLayout.WEST);
+		row.add(westPanel, BorderLayout.WEST);
 		row.add(radio, BorderLayout.CENTER);
 		row.add(eastPanel, BorderLayout.EAST);
 		listPanel.add(row);
@@ -599,7 +784,12 @@ public class PrepToolsPanel extends PluginPanel
 
 				boolean onScreen = onScreenStandardNames.contains(key);
 
-				if (selected)
+				if (!enabledByKey.getOrDefault(key, true))
+				{
+					status.setForeground(Color.GRAY);
+					status.setText("disabled");
+				}
+				else if (selected)
 				{
 					status.setForeground(Color.RED);
 					status.setText("PRIMARY");
@@ -790,6 +980,159 @@ public class PrepToolsPanel extends PluginPanel
 	}
 
 	// ============================================================================================
+	// Spam - saved public-chat messages for the Spammer hotkey (PrepToolsConfig#spamHotkey, F10 by
+	// default). Same row idiom as the caller list: click a message to select it (what the hotkey
+	// sends), ✕ to delete, or tick Random to send a random one each press instead.
+	// ============================================================================================
+
+	private JPanel buildSpamSection()
+	{
+		JPanel section = new JPanel();
+		section.setLayout(new BoxLayout(section, BoxLayout.Y_AXIS));
+		section.setBackground(ColorScheme.DARK_GRAY_COLOR);
+		section.setAlignmentX(LEFT_ALIGNMENT);
+		section.setMaximumSize(new Dimension(PluginPanel.PANEL_WIDTH, Integer.MAX_VALUE));
+
+		JLabel title = createSectionTitle("Spammer", 0);
+
+		JTextArea instructions = createDescriptionArea(
+			"Press the Spammer hotkey (F10 by default - change it in the plugin's "
+				+ "Spammer settings) to send the selected message to public chat.\n\n"
+				+ "Click a message to select it, ✕ to remove it, or tick Random to "
+				+ "send a random one each press instead. Max "
+				+ PrepToolsPlugin.SPAM_MESSAGE_MAX_LENGTH + " characters, and at most one "
+				+ "message every 5 seconds.");
+
+		spamRandomCheckBox.setBackground(ColorScheme.DARK_GRAY_COLOR);
+		spamRandomCheckBox.setForeground(Color.WHITE);
+		spamRandomCheckBox.setFont(FontManager.getRunescapeSmallFont());
+		spamRandomCheckBox.setFocusable(false);
+		spamRandomCheckBox.setAlignmentX(LEFT_ALIGNMENT);
+		spamRandomCheckBox.addActionListener(e ->
+		{
+			if (!updatingSpamProgrammatically)
+			{
+				plugin.setSpamRandom(spamRandomCheckBox.isSelected());
+			}
+		});
+
+		spamListPanel.setLayout(new GridLayout(0, 1, 0, 6));
+		spamListPanel.setBackground(ColorScheme.DARK_GRAY_COLOR);
+		spamListPanel.setAlignmentX(LEFT_ALIGNMENT);
+		spamListPanel.setMaximumSize(new Dimension(PluginPanel.PANEL_WIDTH, Integer.MAX_VALUE));
+
+		addSpamField.setToolTipText("Message to save, max " + PrepToolsPlugin.SPAM_MESSAGE_MAX_LENGTH + " characters");
+		addSpamField.setFont(FontManager.getRunescapeSmallFont());
+		limitTextFieldLength(addSpamField, PrepToolsPlugin.SPAM_MESSAGE_MAX_LENGTH);
+		addSpamField.addActionListener(e -> addSpamFromField());
+
+		JButton addSpamButton = createSmallButton("+ Add", "Save this message");
+		addSpamButton.addActionListener(e -> addSpamFromField());
+
+		JPanel addSpamPanel = new JPanel(new BorderLayout(4, 0));
+		addSpamPanel.setAlignmentX(LEFT_ALIGNMENT);
+		addSpamPanel.setMaximumSize(new Dimension(PluginPanel.PANEL_WIDTH, Integer.MAX_VALUE));
+		addSpamPanel.add(addSpamField, BorderLayout.CENTER);
+		addSpamPanel.add(addSpamButton, BorderLayout.EAST);
+		styleInputRow(addSpamPanel);
+
+		section.add(title);
+		section.add(Box.createVerticalStrut(TIER_GAP));
+		section.add(instructions);
+		section.add(Box.createVerticalStrut(TIER_GAP));
+		section.add(spamRandomCheckBox);
+		section.add(Box.createVerticalStrut(TIER_GAP));
+		section.add(spamListPanel);
+		section.add(Box.createVerticalStrut(TIER_GAP));
+		section.add(addSpamPanel);
+		return section;
+	}
+
+	private void addSpamFromField()
+	{
+		String text = addSpamField.getText();
+		if (text == null || text.trim().isEmpty())
+		{
+			return;
+		}
+
+		plugin.addSpamMessageFromPanel(text.trim());
+		addSpamField.setText("");
+	}
+
+	/**
+	 * Rebuilds the saved spam message rows. Called at startup and whenever the saved messages, the
+	 * selected message, or the Random setting change.
+	 */
+	void rebuildSpamMessages(List<String> messages, String selectedMessage, boolean random)
+	{
+		updatingSpamProgrammatically = true;
+		try
+		{
+			spamRandomCheckBox.setSelected(random);
+			spamListPanel.removeAll();
+			spamButtonGroup = new ButtonGroup();
+
+			if (messages.isEmpty())
+			{
+				JLabel empty = new JLabel("(no saved messages)");
+				empty.setForeground(ColorScheme.LIGHT_GRAY_COLOR);
+				empty.setFont(FontManager.getRunescapeSmallFont());
+				spamListPanel.add(empty);
+			}
+
+			// Same fallback the hotkey itself uses: first message if the saved selection is gone.
+			String effectiveSelection = messages.contains(selectedMessage) ? selectedMessage
+				: (messages.isEmpty() ? null : messages.get(0));
+
+			for (String message : messages)
+			{
+				addSpamRow(message, message.equals(effectiveSelection), random);
+			}
+		}
+		finally
+		{
+			updatingSpamProgrammatically = false;
+		}
+
+		revalidate();
+		repaint();
+	}
+
+	private static final int SPAM_ROW_DISPLAY_LENGTH = 22;
+
+	private void addSpamRow(String message, boolean selected, boolean random)
+	{
+		JPanel row = new JPanel(new BorderLayout(6, 0));
+		row.setBackground(ColorScheme.DARK_GRAY_COLOR);
+		row.setBorder(BorderFactory.createEmptyBorder(2, 2, 2, 2));
+
+		// Display text is shortened (full text in the tooltip) - a JRadioButton doesn't wrap or
+		// truncate itself, so a long message would push the delete button off the sidebar.
+		String display = message.length() > SPAM_ROW_DISPLAY_LENGTH
+			? message.substring(0, SPAM_ROW_DISPLAY_LENGTH - 1) + "…"
+			: message;
+		JRadioButton radio = new JRadioButton(display);
+		radio.setBackground(row.getBackground());
+		radio.setForeground(random ? Color.LIGHT_GRAY : Color.WHITE);
+		radio.setFont(FontManager.getRunescapeFont());
+		radio.setToolTipText(random ? message + " (Random is on - selection is ignored)" : message);
+		radio.setSelected(selected);
+		radio.addActionListener(e ->
+		{
+			if (!updatingSpamProgrammatically)
+			{
+				plugin.setSelectedSpamMessage(message);
+			}
+		});
+		spamButtonGroup.add(radio);
+
+		row.add(radio, BorderLayout.CENTER);
+		row.add(createDeleteButton(message, plugin::removeSpamMessage), BorderLayout.EAST);
+		spamListPanel.add(row);
+	}
+
+	// ============================================================================================
 	// Clan IDs - see MENU_ORDER_PID_INVESTIGATION.md at the repo root for what a player's id is and
 	// why the min/max of a stack matter for right-click menu Attack-option exposure. Clan/FC members
 	// only (not enemies) - confirmed with the user that OSRS's own friendly-fire protection means an
@@ -811,7 +1154,7 @@ public class PrepToolsPanel extends PluginPanel
 		JLabel title = createSectionTitle("Clan IDs", 0);
 
 		JTextArea instructions = createDescriptionArea(
-			"You + friends chat members currently on screen, sorted by id. "
+			"You + friends chat and clan members currently on screen, sorted by id. "
 				+ "The lowest and highest id in the list are both flagged - whichever one ends up "
 				+ "the literal top menu entry depends on whether the person clicking is standing in "
 				+ "your stack or not, so both stay flagged rather than picking one. "
@@ -843,7 +1186,7 @@ public class PrepToolsPanel extends PluginPanel
 
 		if (rows.isEmpty())
 		{
-			JLabel empty = new JLabel("(no friends chat members on screen)");
+			JLabel empty = new JLabel("(no friends chat/clan members on screen)");
 			empty.setForeground(ColorScheme.LIGHT_GRAY_COLOR);
 			empty.setFont(FontManager.getRunescapeSmallFont());
 			clanIdsListPanel.add(empty);
@@ -875,7 +1218,11 @@ public class PrepToolsPanel extends PluginPanel
 				BorderFactory.createEmptyBorder(2, 4, 2, 2))
 			: BorderFactory.createEmptyBorder(2, 6, 2, 2));
 
-		String displayName = row.isYou ? row.name + " (you)" : row.name;
+		String displayName = row.nickname != null ? row.name + " (" + row.nickname + ")" : row.name;
+		if (row.isYou)
+		{
+			displayName += " (you)";
+		}
 		JLabel nameLabel = new JLabel(displayName);
 		nameLabel.setFont(row.isCaller ? FontManager.getRunescapeBoldFont() : FontManager.getRunescapeFont());
 		nameLabel.setForeground(row.isCaller ? CALLER_HIGHLIGHT_COLOR : Color.WHITE);
@@ -1141,7 +1488,18 @@ public class PrepToolsPanel extends PluginPanel
 			"Walk to a landmark, click Set Corner A, walk to the opposite "
 				+ "corner of the area, click Set Corner B, name it, then Save. "
 				+ "The saved box is used to detect and spam your location. "
-				+ "Click ✎ on a saved area below to edit its name or coordinates directly.");
+				+ "Click ✎ on a saved area below to edit its name, coordinates or priority.");
+
+		JTextArea priorityHelp = createDescriptionArea(
+			"Overlapping areas: when you're inside more than one box, the one with the "
+				+ "HIGHEST priority (P) wins. On equal priority the smaller box wins (the more "
+				+ "specific place), then whichever is higher in the list. Boxes you map default "
+				+ "to P0; the imported starter locations are P-1, so yours win over them. "
+				+ "\"Also in\" under Current lists the boxes that lost.");
+
+		overlapsArea = createWidthClampedTextArea("");
+		overlapsArea.setForeground(ColorScheme.LIGHT_GRAY_COLOR);
+		overlapsArea.setVisible(false);
 
 		currentCoordLabel.setForeground(Color.WHITE);
 		currentCoordLabel.setFont(FontManager.getRunescapeSmallFont());
@@ -1185,6 +1543,7 @@ public class PrepToolsPanel extends PluginPanel
 		coordCard.setAlignmentX(LEFT_ALIGNMENT);
 		coordCard.setMaximumSize(new Dimension(PluginPanel.PANEL_WIDTH, Integer.MAX_VALUE));
 		coordCard.add(currentCoordLabel);
+		coordCard.add(overlapsArea);
 		coordCard.add(hoveredCoordLabel);
 		coordCard.add(cornerALabel);
 		coordCard.add(cornerBLabel);
@@ -1198,16 +1557,27 @@ public class PrepToolsPanel extends PluginPanel
 		JButton saveLocationButton = createSmallButton("Save", "Save this named area (both corners must be set)");
 		saveLocationButton.addActionListener(e -> saveLocationFromField());
 
+		newLocationPrioritySpinner.setFont(FontManager.getRunescapeSmallFont());
+		newLocationPrioritySpinner.setToolTipText("Priority - higher wins where boxes overlap (default 0)");
+		((JSpinner.DefaultEditor) newLocationPrioritySpinner.getEditor()).getTextField().setColumns(2);
+
+		JPanel saveLocationEast = new JPanel(new BorderLayout(4, 0));
+		saveLocationEast.add(newLocationPrioritySpinner, BorderLayout.WEST);
+		saveLocationEast.add(saveLocationButton, BorderLayout.EAST);
+
 		JPanel saveLocationPanel = new JPanel(new BorderLayout(4, 0));
 		saveLocationPanel.setAlignmentX(LEFT_ALIGNMENT);
 		saveLocationPanel.setMaximumSize(new Dimension(PluginPanel.PANEL_WIDTH, Integer.MAX_VALUE));
 		saveLocationPanel.add(newLocationNameField, BorderLayout.CENTER);
-		saveLocationPanel.add(saveLocationButton, BorderLayout.EAST);
+		saveLocationPanel.add(saveLocationEast, BorderLayout.EAST);
 		styleInputRow(saveLocationPanel);
 
 		JLabel savedTitle = createSectionTitle("Saved Locations", 0);
 
-		savedLocationsPanel.setLayout(new GridLayout(0, 1, 0, 4));
+		// BoxLayout, not GridLayout: GridLayout makes every row as tall as the tallest, so opening
+		// one row's edit form stretched every other row to match - fine with a handful of saved
+		// areas, unusable with the ~80 the imported starter list brings.
+		savedLocationsPanel.setLayout(new BoxLayout(savedLocationsPanel, BoxLayout.Y_AXIS));
 		savedLocationsPanel.setBackground(ColorScheme.DARK_GRAY_COLOR);
 		savedLocationsPanel.setAlignmentX(LEFT_ALIGNMENT);
 		savedLocationsPanel.setMaximumSize(new Dimension(PluginPanel.PANEL_WIDTH, Integer.MAX_VALUE));
@@ -1215,6 +1585,8 @@ public class PrepToolsPanel extends PluginPanel
 		section.add(title);
 		section.add(Box.createVerticalStrut(TIER_GAP));
 		section.add(instructions);
+		section.add(Box.createVerticalStrut(TIER_GAP));
+		section.add(priorityHelp);
 		section.add(Box.createVerticalStrut(TIER_GAP));
 		section.add(coordCard);
 		section.add(Box.createVerticalStrut(TIER_GAP));
@@ -1234,7 +1606,7 @@ public class PrepToolsPanel extends PluginPanel
 			return;
 		}
 
-		plugin.saveLocationFromPanel(text.trim());
+		plugin.saveLocationFromPanel(text.trim(), (Integer) newLocationPrioritySpinner.getValue());
 		newLocationNameField.setText("");
 	}
 
@@ -1243,9 +1615,16 @@ public class PrepToolsPanel extends PluginPanel
 	 * labels - safe to call every tick.
 	 */
 	void updateLocationMapper(WorldPoint current, Integer wildernessLevel, String matchedName,
-		WorldPoint hovered, String hoveredName, WorldPoint cornerA, WorldPoint cornerB)
+		List<String> overlaps, WorldPoint hovered, String hoveredName, WorldPoint cornerA, WorldPoint cornerB)
 	{
 		currentCoordLabel.setText("Current: " + formatCoord(current, wildernessLevel, matchedName));
+		String overlapsText = overlaps.isEmpty() ? "" : "Also in (lost on priority): " + String.join(", ", overlaps);
+		if (!overlapsText.equals(overlapsArea.getText()))
+		{
+			overlapsArea.setText(overlapsText);
+			overlapsArea.setVisible(!overlaps.isEmpty());
+			revalidate();
+		}
 		hoveredCoordLabel.setText("Hovered: " + formatCoord(hovered, null, hoveredName));
 		cornerALabel.setText("Corner A: " + formatCorner(cornerA));
 		cornerBLabel.setText("Corner B: " + formatCorner(cornerB));
@@ -1297,11 +1676,21 @@ public class PrepToolsPanel extends PluginPanel
 	{
 		savedLocationsPanel.removeAll();
 
-		for (WildernessLocation location : lastWildernessLocations)
+		// Shown highest priority first, then alphabetically - easier to find one among dozens than
+		// save order is. Display only: the saved list itself keeps its order (the final tie-break).
+		List<WildernessLocation> sorted = new ArrayList<>(lastWildernessLocations);
+		sorted.sort(Comparator.<WildernessLocation>comparingInt(l -> -l.priority)
+			.thenComparing(l -> l.name, String.CASE_INSENSITIVE_ORDER));
+
+		for (WildernessLocation location : sorted)
 		{
-			savedLocationsPanel.add(location == editingWildernessLocation
+			JPanel row = location == editingWildernessLocation
 				? buildLocationEditRow(location)
-				: buildLocationViewRow(location));
+				: buildLocationViewRow(location);
+			row.setAlignmentX(LEFT_ALIGNMENT);
+			row.setMaximumSize(new Dimension(PluginPanel.PANEL_WIDTH, row.getPreferredSize().height));
+			savedLocationsPanel.add(row);
+			savedLocationsPanel.add(Box.createVerticalStrut(4));
 		}
 
 		revalidate();
@@ -1318,7 +1707,14 @@ public class PrepToolsPanel extends PluginPanel
 		nameLabel.setForeground(Color.WHITE);
 		nameLabel.setFont(FontManager.getRunescapeSmallFont());
 		nameLabel.setToolTipText(
-			"(" + location.minX + "," + location.minY + ") - (" + location.maxX + "," + location.maxY + "), plane " + location.plane);
+			"(" + location.minX + "," + location.minY + ") - (" + location.maxX + "," + location.maxY + "), plane "
+				+ location.plane + ", priority " + location.priority);
+
+		JLabel priorityLabel = new JLabel("P" + location.priority);
+		priorityLabel.setFont(FontManager.getRunescapeSmallFont());
+		priorityLabel.setForeground(location.priority > 0 ? ColorScheme.BRAND_ORANGE
+			: location.priority < 0 ? Color.GRAY : ColorScheme.LIGHT_GRAY_COLOR);
+		priorityLabel.setToolTipText("Priority - higher wins where boxes overlap");
 
 		JButton editButton = createSmallButton("✎", "Edit " + location.name);
 		editButton.addActionListener(e ->
@@ -1336,6 +1732,7 @@ public class PrepToolsPanel extends PluginPanel
 		buttons.add(editButton);
 		buttons.add(deleteButton);
 
+		row.add(priorityLabel, BorderLayout.WEST);
 		row.add(nameLabel, BorderLayout.CENTER);
 		row.add(buttons, BorderLayout.EAST);
 		return row;
@@ -1368,6 +1765,7 @@ public class PrepToolsPanel extends PluginPanel
 		JTextField maxXField = new JTextField(String.valueOf(location.maxX));
 		JTextField maxYField = new JTextField(String.valueOf(location.maxY));
 		JTextField planeField = new JTextField(String.valueOf(location.plane));
+		JTextField priorityField = new JTextField(String.valueOf(location.priority));
 
 		// Live preview (a distinct colour, drawn by WildernessLocationDebugOverlay) of what Save
 		// would produce, refreshed on every change - arrow-key nudge or direct typing - rather than
@@ -1400,6 +1798,7 @@ public class PrepToolsPanel extends PluginPanel
 		installArrowKeyAdjust(maxXField, pushPreview);
 		installArrowKeyAdjust(maxYField, pushPreview);
 		installArrowKeyAdjust(planeField, pushPreview);
+		installArrowKeyAdjust(priorityField, pushPreview);
 		nameField.addKeyListener(new KeyAdapter()
 		{
 			@Override
@@ -1423,6 +1822,7 @@ public class PrepToolsPanel extends PluginPanel
 		coordsGrid.add(buildLabeledField("East X (max)", maxXField));
 		coordsGrid.add(buildLabeledField("North Y (max)", maxYField));
 		coordsGrid.add(buildLabeledField("Plane", planeField));
+		coordsGrid.add(buildLabeledField("Priority", priorityField));
 
 		JButton saveButton = createSmallButton("Save", "Save changes to this area");
 		saveButton.addActionListener(e ->
@@ -1440,10 +1840,11 @@ public class PrepToolsPanel extends PluginPanel
 				int corner2X = Integer.parseInt(maxXField.getText().trim());
 				int corner2Y = Integer.parseInt(maxYField.getText().trim());
 				int plane = Integer.parseInt(planeField.getText().trim());
+				int priority = Integer.parseInt(priorityField.getText().trim());
 
 				editingWildernessLocation = null;
 				plugin.clearLocationPreview();
-				plugin.updateWildernessLocation(location, newName, corner1X, corner1Y, corner2X, corner2Y, plane);
+				plugin.updateWildernessLocation(location, newName, corner1X, corner1Y, corner2X, corner2Y, plane, priority);
 			}
 			catch (NumberFormatException ex)
 			{

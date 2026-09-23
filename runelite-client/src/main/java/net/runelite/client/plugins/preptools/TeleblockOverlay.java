@@ -25,11 +25,17 @@ import net.runelite.client.ui.overlay.OverlayPosition;
  * currently believed to be tele-blocked. Same positioning/rendering approach as FreezeOverlay (see
  * its doc), just for PrepToolsPlugin#teleblockStates instead of freezeStates, and with no
  * immunity-phase concept (teleblock doesn't grant post-expiry immunity the way freezes do).
+ *
+ * BUG FIX: both overlays anchor at the exact same spot, so a player who was frozen AND
+ * tele-blocked had the two icons drawn directly on top of each other. When FreezeOverlay is also
+ * drawing for this player, the teleblock row is pushed down one row (icon height + a small gap)
+ * so both show, freeze on top.
  */
 public class TeleblockOverlay extends Overlay
 {
 	private static final int ANCHOR_WORLD_OFFSET = 20;
 	private static final int ICON_TEXT_GAP = 6;
+	private static final int STACKED_ROW_GAP = 2;
 
 	private final PrepToolsPlugin plugin;
 	private final PrepToolsConfig config;
@@ -73,6 +79,9 @@ public class TeleblockOverlay extends Overlay
 
 		graphics.setFont(graphics.getFont().deriveFont(Font.BOLD, 18f));
 
+		Map<Player, PrepToolsPlugin.FreezeState> freezeStates = config.showFreezeTimers()
+			? plugin.getFreezeStates() : java.util.Collections.emptyMap();
+
 		for (Map.Entry<Player, PrepToolsPlugin.TeleblockState> entry : states.entrySet())
 		{
 			Player player = entry.getKey();
@@ -102,13 +111,13 @@ public class TeleblockOverlay extends Overlay
 				text = String.format("%.1fs", remainingSeconds);
 			}
 
-			drawIconAndText(graphics, player, text, color);
+			drawIconAndText(graphics, player, text, color, freezeStates.containsKey(player));
 		}
 
 		return null;
 	}
 
-	private void drawIconAndText(Graphics2D graphics, Player player, String text, Color color)
+	private void drawIconAndText(Graphics2D graphics, Player player, String text, Color color, boolean belowFreeze)
 	{
 		LocalPoint localPoint = player.getLocalLocation();
 		if (localPoint == null)
@@ -127,10 +136,14 @@ public class TeleblockOverlay extends Overlay
 				return;
 			}
 
-			graphics.drawImage(icon, iconPoint.getX(), iconPoint.getY(), null);
+			// Freeze icons are the same spellbook-sprite size as this one, so one of our own icon
+			// heights is one freeze row.
+			int iconY = iconPoint.getY() + (belowFreeze ? icon.getHeight() + STACKED_ROW_GAP : 0);
+
+			graphics.drawImage(icon, iconPoint.getX(), iconY, null);
 
 			int textX = iconPoint.getX() + icon.getWidth() + ICON_TEXT_GAP;
-			int iconCentreY = iconPoint.getY() + (icon.getHeight() / 2);
+			int iconCentreY = iconY + (icon.getHeight() / 2);
 			int textBaselineY = iconCentreY + (metrics.getAscent() - metrics.getDescent()) / 2;
 
 			drawOutlinedString(graphics, text, textX, textBaselineY, color);
@@ -140,7 +153,8 @@ public class TeleblockOverlay extends Overlay
 			Point textLocation = player.getCanvasTextLocation(graphics, text, ANCHOR_WORLD_OFFSET);
 			if (textLocation != null)
 			{
-				drawOutlinedString(graphics, text, textLocation.getX(), textLocation.getY(), color);
+				int rowOffset = belowFreeze ? metrics.getHeight() + STACKED_ROW_GAP : 0;
+				drawOutlinedString(graphics, text, textLocation.getX(), textLocation.getY() + rowOffset, color);
 			}
 		}
 	}

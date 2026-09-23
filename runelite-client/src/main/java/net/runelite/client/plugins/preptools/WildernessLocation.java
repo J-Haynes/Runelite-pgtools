@@ -8,6 +8,9 @@ package net.runelite.client.plugins.preptools;
  * time with the sidebar's "Location Mapper" tool, covers the useful cases (named landmarks/hotspots)
  * without needing real polygon geometry.
  *
+ * When a point is inside more than one box, PrepToolsPlugin#resolveLocation() picks: highest
+ * priority first, then the smallest box (the most specific place), then earliest in the list.
+ *
  * Plain Gson-serializable POJO - field names are the JSON keys, persisted as a single JSON-encoded
  * string via ConfigManager (see PrepToolsPlugin#saveWildernessLocations()/loadWildernessLocations()).
  */
@@ -19,6 +22,13 @@ class WildernessLocation
 	int maxX;
 	int maxY;
 	int plane;
+
+	/**
+	 * Higher wins when boxes overlap - see the class doc. 0 for anything mapped by hand (and for
+	 * locations saved before this field existed - Gson leaves a missing field at 0); starter
+	 * locations imported from OpenOSRS sit at OpenOsrsWildernessLocations.IMPORTED_PRIORITY (-1).
+	 */
+	int priority;
 
 	WildernessLocation()
 	{
@@ -32,6 +42,17 @@ class WildernessLocation
 		this.maxX = maxX;
 		this.maxY = maxY;
 		this.plane = plane;
+	}
+
+	WildernessLocation(String name, int minX, int minY, int maxX, int maxY, int plane, int priority)
+	{
+		this(name, minX, minY, maxX, maxY, plane);
+		this.priority = priority;
+	}
+
+	long area()
+	{
+		return (long) (maxX - minX + 1) * (maxY - minY + 1);
 	}
 
 	boolean contains(int x, int y, int worldPlane)
