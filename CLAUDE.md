@@ -343,6 +343,13 @@ These cost real debugging time to find. Don't rediscover them the hard way:
   fails - "Menu Order/PID Debug" kept CI red for several commits unnoticed. Run
   `./gradlew :client:test` before pushing; the enabled-state config key is the class name, so
   renaming a plugin's display name is safe.
+- **No bare `<`, `>` or `&` in `/** */` doc comments** - write "A to B" not "A -> B", and wrap
+  literal markup in `{@code ...}`. CI's `:client:javadoc` treats them as errors ("bad use of '>'"),
+  and Lombok copies a field's doc comment onto its generated getter, so even a private field's doc
+  breaks it once it has `@Getter`. **The local JDK only warns**, so a plain local build passes
+  while CI fails. To reproduce CI locally after `./gradlew :client:javadoc`:
+  `sed '/^-d /d' runelite-client/build/tmp/javadoc/javadoc.options > /tmp/jd.options && javadoc @/tmp/jd.options -Xdoclint:all,-missing -d /tmp/jd 2>&1 | grep error`.
+  (`//` comments are unaffected.)
 - **Git remotes/identity:** `origin` is the user's own fork (`git@github.com:J-Haynes/Runelite-pgtools.git`,
   push here); `upstream` is `runelite/runelite` (fetch only - never push). The user has set their
   own git `user.name`/`user.email`; Claude still must not change git config itself. The `gh` CLI

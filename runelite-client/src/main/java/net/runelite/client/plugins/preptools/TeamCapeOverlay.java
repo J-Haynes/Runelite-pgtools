@@ -102,7 +102,7 @@ public class TeamCapeOverlay extends OverlayPanel
 	}
 
 	/**
-	 * Same team-number -> item-ID formula as vanilla RuneLite's TeamCapesOverlay: team capes 1-50
+	 * Same team-number-to-item-ID formula as vanilla RuneLite's TeamCapesOverlay: team capes 1-50
 	 * are WILDERNESS_CAPE_1 + 2 per step, team capes above that use the "zero" cape range (3 per
 	 * step) instead - two different in-game item ranges for historical reasons, not something this
 	 * plugin controls.

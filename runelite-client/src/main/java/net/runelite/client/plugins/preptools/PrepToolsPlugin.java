@@ -332,7 +332,7 @@ public class PrepToolsPlugin extends Plugin
 	private Set<String> configuredCallerStandardNames = Collections.emptySet();
 
 	/**
-	 * Standardized real name -> nickname, for every configured caller that has one (enabled or
+	 * Standardized real name to nickname, for every configured caller that has one (enabled or
 	 * not) - used by the Clan IDs tab to show "Name (Nickname)".
 	 */
 	private Map<String, String> configuredCallerNicknames = Collections.emptyMap();
@@ -430,14 +430,14 @@ public class PrepToolsPlugin extends Plugin
 	private final Deque<FriendsChatLogEntry> friendsChatLog = new ArrayDeque<>();
 
 	/**
-	 * Team number -> nearby player count, recomputed every tick in updateTeamCapeCounts(). Sorted
+	 * Team number to nearby player count, recomputed every tick in updateTeamCapeCounts(). Sorted
 	 * by count descending, same as vanilla RuneLite's Team plugin.
 	 */
 	@Getter
 	private Map<Integer, Integer> teamCapeCounts = new LinkedHashMap<>();
 
 	/**
-	 * Team number -> user-configured custom name, parsed from PrepToolsConfig#teamCapeNames every
+	 * Team number to user-configured custom name, parsed from PrepToolsConfig#teamCapeNames every
 	 * tick (see updateTeamCapeCounts()) - same re-parse-every-tick approach already used for the
 	 * Callers list (parseCallerEntries()), for consistency.
 	 */
@@ -491,7 +491,7 @@ public class PrepToolsPlugin extends Plugin
 
 	/**
 	 * The locations you're also inside but which LOST to currentLocationName, in resolution order,
-	 * as "Name (P<priority>)" - Location Mapper readout only.
+	 * as {@code "Name (P<priority>)"} - Location Mapper readout only.
 	 */
 	private List<String> currentLocationOverlaps = Collections.emptyList();
 
@@ -1029,8 +1029,8 @@ public class PrepToolsPlugin extends Plugin
 
 	/**
 	 * Rebuilds cachedHighlightStyles: the display colour/weight/font/shape for every
-	 * currently-highlighted player, including the priority order (backup caller < snipe list <
-	 * pile finder < primary caller < target). Weight/font/shape/dot size are shared across every category (the
+	 * currently-highlighted player, including the priority order, lowest to highest: backup caller,
+	 * snipe list, pile finder, primary caller, target. Weight/font/shape/dot size are shared across every category (the
 	 * Overlay section in PrepToolsConfig) - only colour stays per-category (Callers/Target/Pile
 	 * Finder sections). This used to be five independently-configurable settings per category
 	 * (fifteen settings total for the same three visual knobs), which turned out to be more
@@ -1999,7 +1999,7 @@ public class PrepToolsPlugin extends Plugin
 	private static final Pattern MENU_TAG_PATTERN = Pattern.compile("<[^>]*>");
 
 	/**
-	 * Strips any <col=...>/</col> (or other <...> tag) formatting the game may have already baked
+	 * Strips any {@code <col=...>}/{@code </col>} (or other {@code <...>} tag) formatting the game may have already baked
 	 * into a menu option/target string, so text-based matching isn't thrown off by it.
 	 */
 	private String stripMenuTags(String text)
@@ -2058,8 +2058,9 @@ public class PrepToolsPlugin extends Plugin
 
 	/**
 	 * Pulls the spell name out of a manually-cast spell's TARGET string - confirmed via debug
-	 * logging to look like "<col=00ff00>Snare</col><col=ffffff> -> <col=ffffff>PlayerName<col=ff00>
-	 * (level-92)" - i.e. everything before the literal " -> ", tags stripped. Returns null if the
+	 * logging to look like
+	 * {@code "<col=00ff00>Snare</col><col=ffffff> -> <col=ffffff>PlayerName<col=ff00> (level-92)"}
+	 * - i.e. everything before the literal {@code " -> "}, tags stripped. Returns null if the
 	 * string doesn't contain that separator (not a spell-cast target).
 	 */
 	private String extractSpellNameFromTarget(String target)
@@ -2080,7 +2081,7 @@ public class PrepToolsPlugin extends Plugin
 
 	/**
 	 * Recolours just the spell-name portion of a manually-cast spell's TARGET string (see
-	 * extractSpellNameFromTarget()), leaving the " -> PlayerName (level-X)" portion exactly as the
+	 * extractSpellNameFromTarget()), leaving the {@code " -> PlayerName (level-X)"} portion exactly as the
 	 * game rendered it. Returns false (does nothing) if the target isn't in that format, so the
 	 * caller can fall back to recolouring OPTION instead.
 	 */
@@ -2106,7 +2107,7 @@ public class PrepToolsPlugin extends Plugin
 
 	/**
 	 * Picks which of target/pile/snipe wins the default Attack slot, per the configured
-	 * AttackPriorityOrder - the first category in that order whose index is actually present (>= 0)
+	 * AttackPriorityOrder - the first category in that order whose index is actually present (non-negative)
 	 * wins. Returns -1 if none of the three matched anything in this menu.
 	 */
 	private static int resolvePriorityIndex(AttackPriorityOrder order, int targetIndex, int pileIndex, int snipeIndex)
@@ -3003,7 +3004,7 @@ public class PrepToolsPlugin extends Plugin
 	}
 
 	/**
-	 * Recomputes teamCapeCounts (team number -> nearby player count) and re-parses teamCapeNames
+	 * Recomputes teamCapeCounts (team number to nearby player count) and re-parses teamCapeNames
 	 * from config, every tick - a plain full scan of client.getPlayers(), the same approach already
 	 * used elsewhere in this plugin (updateOpponentInfo(), updateTargetedPlayers()) rather than
 	 * tracking spawn/despawn/changed deltas the way vanilla RuneLite's Team plugin does; simpler,
@@ -3171,7 +3172,7 @@ public class PrepToolsPlugin extends Plugin
 	}
 
 	/**
-	 * Renders a team-number -> name map back into the "Team cape names" config field's text
+	 * Renders a team-number-to-name map back into the "Team cape names" config field's text
 	 * format - the inverse of parseTeamCapeNames(). Used by setTeamCapeNameFromPanel()/
 	 * removeTeamCapeName() to persist a change made from the sidebar panel's editor.
 	 */
