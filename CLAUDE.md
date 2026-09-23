@@ -11,8 +11,18 @@ A team-PK / multi-clanning coordination tool — the kind of thing a small clan 
 fighting as a team in the wilderness. Inspired by [Exilent](https://exilent.org), a PK-focused OSRS
 client with similar team-coordination features. Core pieces:
 
+- **Team** — "your team" everywhere in this plugin (`PrepToolsPlugin#isOwnTeamMember()`) = you +
+  friends chat members + **clan members** (`Player#isClanMember()` - teams don't always run an FC)
+  + every configured caller, enabled or disabled. Used by pile finder, opponent prayer/weapon
+  counts, freeze/TB "hide for own team", teammate freeze-spell blocking, and the Clan IDs tab.
 - **Caller list** — primary/backup callers, reorderable/deletable from a sidebar panel, one-click
-  primary switching.
+  primary switching. Each caller has an enable checkbox: disabled callers stay in the list (stored
+  with a leading `!` in the `callers` config text) and on the team, but are never primary/backup/
+  highlighted. Callers get their **Follow** menu option coloured and made left-click
+  (`prioritiseCallerFollow()`), not Attack - a target/pile/snipe Attack on the same tile still wins.
+  ✎ on a row opens an edit form (name + nickname) below the list - a separate panel, not an in-row
+  form, because the row list is a `GridLayout` and one taller row would stretch every row
+  (`PrepToolsPlugin#editCaller()` keeps list position, enabled state and the primary pin).
 - **Highlighting** — three independent detection categories, each with its own config section and
   colour, but sharing one rendering style (shape/outline width/font/dot size — the config's
   "Overlay" section, `PrepToolsConfig#highlightShape()` etc.) so every highlighted player looks
@@ -30,18 +40,20 @@ client with similar team-coordination features. Core pieces:
     (`showTargetFlash()`/`targetFlashColor()`/`targetFlashDurationMillis()`), and can be prioritised
     to the default left-click Attack action (`prioritiseTargetAttack()`).
   - **Pile Finder** — a different mechanic: detects an *uncalled* pile by counting, per candidate
-    target, how many of your own friends chat members are simultaneously interacting with the same
-    non-FC player (`PrepToolsPlugin#updateTargetedPlayers()`); once that count meets a configurable
+    target, how many of your own team (FC/clan members, callers, you) are simultaneously interacting
+    with the same non-team player (`PrepToolsPlugin#updateTargetedPlayers()`); once that count meets a configurable
     threshold (`targetedPlayerThreshold()`, default low but user-settable), that player is
     highlighted even though nobody explicitly called them. FC-on-FC interactions (sparring) and
     interactions targeting a configured caller are excluded from the count so callers can never
-    accidentally trip their own team's pile finder. Requires being in a friends chat to work at all
-    (no FC members to count = feature is a no-op). Can also be prioritised to left-click Attack
+    accidentally trip their own team's pile finder. Needs teammates on screen to count (a
+    friends chat *or* clan - either works). Can also be prioritised to left-click Attack
     (`prioritiseAttackForPiles()`), subordinate to the target's own priority.
 - **Freeze tracking** — detects Bind/Snare/Entangle/Ice-spell hits, shows icon + countdown, can
   hide/block freezes against teammates.
 - **Teleblock tracking** — same idea as freeze tracking, but for the teleblock spell (icon +
   countdown; 5 min normally, 2.5 min if the target was praying Protect from Magic when it landed).
+  Drawn one row below the freeze icon when a player has both (both overlays share an anchor).
+  Both freeze and TB are cleared on death (`ActorDeath` + death animation).
 - **Snipe list** — a flat, always-on highlight list (default red), independent of caller/target
   status. Shift-right-click a player to add them, same idiom as "Add caller" (default green).
 - **Infobox panel** — bottom-right HUD: your stats (HP/prayer/strength/ranged — prayer and
@@ -56,6 +68,30 @@ client with similar team-coordination features. Core pieces:
   deliberately: this is for whoever's actually looking at your screen in the moment, not a
   coordination channel). Config keys kept as `chatSpamHotkey`/`chatSpamPrefix` (only the section/
   method names changed) so an already-configured hotkey isn't lost by the rename.
+- **Spammer** — hotkey (F10 default) that sends a saved message to **public chat**. Messages are
+  added/selected/deleted from the sidebar "Spam" tab (select = what's sent; or tick Random for a
+  random one each press, never the same twice in a row). Stored newline-separated (messages can
+  contain commas) in hidden config `spamMessages`/`selectedSpamMessage`; max 80 chars. **5 second
+  cooldown** between sends (anti-abuse, asked for explicitly; a blocked press prints a local
+  console line) - Spammer only, Pile Spam and Location Spam are deliberately NOT rate-limited.
+  Confirmed working in game.
+- **Multi Lines** — ground lines around multi-combat areas (+ optional dragon-spear range). Two
+  sources, both BSD-2 (notices kept in `MultiLinesOverlay.java`), both **bundled** rather than
+  downloaded at login like Multi-Lines does:
+  - Non-wilderness: [tsbreuer/Multi-Lines](https://github.com/tsbreuer/Multi-Lines) `geoJSON`
+    branch, as `runelite-client/src/main/resources/net/runelite/client/plugins/preptools/multi_lines.json`.
+    Its `"Wilderness": true` entries are **ignored** - they're old, unmaintained, and were visibly
+    wrong in game (Multi-Lines itself skips them and defers to Wilderness Lines).
+  - Wilderness: [Nightfirecat's Wilderness Lines](https://github.com/Nightfirecat/plugin-hub-plugins/tree/wilderness-lines)
+    v1.5.0 - `WILDERNESS_MULTI_AREAS` copied verbatim into `MultiLinesOverlay`, surface only
+    (intersected with its `WILDERNESS` bounds, exactly as upstream draws them), spear range 5.
+    Also its level 20/30 lines (`TWENTY_LINES`/`THIRTY_LINES`, overworld + rev/slayer caves),
+    both shown by default.
+  Wilderness and non-wilderness shapes are kept as separate paths so the non-wilderness ones are
+  simply skipped unless `showMultiLinesOutsideWilderness` is on (**default off**). Drawn out to the
+  GPU plugin's draw distance via `WorldLines` - see the lesson below.
+- **Member counts** — friends chat / clan member "near you" infoboxes, same as the vanilla Team
+  plugin's counters (Team Capes config section).
 - **Location Spam** — hotkey (F11 default) that sends your current wilderness location to chat in a
   **fixed format, no configurable prefix**: `Location: W318, Ferox Enclave, lvl 15 wild` (world,
   then name, then the wilderness level if known - the "lvl N wild" part is omitted entirely, comma
@@ -71,10 +107,30 @@ client with similar team-coordination features. Core pieces:
   (`PrepToolsPanel#installArrowKeyAdjust()`); every change (arrow-key or typed) live-previews the
   edited box in a distinct colour via `WildernessLocationDebugOverlay`, before Save is clicked
   (`PrepToolsPlugin#updateLocationPreview()`/`#clearLocationPreview()`). The debug setting
-  `showWildernessLocationOverlay` ("Show/edit wilderness locations") gates both that overlay *and*
+  `showWildernessLocationOverlay` ("Show/edit wilderness locations") gates both that overlay (drawn
+  via `WorldLines`, so boxes partly outside the loaded scene still draw) *and*
   a shift-right-click-the-ground "Set Corner A"/"Set Corner B" menu option
   (`PrepToolsPlugin#onMenuOpened()`), an alternative to the sidebar's own Set Corner buttons that
   doesn't require standing exactly on the tile - it captures the clicked tile, not your own position.
+  **Overlapping boxes / priority:** each `WildernessLocation` has an integer `priority` (Gson leaves
+  it 0 for locations saved before it existed). `PrepToolsPlugin#findContainingLocations()` orders
+  every box containing a point: **highest priority, then smallest area (most specific), then list
+  order** - the first one is the resolved location, the rest show in the Mapper as "Also in (lost on
+  priority)". Before priorities, it was purely first-in-list, so a big box saved first swallowed
+  every smaller box inside it. Hand-mapped boxes default to P0 (spinner next to the name field when
+  saving; "Priority" field in the ✎ edit form); the saved list displays sorted by priority then
+  name (display only - saved order is untouched, it's the last tie-break). The sidebar's own help
+  text explains the same rule - keep the two in sync.
+  **Starter locations:** 59 wilderness boxes from OpenOSRS's `WorldLocation` enum (archived fork
+  `JourneyDeprecated/OpenOSRS`, Jan 2020, PK-caller slang like "13s", "19s", "44s", "Gap"), in
+  `OpenOsrsWildernessLocations.java` (its licence notice must stay verbatim at the top of that
+  file). Imported at **P-1** so the user's own boxes always win where they overlap; appended once to
+  an existing list (name clashes skipped), guarded by the raw config key
+  `openOsrsLocationsImported` so deleting one sticks. Upstream passed each box's *north* y as a
+  south-west-anchored `WorldArea` origin (its own lookups were a box-height too far north) - the
+  import uses the corners as written, which is clearly the intent. Pre-dates Ferox Enclave: entries
+  around it (e.g. "13s") are likely stale - the user prefers to delete bad ones by hand. Another
+  source not used: the game cache's world-map labels (`cache` module) - current, but points only.
 - **Team cape overlay** — like vanilla RuneLite's "Teams" plugin, but with a custom name per team
   number (`PrepToolsConfig#teamCapeNames`).
 - **Right-click menu integration** — prioritises/recolours Attack and freeze-spell casts (target,
@@ -83,9 +139,9 @@ client with similar team-coordination features. Core pieces:
   applies to the same menu), blocks casting a freeze spell on a teammate, and (opt-in) shift-click
   "Walk here" on attackable players — vanilla RuneLite's Menu Entry Swapper has this for
   NPCs/objects/ground items but not players.
-- **Clan IDs panel** — sidebar tab surfacing your own and your friends chat members' player ids
+- **Clan IDs panel** — sidebar tab surfacing your own and your friends chat/clan members' player ids
   (`Player#getId()`), sorted, with the current min/max flagged as click-priority risks and
-  configured callers highlighted — see `MENU_ORDER_PID_INVESTIGATION.md` at the repo root for the
+  configured callers highlighted as "Name (Nickname)" — see `MENU_ORDER_PID_INVESTIGATION.md` at the repo root for the
   underlying mechanic this is built on (right-click Attack-menu ordering on a stack) and its current
   confidence level/open questions. Clan-only by design: OSRS's friendly-fire protection means an
   enemy's own menu on your team's pile is built exclusively from your team's ids, so enemy ids don't
@@ -94,10 +150,11 @@ client with similar team-coordination features. Core pieces:
 Config file (`PrepToolsConfig.java`) is the fastest way to see the full feature surface — it's kept
 well-commented and organized by section, sections ordered/all collapsed-by-default to match the
 sidebar's own tab order. The sidebar (`PrepToolsPanel.java`) is a `MaterialTabGroup` in a fixed
-2-row/3-col grid (Callers/Snipe/Clan IDs/FC/Capes/Location tabs), icon+label centred in each cell.
-Every tab's icon is a **real in-game image**, not a bundled file (this plugin has no resource assets
-of its own) - a UI sprite via `SpriteManager#getSpriteAsync()` (`PrepToolsPanel#loadTabIcon()`) for
-five of them, but Capes uses an actual team cape **item** icon via `ItemManager`
+3-column grid (Callers/Snipe/Spam, Clan IDs/FC/Capes, Location - 3/3/1; 4 columns was tried and
+cut every label off at sidebar width), icon+label
+centred in each cell. Every tab's icon is a **real in-game image**, not a bundled file (the plugin's
+only resource is the multi-lines data JSON - no image assets) - a UI sprite via
+`SpriteManager#getSpriteAsync()` (`PrepToolsPanel#loadTabIcon()`) for six of them, but Capes uses an actual team cape **item** icon via `ItemManager`
 (`#loadTabItemIcon()`, `TeamCapeOverlay.teamCapeItemId(30)`) since the generic equipment-slot sprite
 tried first rendered as a blank placeholder, not a real cape. Every section follows the same
 three-tier visual style, spaced apart with explicit `Box.createVerticalStrut(TIER_GAP)` calls
@@ -107,13 +164,8 @@ background/border box - tried a boxed-card look, asked to remove it while keepin
 
 ## Open questions / unverified
 
-- **`ScriptID.CHAT_SEND`'s "modes" integer: Friends Chat (2) and Clan Chat (1) are CONFIRMED
-  in-game** (`PrepToolsPlugin`'s `CHAT_MODE_FRIENDS_CHAT`/`CHAT_MODE_CLAN_CHAT` constants) - the
-  first guess had them swapped, fixed once real testing showed Location Spam landing in the wrong
-  channel. `CHAT_MODE_PUBLIC = 0` (used by Pile Spam) is still an **unverified guess** - neither
-  RuneLite's own source/docs nor a web search turned up the literal value, and no other call site of
-  this script exists anywhere in this codebase to copy a known-good value from. If Pile Spam doesn't
-  land in public/game chat, this is the line to fix.
+- **Multi Lines' wilderness areas and extended-scene heights** - see the Multi Lines entry and the
+  `WorldLines` lesson; neither has been checked in game yet.
 
 ## Build & run
 
@@ -155,8 +207,8 @@ dead weight. Output lands under `runelite-client/build/jpackage/{image,installer
   `./gradlew :client:jpackageInstaller`, each uploading its own platform's artifact). Triggered by
   either the Actions tab's manual "Run workflow" button (uploads as plain build artifacts, no
   public release) or pushing a `v*` tag (additionally publishes those same files to a GitHub
-  Release). Only runs on a repo you can push to and that has Actions enabled - not the upstream
-  `runelite/runelite` this repo's `origin` remote points at by default.
+  Release). Only runs on a repo you can push to and that has Actions enabled - i.e. `origin`
+  (the user's fork), not `upstream` (`runelite/runelite`).
   `jpackage.appName`/`jpackage.vendor`/`jpackage.type` are exposed as Gradle properties
   (`-Pjpackage.appName=...`) if the defaults ("RuneLite PvP Tools") need overriding per-platform.
 - **Windows/macOS icons aren't wired up** - only a `.png` (reused from the client's own
@@ -204,10 +256,23 @@ These cost real debugging time to find. Don't rediscover them the hard way:
   computed there runs far more often than the underlying game state actually changes.
 - **Wilderness level: read the game's own widget, don't derive it from coordinates.**
   `client.getWidget(InterfaceID.PvpIcons.WILDERNESSLEVEL)` returns a widget whose text is
-  `"Level: N"` (null when not in the wilderness at all) - this is exactly what
-  `CombatLevelPlugin` (RuneLite core) reads for the same purpose. Far more robust than a
-  hand-written Y-coordinate formula, especially in a fork tracking a future content revision
-  where wilderness geometry could shift.
+  `"Level: N"` (null when not in the wilderness at all). **Match it unanchored with `find()`** -
+  `CombatLevelPlugin` (RuneLite core, "attack level range" option on by default) *rewrites that
+  same widget's text* to `"Level: 15<br>81-111"`, so its own anchored `^Level: (\d+)$` pattern,
+  which this plugin originally copied, silently never matched and Location Spam lost its level.
+  **Fix CONFIRMED in game.** A coordinate formula (`(y - 3520) / 8 + 1`, `9920` underground) is
+  kept only as a fallback, gated on the `IN_WILDERNESS` varbit.
+- **Draw ground lines with `WorldLines`, not `LocalPoint.fromWorld()` + `getCanvasTileAreaPoly`.**
+  `LocalPoint.fromWorld()` returns null outside the 104x104 loaded scene, so a shape with any corner
+  outside it silently vanished - and "outside" depends on where the scene last loaded, which is why
+  Location Mapper boxes "sometimes didn't show when you leave and re-enter the same area". Also, the
+  GPU plugin draws terrain over the 184x184 *extended* scene (40 tiles further each way), so lines
+  limited to the loaded scene (or the 20-tile clip copied from NpcAggroAreaPlugin, which Multi Lines
+  first had) stop well short of what's on screen. `WorldLines` clips to the extended scene, converts
+  world->local by plain arithmetic, projects with `Perspective.localToCanvas(client, x, y, z)`
+  (accepts the extended range), and draws out to the GPU plugin's `drawDistance` (25 without GPU).
+  Limitation: the API has no ground height outside the loaded scene (`getTileHeight()` returns 0),
+  so points there borrow the nearest loaded tile's height - can float/sink a little on steep hills.
 - **A `MenuAction.WALK` menu entry's `param0`/`param1` are NOT the clicked tile's scene
   coordinates** - unlike object-click entries (tree, bookcase, compost bin: see
   `HerbiboarPlugin`/`KourendLibraryPlugin`/`CompostTracker` in RuneLite core, all of which legitimately
@@ -257,9 +322,21 @@ These cost real debugging time to find. Don't rediscover them the hard way:
   not a collection) read cross-thread without synchronization is fine as-is elsewhere in this plugin
   (e.g. `lastKnownWorldPoint`) - reference assignment is atomic, this is specifically a
   collection-structural-mutation problem.
-- **git has no configured `user.email`/`user.name` in this environment**, and Claude must not set
-  git config itself. Ask the user to run it themselves via `! git config user.email ... && git
-  config user.name ...` before attempting a commit.
+- **`ScriptID.CHAT_SEND`'s "modes" integer, all CONFIRMED in game:** public = 0 (Spammer/Pile
+  Spam), clan chat = 1, friends chat = 2 (`PrepToolsPlugin`'s `CHAT_MODE_*` constants). Neither
+  RuneLite's source/docs nor a web search had the literal values - they were guessed (FC/clan
+  initially swapped) and fixed by testing.
+- **Never expose a list the sidebar edits as a visible text `@ConfigItem` - mark it
+  `hidden = true`.** RuneLite's settings panel (`ConfigPanel#createTextField`) saves a text field on
+  *focus-lost* with whatever text it loaded when opened, and never refreshes on outside changes. So
+  settings open -> edit list in sidebar -> back to settings -> focus leaves the field = stale text
+  written straight over the sidebar's edits ("switching between the sidebar and settings can destroy
+  the caller list"). `callers`, `snipeList`, `teamCapeNames`, `spamMessages`, `selectedSpamMessage`
+  are all hidden for this reason; the sidebar is their only editor.
+- **Git remotes/identity:** `origin` is the user's own fork (`git@github.com:J-Haynes/Runelite-pgtools.git`,
+  push here); `upstream` is `runelite/runelite` (fetch only - never push). The user has set their
+  own git `user.name`/`user.email`; Claude still must not change git config itself. The `gh` CLI
+  is not installed.
 - **`git commit` commits the whole index, not just what you just `git add`ed.** If files were
   staged earlier in a long session and forgotten about, a later `git add <specific files> && git
   commit` can silently sweep in everything already staged. Run `git status --short` immediately
