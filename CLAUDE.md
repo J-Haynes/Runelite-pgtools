@@ -216,10 +216,36 @@ dead weight. Output lands under `runelite-client/build/jpackage/{image,installer
   "Ensure WiX" step originally used `Get-ChildItem ... -Directory` (lists folders *inside* `bin`),
   so it never added WiX to PATH - fixed to `Get-Item`, but only exercised when the runner image
   lacks WiX, so it's unconfirmed until a Windows run passes.
-- **Windows/macOS icons aren't wired up** - only a `.png` (reused from the client's own
-  `runelite_128.png`) is passed on Linux, since `--icon` needs a format-matched file per OS
-  (`.ico` for Windows, `.icns` for macOS) that doesn't exist in this repo yet. Without one,
-  jpackage silently falls back to its own generic default icon rather than failing - easy to miss.
+- **Bundled runtime is Java 11, jlinked separately** (`jpackageRuntime` task, `--runtime-image`),
+  not jpackage's default (which would jlink its own JDK 17). Official RuneLite ships Temurin 11 and
+  this client is built/tested on 11; Java 17's strong encapsulation breaks reflective access the
+  client uses (world hopper `Ping`'s `FileDescriptor.fd` only catches `NoSuchField`/`IllegalAccess`,
+  not `InaccessibleObjectException`). jpackage 17's launcher runs a Java 11 image fine (verified
+  locally, including launching the packaged client). jlink needs a JDK 11 **with `jmods/`** -
+  Temurin has it (CI's `setup-java`); on Ubuntu it's the separate `openjdk-11-jmods` package. JVM
+  flags copied from official RuneLite's launcher: `-Xmx768m -Xss2m -XX:CompileThreshold=1500
+  -XX:+DisableAttachMechanism`.
+- **The .deb failed to install on another machine - two jpackage defaults, both fixed via
+  `--resource-dir` overrides written by `writeLinuxResources()`** (file names must match what
+  `jpackage --verbose` asks for: `control`, `<app name>.desktop`):
+  (1) the `.desktop` entry had `Categories=Unknown` + an empty `MimeType=` - fails
+  `desktop-file-validate`, and `postinst` runs `xdg-desktop-menu install` under `set -e`, so a
+  strict xdg-utils aborts the install (this machine's 1.2.1 happens to tolerate it). Now mirrors
+  official RuneLite's entry (`Categories=Game;`). (2) jpackage writes `Depends:` from the build
+  machine's package names, and the CI runner (Ubuntu 24.04) names ALSA `libasound2t64`, which
+  doesn't exist on Ubuntu 22.04/Debian 12 - now `libasound2t64 | libasound2`. That Depends list is
+  **hardcoded** - re-check it against a default build's `dpkg-deb -I` if the runtime changes. The
+  Package workflow's Linux job now runs `desktop-file-validate` + `apt-get install --simulate` on
+  the built `.deb`, so both regressions fail CI instead of reaching users.
+- **Icons:** `--icon` needs `.png`/`.ico`/`.icns` per OS. `runelite-client/jpackage/runelite.ico`
+  and `.icns` are generated from `runelite_128.png` (each just wraps that one PNG - both formats
+  allow embedded PNG), so a single 128px image, not a full multi-size set.
+- **Other per-OS defaults overridden:** Windows Start Menu folder defaulted to "Unknown"
+  (`--win-menu-group`); a fixed `--win-upgrade-uuid` (never change it once installers are
+  published) so new versions upgrade in place; macOS bundle id/category set explicitly
+  (`--mac-package-identifier`, `--mac-app-category games` - jpackage adds the
+  `public.app-category.` prefix). Windows/macOS builds can't be tested on this machine - only a
+  Package workflow run confirms them.
 - **Adding a new Gradle plugin (like `foojay-resolver-convention`) needs its checksum added to
   `gradle/verification-metadata.xml`**, or the build fails with "Dependency verification failed"
   the first time anything resolves the new plugin. Fix: run any task once with

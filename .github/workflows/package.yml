@@ -50,9 +50,9 @@ jobs:
         with:
           gradle-version: wrapper
 
-      - name: Install fakeroot (Linux, needed for .deb packaging)
+      - name: Install fakeroot + desktop-file-utils (Linux)
         if: runner.os == 'Linux'
-        run: sudo apt-get update && sudo apt-get install -y fakeroot
+        run: sudo apt-get update && sudo apt-get install -y fakeroot desktop-file-utils
 
       # jpackage's --type exe needs the WiX Toolset (v3). windows-latest runners normally ship
       # with it already, but this installs it on demand instead of assuming - cheap insurance
@@ -74,6 +74,17 @@ jobs:
 
       - name: Build installer
         run: ./gradlew :client:jpackageInstaller
+
+      # Catches the two ways the .deb has already broken on a real machine: an invalid .desktop
+      # entry (jpackage's default "Categories=Unknown") and a Depends line apt can't satisfy.
+      - name: Validate .deb (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          deb=$(ls runelite-client/build/jpackage/installer/*.deb)
+          dpkg-deb -I "$deb"
+          mkdir -p "$RUNNER_TEMP/deb" && dpkg-deb -x "$deb" "$RUNNER_TEMP/deb"
+          find "$RUNNER_TEMP/deb/opt" -maxdepth 3 -name '*.desktop' -print0 | xargs -0 -n1 desktop-file-validate
+          sudo apt-get install -y --simulate "./$deb"
 
       - name: Upload build artifact
         uses: actions/upload-artifact@v4

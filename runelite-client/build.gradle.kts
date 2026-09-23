@@ -146,11 +146,44 @@ val jpackageJdk = jpackageToolchains.launcherFor {
     languageVersion = JavaLanguageVersion.of(17)
 }
 
+// The runtime BUNDLED into the app is Java 11, not the JDK 17 that runs jpackage itself: official
+// RuneLite ships Java 11 (Temurin), and it's what this client is built and tested against. A
+// jpackage default runtime would be jlinked from jpackage's own JDK 17 instead, where Java 16+
+// strong encapsulation breaks reflective access the client relies on (e.g. world hopper Ping's
+// FileDescriptor.fd). jpackage 17's native launcher runs a Java 11 runtime image fine (verified).
+val jpackageRuntimeJdk = jpackageToolchains.launcherFor {
+    languageVersion = JavaLanguageVersion.of(11)
+}
+
 val jpackageAppName = (findProperty("jpackage.appName") as String?) ?: "RuneLite PvP Tools"
 val jpackageVendor = (findProperty("jpackage.vendor") as String?) ?: "RuneLite PvP Tools"
 // jpackage (and Debian) require a strictly numeric x.y.z version - drop the "-SNAPSHOT" suffix.
 val jpackageAppVersion = project.version.toString().substringBefore("-")
-val jpackageIcon = file("src/main/resources/net/runelite/client/ui/runelite_128.png")
+// --icon needs a format-matched file per OS: .png (Linux), .ico (Windows), .icns (macOS). The .ico
+// and .icns in jpackage/ are generated from runelite_128.png - each just wraps that same PNG (both
+// formats allow embedded PNG data), so they're one 128px image, not a full multi-size icon set.
+val jpackageIconPng = file("src/main/resources/net/runelite/client/ui/runelite_128.png")
+val jpackageIconIco = file("jpackage/runelite.ico")
+val jpackageIconIcns = file("jpackage/runelite.icns")
+
+fun jpackageIcon(): java.io.File
+{
+    val os = OperatingSystem.current()
+    return when
+    {
+        os.isWindows -> jpackageIconIco
+        os.isMacOsX -> jpackageIconIcns
+        else -> jpackageIconPng
+    }
+}
+
+// Same JVM flags official RuneLite's launcher starts the client with (read from its process
+// command line) - notably -Xss2m, as the client needs a bigger thread stack than the default.
+val jpackageJavaOptions = listOf("-Xmx768m", "-Xss2m", "-XX:CompileThreshold=1500", "-XX:+DisableAttachMechanism")
+
+// Fixed so a newer Windows installer upgrades an existing install in place instead of installing
+// a second copy alongside it. Never change this once installers have been published.
+val jpackageWinUpgradeUuid = "9477b509-9781-4607-9bfb-78ea7ae97d4f"
 
 fun jpackageExecutable(): String
 {
@@ -160,6 +193,97 @@ fun jpackageExecutable(): String
 }
 
 val jpackageInputDir = layout.buildDirectory.dir("jpackage/input")
+
+// jlinks the bundled Java 11 runtime (see jpackageRuntimeJdk). ALL-MODULE-PATH matches official
+// RuneLite, which ships essentially the whole JDK 11 module set. Needs a JDK that includes jmods/
+// (Temurin does - in CI setup-java provides it; locally Ubuntu splits it into openjdk-11-jmods).
+val jpackageRuntimeDir = layout.buildDirectory.dir("jpackage/runtime")
+val jpackageRuntime = tasks.register<Exec>("jpackageRuntime") {
+    group = "distribution"
+    description = "Builds the Java 11 runtime image bundled into jpackage apps/installers."
+    outputs.dir(jpackageRuntimeDir)
+
+    doFirst {
+        val javaHome = jpackageRuntimeJdk.get().metadata.installationPath.asFile
+        val jmods = javaHome.resolve("jmods")
+        if (!jmods.isDirectory)
+        {
+            throw GradleException("No jmods/ in $javaHome - jlink needs a full JDK 11 with jmods (e.g. Temurin, or apt install openjdk-11-jmods)")
+        }
+        val out = jpackageRuntimeDir.get().asFile
+        out.deleteRecursively()
+        val jlinkName = if (OperatingSystem.current().isWindows) "jlink.exe" else "jlink"
+        commandLine(
+            javaHome.resolve("bin").resolve(jlinkName).absolutePath,
+            "--module-path", jmods.absolutePath,
+            "--add-modules", "ALL-MODULE-PATH",
+            "--strip-debug", "--no-header-files", "--no-man-pages", "--compress=2",
+            "--output", out.absolutePath
+        )
+    }
+}
+
+val jpackageResourceDir = layout.buildDirectory.dir("jpackage/resources")
+
+// Linux-only overrides of two jpackage-generated .deb files (--resource-dir; file names must be
+// exactly "control" and "<app name>.desktop" - jpackage --verbose prints the expected names):
+// - control: jpackage fills Depends from the BUILD machine's package names, and the CI runner
+//   (Ubuntu 24.04) names ALSA "libasound2t64" - a package that doesn't exist on Ubuntu 22.04 /
+//   Debian 12 (there it's "libasound2"), so apt refused to install the .deb there. Hardcoded with
+//   an alternative for each. Re-check this list against `dpkg-deb -I` of a fresh default build if
+//   the bundled runtime ever changes.
+// - .desktop: jpackage's default has "Categories=Unknown" (not a registered category - fails
+//   desktop-file-validate, and a stricter xdg-desktop-menu makes postinst abort the install) and an
+//   empty "MimeType=" line. Mirrors official RuneLite's own desktop entry instead.
+fun writeLinuxResources(): java.io.File
+{
+    val dir = jpackageResourceDir.get().asFile
+    dir.deleteRecursively()
+    dir.mkdirs()
+    dir.resolve("control").writeText(
+        """
+        Package: APPLICATION_PACKAGE
+        Version: APPLICATION_VERSION-APPLICATION_RELEASE
+        Section: games
+        Maintainer: APPLICATION_MAINTAINER
+        Priority: optional
+        Architecture: APPLICATION_ARCH
+        Provides: APPLICATION_PACKAGE
+        Description: APPLICATION_DESCRIPTION
+        Depends: libasound2t64 | libasound2, libc6, libx11-6, libxau6, libxcb1, libxdmcp6, libxext6, libxi6, libxrender1, libxtst6, xdg-utils
+        Installed-Size: APPLICATION_INSTALLED_SIZE
+        """.trimIndent() + "\n"
+    )
+    dir.resolve("$jpackageAppName.desktop").writeText(
+        """
+        [Desktop Entry]
+        Name=APPLICATION_NAME
+        Comment=RuneLite with team PvP coordination tools
+        Exec=APPLICATION_LAUNCHER
+        Icon=APPLICATION_ICON
+        Terminal=false
+        Type=Application
+        Categories=Game;
+        StartupNotify=false
+        Keywords=rs;osrs;old;school;runescape;runelite;pvp;
+        """.trimIndent() + "\n"
+    )
+    return dir
+}
+
+// Arguments shared by both jpackage tasks: bundled Java 11 runtime, JVM flags, per-OS icon.
+fun jpackageCommonArgs(): List<String>
+{
+    val args = mutableListOf(
+        "--runtime-image", jpackageRuntimeDir.get().asFile.absolutePath,
+        "--icon", jpackageIcon().absolutePath
+    )
+    for (option in jpackageJavaOptions)
+    {
+        args += listOf("--java-options", option)
+    }
+    return args
+}
 
 // jpackage bundles every jar in --input, not just --main-jar - staging the shaded jar alone into
 // its own directory (rather than pointing --input at build/libs, which also holds the plain,
@@ -178,7 +302,7 @@ val jpackageImageDir = layout.buildDirectory.dir("jpackage/image")
 tasks.register<Exec>("jpackageImage") {
     group = "distribution"
     description = "Builds a self-contained app image (bundled JRE, no installer, no separate Java needed) via jpackage."
-    dependsOn(shadowJar)
+    dependsOn(shadowJar, jpackageRuntime)
 
     val jarFile = shadowJar.flatMap { it.archiveFile }
     inputs.file(jarFile)
@@ -200,7 +324,7 @@ tasks.register<Exec>("jpackageImage") {
             "--app-version", jpackageAppVersion,
             "--vendor", jpackageVendor,
             "--dest", dest.absolutePath,
-            "--icon", jpackageIcon.absolutePath
+            *jpackageCommonArgs().toTypedArray()
         )
     }
 }
@@ -209,7 +333,7 @@ val jpackageInstallerDir = layout.buildDirectory.dir("jpackage/installer")
 tasks.register<Exec>("jpackageInstaller") {
     group = "distribution"
     description = "Builds a native installer (.deb on Linux; run on Windows/macOS for .exe/.msi or .dmg/.pkg) via jpackage - double-click to install, no Java required."
-    dependsOn(shadowJar)
+    dependsOn(shadowJar, jpackageRuntime)
 
     val jarFile = shadowJar.flatMap { it.archiveFile }
     inputs.file(jarFile)
@@ -241,11 +365,15 @@ tasks.register<Exec>("jpackageInstaller") {
             "--vendor", jpackageVendor,
             "--dest", dest.absolutePath
         )
-        // Only .png is valid input to --icon; a Windows/macOS build needs its own .ico/.icns
-        // (not provided yet) and will fall back to jpackage's generic default icon without one.
+        args += jpackageCommonArgs()
         if (os.isLinux)
         {
-            args += listOf("--icon", jpackageIcon.absolutePath, "--linux-shortcut")
+            args += listOf(
+                "--linux-shortcut",
+                "--linux-menu-group", "Game",
+                "--linux-app-category", "games",
+                "--resource-dir", writeLinuxResources().absolutePath
+            )
         }
         // jpackage adds no shortcut of any kind by default - without this, a Windows install
         // would land in Program Files with nothing pointing at it, so the only way to launch it
@@ -254,7 +382,21 @@ tasks.register<Exec>("jpackageInstaller") {
         // to install, then just click the icon", so both are worth the extra install prompt.
         if (os.isWindows)
         {
-            args += listOf("--win-menu", "--win-shortcut")
+            // --win-menu-group: jpackage's default Start Menu folder name is literally "Unknown".
+            args += listOf(
+                "--win-menu", "--win-shortcut",
+                "--win-menu-group", jpackageAppName,
+                "--win-upgrade-uuid", jpackageWinUpgradeUuid
+            )
+        }
+        if (os.isMacOsX)
+        {
+            // Without these, the bundle id defaults to the main class name and the category to
+            // "utilities".
+            args += listOf(
+                "--mac-package-identifier", "net.runelite.client.pvptools",
+                "--mac-app-category", "games" // jpackage prefixes "public.app-category."
+            )
         }
         commandLine(args)
     }
