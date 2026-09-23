@@ -211,6 +211,11 @@ dead weight. Output lands under `runelite-client/build/jpackage/{image,installer
   (the user's fork), not `upstream` (`runelite/runelite`).
   `jpackage.appName`/`jpackage.vendor`/`jpackage.type` are exposed as Gradle properties
   (`-Pjpackage.appName=...`) if the defaults ("RuneLite PvP Tools") need overriding per-platform.
+- **Installers are unsigned** (SmartScreen warning on Windows, Gatekeeper on macOS), and
+  `macos-latest` is Apple Silicon, so the `.dmg` won't run on Intel Macs. The Windows job's
+  "Ensure WiX" step originally used `Get-ChildItem ... -Directory` (lists folders *inside* `bin`),
+  so it never added WiX to PATH - fixed to `Get-Item`, but only exercised when the runner image
+  lacks WiX, so it's unconfirmed until a Windows run passes.
 - **Windows/macOS icons aren't wired up** - only a `.png` (reused from the client's own
   `runelite_128.png`) is passed on Linux, since `--icon` needs a format-matched file per OS
   (`.ico` for Windows, `.icns` for macOS) that doesn't exist in this repo yet. Without one,
@@ -333,6 +338,11 @@ These cost real debugging time to find. Don't rediscover them the hard way:
   written straight over the sidebar's edits ("switching between the sidebar and settings can destroy
   the caller list"). `callers`, `snipeList`, `teamCapeNames`, `spamMessages`, `selectedSpamMessage`
   are all hidden for this reason; the sidebar is their only editor.
+- **Never put `/` in a `@PluginDescriptor` `name`.** `PluginManagerTest` writes one `<name>.dot`
+  file per plugin, so a slash becomes a missing subdirectory and CI (`ci/build.sh` -> `:buildAll`)
+  fails - "Menu Order/PID Debug" kept CI red for several commits unnoticed. Run
+  `./gradlew :client:test` before pushing; the enabled-state config key is the class name, so
+  renaming a plugin's display name is safe.
 - **Git remotes/identity:** `origin` is the user's own fork (`git@github.com:J-Haynes/Runelite-pgtools.git`,
   push here); `upstream` is `runelite/runelite` (fetch only - never push). The user has set their
   own git `user.name`/`user.email`; Claude still must not change git config itself. The `gh` CLI

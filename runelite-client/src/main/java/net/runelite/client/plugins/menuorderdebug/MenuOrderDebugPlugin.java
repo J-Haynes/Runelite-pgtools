@@ -63,7 +63,10 @@ import net.runelite.client.ui.overlay.OverlayManager;
  */
 @Slf4j
 @PluginDescriptor(
-	name = "Menu Order/PID Debug",
+	// No '/' in the name: PluginManagerTest writes one "<name>.dot" file per plugin, and a slash
+	// turned that into a missing subdirectory - failing CI. The enabled/disabled setting is keyed
+	// on the class name, so renaming doesn't reset it.
+	name = "Menu Order PID Debug",
 	description = "Investigation tool - logs right-click menu stacking order and full player/render state, to test what determines menu order on a stack",
 	tags = {"debug", "developer", "pid", "menu", "investigation", "pvp"},
 	enabledByDefault = false
@@ -218,7 +221,7 @@ public class MenuOrderDebugPlugin extends Plugin
 		WorldPoint localLocation = localPlayer != null ? localPlayer.getWorldLocation() : null;
 		int currentTick = client.getTickCount();
 
-		log.info("=== Menu Order/PID Debug: {} distinct players, tick={}, local='{}' id={} loc={}"
+		log.info("=== Menu Order PID Debug: {} distinct players, tick={}, local='{}' id={} loc={}"
 				+ " mouse={} cameraYaw={} cameraPitch={} zoom={} ===",
 			distinctPlayersInOrder.size(), currentTick,
 			localPlayer != null ? localPlayer.getName() : "?",
