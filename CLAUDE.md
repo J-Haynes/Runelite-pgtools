@@ -91,7 +91,9 @@ client with similar team-coordination features. Core pieces:
 - **Scout (Discord)** — hotkey (F9 default) posts e.g. `10x Team-50 (EoP), 3x Team-12, W308,
   Ferox Enclave, lvl 15 wild` to a Discord webhook (`scoutWebhookUrl`, `secret = true`),
   with your in-game name as the poster (`PrepToolsPlugin#postScoutReport()`/`#buildScoutReport()`).
-  Counts on-screen players NOT on your team, by team cape number (Capes tab name added if set),
+  Counts **every** on-screen player by team cape number, own team included - the same numbers as
+  the Team Capes overlay (it first skipped FC/clan members, which silently dropped named capes the
+  overlay showed). Capes tab name added if set,
   only capes with at least `scoutMinCapeCount` (default 2) wearers; capeless players are left out
   on purpose ("7 other players" was called useless); location parts are Location Spam's. Only sends to a real Discord webhook URL
   (`isDiscordWebhook()`), `allowed_mentions` empty so a cape name can't ping, 5s cooldown (Discord

@@ -1487,8 +1487,8 @@ public interface PrepToolsConfig extends Config
 		keyName = "scoutHotkey",
 		name = "Scout hotkey",
 		description = "<html>Pressing this posts e.g. '10x Team-50 (EoP), 3x Team-12,<br>"
-			+ "W308, Ferox Enclave, lvl 15 wild' to the webhook's channel.<br>"
-			+ "Your own team isn't counted.</html>",
+			+ "W308, Ferox Enclave, lvl 15 wild' to the webhook's channel -<br>"
+			+ "the same cape counts as the Team Capes overlay.</html>",
 		position = 2,
 		section = "scoutSection"
 	)
@@ -1501,8 +1501,8 @@ public interface PrepToolsConfig extends Config
 	@ConfigItem(
 		keyName = "scoutMinCapeCount",
 		name = "Minimum capes",
-		description = "<html>Only report a team cape if at least this many (non-team)<br>"
-			+ "players near you are wearing it.</html>",
+		description = "<html>Only report a team cape if at least this many players<br>"
+			+ "near you are wearing it.</html>",
 		position = 3,
 		section = "scoutSection"
 	)

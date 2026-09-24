@@ -4027,9 +4027,9 @@ public class PrepToolsPlugin extends Plugin
 	}
 
 	/**
-	 * e.g. "10x Team-50 (EoP), 3x Team-12, W308, Ferox Enclave, lvl 15 wild". Counts on-screen
-	 * players who aren't on your own team (you, callers, FC/clan) by team cape number, most first,
-	 * with the Capes tab's name for that number if it has one; capes worn by fewer than
+	 * e.g. "10x Team-50 (EoP), 3x Team-12, W308, Ferox Enclave, lvl 15 wild". Counts every
+	 * on-screen player (you included) by team cape number, most first - the same numbers as the
+	 * Team Capes overlay - with the Capes tab's name for that number if it has one; capes worn by fewer than
 	 * scoutMinCapeCount players are left out. Location is the same as Location Spam's; parts that
 	 * aren't known are left out.
 	 */
@@ -4038,7 +4038,10 @@ public class PrepToolsPlugin extends Plugin
 		Map<Integer, Integer> capeCounts = new HashMap<>();
 		for (Player player : client.getPlayers())
 		{
-			if (player != null && player.getName() != null && player.getTeam() > 0 && !isOwnTeamMember(player))
+			// Everyone, own team included - same as the Team Capes overlay. Skipping FC/clan members
+			// silently dropped (or pushed under the minimum) any cape they were wearing, so a named
+			// cape the overlay showed could be missing from the report.
+			if (player != null && player.getTeam() > 0)
 			{
 				capeCounts.merge(player.getTeam(), 1, Integer::sum);
 			}
