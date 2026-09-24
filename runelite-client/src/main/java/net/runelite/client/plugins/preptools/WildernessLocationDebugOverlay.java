@@ -25,13 +25,8 @@ import net.runelite.client.ui.overlay.OverlayUtil;
  * locations" setting; deliberately basic (no fill, no colour options) since this is a temporary
  * internal mapping aid, not a player-facing feature.
  *
- * BUG FIX: borders used to be one Perspective#getCanvasTileAreaPoly quad, positioned from
- * LocalPoint.fromWorld() of the box's corners - which returns null for anything outside the
- * loaded 104x104 scene, so a box with even one corner outside it wasn't drawn at all. Whether a
- * corner was inside depended on where the scene last loaded, hence "boxes sometimes don't show when
- * you leave and re-enter the same area". Borders now go through WorldLines (clipped to the extended
- * scene, drawn out to the GPU draw distance, following the terrain tile by tile), so the visible
- * part of any box is always drawn.
+ * Borders go through WorldLines, so the visible part of a box draws even when a corner is outside
+ * the loaded scene (LocalPoint.fromWorld() is null there, which once hid whole boxes).
  */
 public class WildernessLocationDebugOverlay extends Overlay
 {
@@ -45,15 +40,15 @@ public class WildernessLocationDebugOverlay extends Overlay
 
 	private static final float BORDER_STROKE_WIDTH = 3f;
 
-	private final PrepToolsPlugin plugin;
+	private final LocationTracker locations;
 	private final PrepToolsConfig config;
 	private final Client client;
 	private final ConfigManager configManager;
 
 	@Inject
-	private WildernessLocationDebugOverlay(PrepToolsPlugin plugin, PrepToolsConfig config, Client client, ConfigManager configManager)
+	private WildernessLocationDebugOverlay(LocationTracker locations, PrepToolsConfig config, Client client, ConfigManager configManager)
 	{
-		this.plugin = plugin;
+		this.locations = locations;
 		this.config = config;
 		this.client = client;
 		this.configManager = configManager;
@@ -75,7 +70,7 @@ public class WildernessLocationDebugOverlay extends Overlay
 		graphics.setStroke(new BasicStroke(BORDER_STROKE_WIDTH));
 		graphics.setFont(graphics.getFont().deriveFont(Font.BOLD, 16f));
 
-		for (WildernessLocation location : plugin.getWildernessLocations())
+		for (WildernessLocation location : locations.getStore().getLocations())
 		{
 			drawLocationBox(graphics, location, plane, drawDistance, BORDER_COLOR, LABEL_COLOR);
 		}
@@ -83,7 +78,7 @@ public class WildernessLocationDebugOverlay extends Overlay
 		// Live preview of whatever's currently being typed into the Location Mapper's edit form -
 		// see PrepToolsPanel's edit-row listeners, which push this on every keystroke/arrow-key
 		// adjustment, and PrepToolsPlugin#updateLocationPreview()/#clearLocationPreview().
-		WildernessLocation preview = plugin.getPreviewWildernessLocation();
+		WildernessLocation preview = locations.getPreview();
 		if (preview != null)
 		{
 			drawLocationBox(graphics, preview, plane, drawDistance, PREVIEW_BORDER_COLOR, PREVIEW_LABEL_COLOR);

@@ -89,6 +89,7 @@ public class PrepToolsPanel extends PluginPanel
 	private static final int LOG_SCROLL_HEIGHT = 160;
 
 	private final PrepToolsPlugin plugin;
+	private final ConfigListEditor lists;
 	private final SpriteManager spriteManager;
 	private final ItemManager itemManager;
 
@@ -141,6 +142,7 @@ public class PrepToolsPanel extends PluginPanel
 	private JButton copyClanIdsButton;
 	private JButton copyClanWeaponsButton;
 	private List<ClanIdRow> lastClanIdRows = Collections.emptyList();
+	private boolean clanIdsInitialised;
 	private ClanWeaponSummary lastClanWeapons;
 
 	// --- Friends chat log ---
@@ -175,16 +177,14 @@ public class PrepToolsPanel extends PluginPanel
 	private static final Color LOCATION_EDITED_COLOR = ColorScheme.BRAND_ORANGE;
 	private static final Color LOCATION_YOURS_COLOR = new Color(80, 200, 80);
 
-	PrepToolsPanel(PrepToolsPlugin plugin, SpriteManager spriteManager, ItemManager itemManager)
+	PrepToolsPanel(PrepToolsPlugin plugin, ConfigListEditor lists, SpriteManager spriteManager, ItemManager itemManager)
 	{
-		// false = don't let PluginPanel wrap this whole panel in its own outer scroll pane - each tab
-		// already has its own (wrapTabContent()). BUG FIX: with both, a tab taller than the sidebar
-		// (Location, with its long saved list) grew to full height inside the OUTER pane, so its
-		// inner pane had nothing to scroll - yet still swallowed every mouse-wheel event over the
-		// content. Only dragging the outer scrollbar worked. Same as TimeTrackingPanel (RuneLite
-		// core), the model for this tab/scroll layout.
+		// false: no outer scroll pane - each tab has its own (wrapTabContent()). With both, a tall tab
+		// grows inside the outer pane and its own pane swallows the mouse wheel without scrolling.
+		// Same as TimeTrackingPanel (RuneLite core).
 		super(false);
 		this.plugin = plugin;
+		this.lists = lists;
 		this.spriteManager = spriteManager;
 		this.itemManager = itemManager;
 
@@ -517,7 +517,7 @@ public class PrepToolsPanel extends PluginPanel
 		}
 
 		// Plugin rejects a rename onto another caller's name - leave the form open in that case.
-		if (plugin.editCaller(editingCallerName, newName.trim(), callerEditNicknameField.getText()))
+		if (lists.editCaller(editingCallerName, newName.trim(), callerEditNicknameField.getText()))
 		{
 			closeCallerEdit();
 		}
@@ -583,7 +583,7 @@ public class PrepToolsPanel extends PluginPanel
 			return;
 		}
 
-		plugin.addCallerFromPanel(text.trim());
+		lists.addCallerFromPanel(text.trim());
 		addCallerField.setText("");
 	}
 
@@ -666,7 +666,7 @@ public class PrepToolsPanel extends PluginPanel
 	 * Rebuilds the list of caller rows. Called once at startup and again whenever the "Callers"
 	 * config text changes.
 	 */
-	void rebuild(List<PrepToolsPlugin.CallerEntry> entries)
+	void rebuild(List<CallerEntry> entries)
 	{
 		listPanel.removeAll();
 		radiosByKey.clear();
@@ -676,7 +676,7 @@ public class PrepToolsPanel extends PluginPanel
 
 		for (int i = 0; i < entries.size(); i++)
 		{
-			PrepToolsPlugin.CallerEntry entry = entries.get(i);
+			CallerEntry entry = entries.get(i);
 			addRow(Text.standardize(entry.name), entry.name, entry.nickname, entry.enabled, i == 0, i == entries.size() - 1);
 		}
 
@@ -719,7 +719,7 @@ public class PrepToolsPanel extends PluginPanel
 			{
 				return;
 			}
-			plugin.setPinnedCaller(realName);
+			lists.setPinnedCaller(realName);
 		});
 
 		buttonGroup.add(radio);
@@ -733,7 +733,7 @@ public class PrepToolsPanel extends PluginPanel
 		enabledBox.setToolTipText(enabled
 			? "Enabled - untick to keep " + realName + " in the list without using them as a caller"
 			: "Disabled - tick to use " + realName + " as a caller again");
-		enabledBox.addActionListener(e -> plugin.setCallerEnabled(realName, enabledBox.isSelected()));
+		enabledBox.addActionListener(e -> lists.setCallerEnabled(realName, enabledBox.isSelected()));
 
 		JPanel westPanel = new JPanel();
 		westPanel.setLayout(new BoxLayout(westPanel, BoxLayout.X_AXIS));
@@ -776,7 +776,7 @@ public class PrepToolsPanel extends PluginPanel
 		editButton.addActionListener(e -> openCallerEdit(realName, nickname));
 		eastPanel.add(editButton);
 		eastPanel.add(Box.createHorizontalStrut(2));
-		eastPanel.add(createDeleteButton(realName, plugin::removeCaller));
+		eastPanel.add(createDeleteButton(realName, lists::removeCaller));
 
 		row.add(westPanel, BorderLayout.WEST);
 		row.add(centerPanel, BorderLayout.CENTER);
@@ -818,14 +818,14 @@ public class PrepToolsPanel extends PluginPanel
 		if (!isFirst)
 		{
 			JButton upButton = createSmallButton("▲", "Move up (earlier fallback priority)");
-			upButton.addActionListener(e -> plugin.moveCaller(realName, -1));
+			upButton.addActionListener(e -> lists.moveCaller(realName, -1));
 			buttons.add(upButton);
 		}
 
 		if (!isLast)
 		{
 			JButton downButton = createSmallButton("▼", "Move down (later fallback priority)");
-			downButton.addActionListener(e -> plugin.moveCaller(realName, 1));
+			downButton.addActionListener(e -> lists.moveCaller(realName, 1));
 			buttons.add(downButton);
 		}
 
@@ -1005,7 +1005,7 @@ public class PrepToolsPanel extends PluginPanel
 			return;
 		}
 
-		plugin.addSnipeFromPanel(text.trim());
+		lists.addSnipeFromPanel(text.trim());
 		addSnipeField.setText("");
 	}
 
@@ -1046,7 +1046,7 @@ public class PrepToolsPanel extends PluginPanel
 		eastPanel.setBackground(row.getBackground());
 		eastPanel.add(status);
 		eastPanel.add(Box.createHorizontalStrut(4));
-		eastPanel.add(createDeleteButton(realName, plugin::removeSnipedName));
+		eastPanel.add(createDeleteButton(realName, lists::removeSnipedName));
 
 		row.add(nameLabel, BorderLayout.CENTER);
 		row.add(eastPanel, BorderLayout.EAST);
@@ -1095,7 +1095,7 @@ public class PrepToolsPanel extends PluginPanel
 				+ "Spammer settings) to send the selected message to public chat.\n\n"
 				+ "Click a message to select it, ✕ to remove it, or tick Random to "
 				+ "send a random one each press instead. Max "
-				+ PrepToolsPlugin.SPAM_MESSAGE_MAX_LENGTH + " characters, and at most one "
+				+ ConfigListEditor.SPAM_MESSAGE_MAX_LENGTH + " characters, and at most one "
 				+ "message every 5 seconds.");
 
 		spamRandomCheckBox.setBackground(ColorScheme.DARK_GRAY_COLOR);
@@ -1107,7 +1107,7 @@ public class PrepToolsPanel extends PluginPanel
 		{
 			if (!updatingSpamProgrammatically)
 			{
-				plugin.setSpamRandom(spamRandomCheckBox.isSelected());
+				lists.setSpamRandom(spamRandomCheckBox.isSelected());
 			}
 		});
 
@@ -1116,9 +1116,9 @@ public class PrepToolsPanel extends PluginPanel
 		spamListPanel.setAlignmentX(LEFT_ALIGNMENT);
 		spamListPanel.setMaximumSize(new Dimension(PluginPanel.PANEL_WIDTH, Integer.MAX_VALUE));
 
-		addSpamField.setToolTipText("Message to save, max " + PrepToolsPlugin.SPAM_MESSAGE_MAX_LENGTH + " characters");
+		addSpamField.setToolTipText("Message to save, max " + ConfigListEditor.SPAM_MESSAGE_MAX_LENGTH + " characters");
 		addSpamField.setFont(FontManager.getRunescapeSmallFont());
-		limitTextFieldLength(addSpamField, PrepToolsPlugin.SPAM_MESSAGE_MAX_LENGTH);
+		limitTextFieldLength(addSpamField, ConfigListEditor.SPAM_MESSAGE_MAX_LENGTH);
 		addSpamField.addActionListener(e -> addSpamFromField());
 
 		JButton addSpamButton = createSmallButton("+ Add", "Save this message");
@@ -1151,7 +1151,7 @@ public class PrepToolsPanel extends PluginPanel
 			return;
 		}
 
-		plugin.addSpamMessageFromPanel(text.trim());
+		lists.addSpamMessageFromPanel(text.trim());
 		addSpamField.setText("");
 	}
 
@@ -1217,13 +1217,13 @@ public class PrepToolsPanel extends PluginPanel
 		{
 			if (!updatingSpamProgrammatically)
 			{
-				plugin.setSelectedSpamMessage(message);
+				lists.setSelectedSpamMessage(message);
 			}
 		});
 		spamButtonGroup.add(radio);
 
 		row.add(radio, BorderLayout.CENTER);
-		row.add(createDeleteButton(message, plugin::removeSpamMessage), BorderLayout.EAST);
+		row.add(createDeleteButton(message, lists::removeSpamMessage), BorderLayout.EAST);
 		spamListPanel.add(row);
 	}
 
@@ -1418,13 +1418,17 @@ public class PrepToolsPanel extends PluginPanel
 	}
 
 	/**
-	 * Rebuilds the Clan Info tab's player id list from scratch every call - unlike the caller/snipe lists (which
-	 * only rebuild on a config change and get cheap per-tick label updates in between), the id order
-	 * itself changes as players move on/off screen or relog, so there's no stable "same set of rows,
-	 * just update status text" split to make here. Called once per tick; cheap at clan-sized lists.
+	 * Rebuilds the Clan Info tab's player id list - only when the rows differ from last tick's, as
+	 * this is called every tick.
 	 */
 	void updateClanIds(List<ClanIdRow> rows)
 	{
+		// Same rows as last tick (the usual case) - nothing to rebuild.
+		if (clanIdsInitialised && rows.equals(lastClanIdRows))
+		{
+			return;
+		}
+		clanIdsInitialised = true;
 		lastClanIdRows = new ArrayList<>(rows);
 		copyClanIdsButton.setEnabled(!rows.isEmpty());
 		clanIdsListPanel.removeAll();
@@ -1605,7 +1609,7 @@ public class PrepToolsPanel extends PluginPanel
 
 		teamCapeNameField.setToolTipText("Name, max 5 characters, e.g. EoP");
 		teamCapeNameField.setFont(FontManager.getRunescapeSmallFont());
-		limitTextFieldLength(teamCapeNameField, PrepToolsPlugin.TEAM_CAPE_NAME_MAX_LENGTH);
+		limitTextFieldLength(teamCapeNameField, ConfigLists.TEAM_CAPE_NAME_MAX_LENGTH);
 		teamCapeNameField.addActionListener(e -> saveTeamCapeNameFromFields());
 
 		JButton saveButton = createSmallButton("Save", "Save this team number's custom name");
@@ -1643,7 +1647,7 @@ public class PrepToolsPanel extends PluginPanel
 			return;
 		}
 
-		plugin.setTeamCapeNameFromPanel(teamNumber, name.trim());
+		lists.setTeamCapeName(teamNumber, name.trim());
 		teamCapeNameField.setText("");
 	}
 
@@ -1700,7 +1704,7 @@ public class PrepToolsPanel extends PluginPanel
 
 			JButton deleteButton = createSmallButton("✕", "Remove this team's custom name");
 			deleteButton.setForeground(new Color(220, 80, 80));
-			deleteButton.addActionListener(e -> plugin.removeTeamCapeName(teamNumber));
+			deleteButton.addActionListener(e -> lists.removeTeamCapeName(teamNumber));
 
 			row.add(label, BorderLayout.CENTER);
 			row.add(deleteButton, BorderLayout.EAST);

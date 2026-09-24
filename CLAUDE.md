@@ -11,7 +11,7 @@ A team-PK / multi-clanning coordination tool — the kind of thing a small clan 
 fighting as a team in the wilderness. Inspired by [Exilent](https://exilent.org), a PK-focused OSRS
 client with similar team-coordination features. Core pieces:
 
-- **Team** — "your team" everywhere in this plugin (`PrepToolsPlugin#isOwnTeamMember()`) = you +
+- **Team** — "your team" everywhere in this plugin (`TeamTracker#isOwnTeam()`) = you +
   friends chat members + **clan members** (`Player#isClanMember()` - teams don't always run an FC)
   + every configured caller, enabled or disabled. Used by pile finder, opponent prayer/weapon
   counts, freeze/TB "hide for own team", teammate freeze-spell blocking, and the Clan Info tab.
@@ -22,7 +22,7 @@ client with similar team-coordination features. Core pieces:
   (`prioritiseCallerFollow()`), not Attack - a target/pile/snipe Attack on the same tile still wins.
   ✎ on a row opens an edit form (name + nickname) below the list - a separate panel, not an in-row
   form, because the row list is a `GridLayout` and one taller row would stretch every row
-  (`PrepToolsPlugin#editCaller()` keeps list position, enabled state and the primary pin).
+  (`ConfigListEditor#editCaller()` keeps list position, enabled state and the primary pin).
   Each row is two lines (asked for - one line was "too busy"): radio + in-game name on top,
   nickname + on-screen status underneath (`PrepToolsPanel#addRow()`).
 - **Highlighting** — three independent detection categories, each with its own config section and
@@ -30,12 +30,12 @@ client with similar team-coordination features. Core pieces:
   "Overlay" section, `PrepToolsConfig#highlightShape()` etc.) so every highlighted player looks
   visually consistent no matter which category put them there. Priority when a player qualifies
   for more than one at once, lowest to highest: backup caller < attacker < snipe list < pile
-  finder < primary caller < target (`PrepToolsPlugin#rebuildHighlightStyles()`, cached once per tick;
-  `#computeHighlightStyles()` adds the per-frame new-target flash on top) - e.g. a target overrides
+  finder < primary caller < target (`HighlightTracker#rebuildStyles()`, cached once per tick;
+  `#getStyles()` adds the per-frame new-target flash on top) - e.g. a target overrides
   its own pile-finder highlight.
   - **Caller** — the primary caller and any backup callers from the caller list get an outline
     (default green for primary, a separate colour for backups), driven entirely by the configured
-    caller list matching on-screen player names (`PrepToolsPlugin#updateCallersAndTargets()`).
+    caller list matching on-screen player names (`HighlightTracker#updateCallersAndTargets()`).
   - **Target** — whoever the *primary* caller is currently interacting with (attacking, following,
     etc. — `Player#getInteracting()`), i.e. one player at a time, only ever derived from the primary
     caller, never a backup. **Never a teammate** - a caller following whoever leads the fall-in used
@@ -45,12 +45,12 @@ client with similar team-coordination features. Core pieces:
     (`showTargetFlash()`/`targetFlashColor()`/`targetFlashDurationMillis()`), and can be prioritised
     to the default left-click Attack action (`prioritiseTargetAttack()`).
   - **Attackers** (own config section, default off) — enemy (non-team) players whose
-    `getInteracting()` is *you* (`PrepToolsPlugin#updateAttackers()`). Insertion-ordered, so the
+    `getInteracting()` is *you* (`HighlightTracker#updateAttackers()`). Insertion-ordered, so the
     `maxAttackers` cap (0 = no limit) keeps whoever engaged you first. Optional left-click
     Attack (`prioritiseAttackerAttack()`, default off), in the Menu section's priority order.
   - **Pile Finder** — a different mechanic: detects an *uncalled* pile by counting, per candidate
     target, how many of your own team (FC/clan members, callers, you) are simultaneously interacting
-    with the same non-team player (`PrepToolsPlugin#updateTargetedPlayers()`); once that count meets a configurable
+    with the same non-team player (`HighlightTracker#updatePiles()`); once that count meets a configurable
     threshold (`targetedPlayerThreshold()`, default low but user-settable), that player is
     highlighted even though nobody explicitly called them. Team-on-team interactions (sparring) and
     interactions targeting a configured caller are excluded from the count so callers can never
@@ -68,29 +68,30 @@ client with similar team-coordination features. Core pieces:
 - **Infobox panel** — bottom-right HUD: your stats (HP/prayer/strength/ranged — prayer and
   strength colour green while boosted at/above a threshold), freeze/teleblock status, target's
   prayer, opponent prayers/weapons (melee/ranged/magic — melee/ranged/magic weapon IDs live in
-  `PrepToolsPlugin`'s `MELEE_WEAPON_IDS`/`RANGED_WEAPON_IDS`/`MAGIC_WEAPON_IDS`), who's attacking
+  `WeaponStyle`), who's attacking
   you, current wilderness location, your player index (informational — see the PID note below).
 - **Friends chat log** — sidebar panel (the "FC" tab, alongside the "Missing" list), newest-first,
   logs members joining/leaving/dying (other members' deaths from the death animation, your own as
   "You died" from `ActorDeath`); copyable via a header Copy button.
 - **Attack Alert** (config section, everything **default off**) — two triggers: *attacked* = an
   enemy (non-team) player starts interacting with you and none were the tick before
-  (`PrepToolsPlugin#updateAttackAlert()`, shared cooldown), and *frozen* = a freeze spell graphic on
+  (`AttackAlert#onGameTick()`, shared cooldown), and *frozen* = a freeze spell graphic on
   you (`onGraphicChanged`, independent of Freeze Timers being on). Attacked can play a sound - a
   dropdown of 7 in-game sounds (`AttackAlertSound`, `SoundEffectID` constants, picked by us not
   the user; `client.playSoundEffect(id, volume)`, volume 0-127, plays even with game sounds muted)
   or a custom `.wav` via core's `AudioPlayer` off the client thread. Either trigger can flash a
   coloured border round the whole screen (`ScreenBorderFlashOverlay`, `ALWAYS_ON_TOP`, blinking,
   per-trigger colour). "Keep border while frozen" (default off) leaves it on, solid, until your
-  freeze ends - your own freeze is tracked separately from `freezeStates`
-  (`#updateLocalFreeze()`: duration, early movement after the grace ticks, death), so it works
-  with Freeze Timers off. Replaced a raw sound-ID field (asked for a dropdown instead). The infobox's
-  "Attacking you" row, unlike this, still counts *anyone* interacting with you, teammates
-  following you included. (Core's `Notification` config type + `Notifier` was considered: free UI
+  freeze ends - your own freeze is always tracked (`FreezeTracker#getLocalFreeze()`), whatever the
+  Freeze Timers settings; the infobox's freeze status row reads the same state. Replaced a raw
+  sound-ID field (asked for a dropdown instead). The infobox's "Attacking you" row skips
+  teammates too (it used to count anyone following you). (Core's `Notification` config type + `Notifier` was considered: free UI
   incl. a whole-screen tint, but no in-game sounds and silent while focused by default.)
-- **Scout (Discord)** — hotkey (F9 default) posts e.g. `10x Team-50 (EoP), 3x Team-12, W308,
-  Ferox Enclave, lvl 15 wild` to a Discord webhook (`scoutWebhookUrl`, `secret = true`),
-  with your in-game name as the poster (`PrepToolsPlugin#postScoutReport()`/`#buildScoutReport()`).
+- **Scout (Discord)** — hotkey (F9 default) posts to a Discord webhook (`scoutWebhookUrl`,
+  `secret = true`), with your in-game name as the poster (`ScoutReporter#post()`). Multi-line,
+  format asked for explicitly (`ScoutReport#format()`, tested in `ScoutReportTest`):
+  `W308, Ferox Enclave, lvl 15 wild.` then one `10x Team-50 (EoP),` line per cape, most first,
+  last line without the comma (`No team capes in sight` if none qualify).
   Counts **every** on-screen player by team cape number, own team included - the same numbers as
   the Team Capes overlay (it first skipped FC/clan members, which silently dropped named capes the
   overlay showed). Capes tab name added if set,
@@ -134,7 +135,7 @@ client with similar team-coordination features. Core pieces:
   it's back for good now, no need to ask again. Sends on a **configurable channel** (Friends Chat
   default, Clan Chat also selectable via `locationSpamChannel`) — unlike Pile Spam, this one's
   meant for a specific coordination channel.
-  Both hotkeys actually *send* (not just pre-fill) via `PrepToolsPlugin#sendChatMessage()` /
+  Both hotkeys actually *send* (not just pre-fill) via `ChatHotkeys#send()` /
   `client.runScript(ScriptID.CHAT_SEND, ...)`.
 - **Location Mapper** (sidebar "Location" tab, builds the `WildernessLocation` list Location Spam
   reads from) — coordinate fields are labelled by cardinal direction + axis (West/East X,
@@ -148,7 +149,7 @@ client with similar team-coordination features. Core pieces:
   (`PrepToolsPlugin#onMenuOpened()`), an alternative to the sidebar's own Set Corner buttons that
   doesn't require standing exactly on the tile - it captures the clicked tile, not your own position.
   **Overlapping boxes / priority:** each `WildernessLocation` has an integer `priority` (Gson leaves
-  it 0 for locations saved before it existed). `PrepToolsPlugin#findContainingLocations()` orders
+  it 0 for locations saved before it existed). `LocationTracker#findContaining()` orders
   every box containing a point: **highest priority, then smallest area (most specific), then list
   order** - the first one is the resolved location, the rest show in the Mapper as "Also in (lost on
   priority)". Before priorities, it was purely first-in-list, so a big box saved first swallowed
@@ -239,6 +240,40 @@ three-tier visual style, spaced apart with explicit `Box.createVerticalStrut(TIE
 `createDescriptionArea()` (muted text + left accent stripe), `styleInputRow()` (padding only, no
 background/border box - tried a boxed-card look, asked to remove it while keeping the spacing).
 
+### Code map (where to make a change)
+
+`PrepToolsPlugin` is only wiring: lifecycle, routing events to the feature classes below,
+reloading them on `ConfigChanged`, and pushing data to the sidebar. Each feature owns its state:
+
+| Class | Owns |
+|---|---|
+| `TeamTracker` | who's on your team - `refresh()` once per tick, **first**; everything else calls `isOwnTeam()` (a set lookup) |
+| `HighlightTracker` | primary/backup callers + pin, target (+flash), snipes, piles, attackers, per-player `HighlightStyle` |
+| `MenuHandler` | all right-click menu edits (`onPostMenuSort`, shift-walk on `onClientTick`) |
+| `FreezeTracker` | freeze/TB timers (`FreezeState`/`TeleblockState`) + your own freeze |
+| `FightInfoTracker` | infobox numbers (opponent prayers/weapons, attacking you, stat boosts) |
+| `AttackAlert` | attacked/frozen sound + `ScreenBorderFlashOverlay` colour |
+| `LocationTracker` | position, wilderness level/location, Mapper corners/preview, `WildernessLocationStore` |
+| `ChatHotkeys`, `ScoutReporter` | Pile Spam, Spammer, Location Spam; Scout webhook |
+| `ConfigListEditor` | every edit to the hidden list config (callers/snipe/spam/capes) - sidebar + menu |
+| `CallerEntry`, `ConfigLists`, `ScoutReport`, `WeaponStyle`, `AttackCategory#resolve()` | pure parsing/formatting - unit tested |
+
+Overlays inject the tracker they draw from, not the plugin. Tests live in
+`runelite-client/src/test/java/net/runelite/client/plugins/preptools/` - pure logic, plus
+`MenuHandlerTest`/`TrackerTest` driving the real classes against a mocked `Client`/`Player`
+(`TestMenuEntry` from core tests builds menu entries). Add a test with any behaviour change there.
+
+- **Feature classes are bound as singletons in `PrepToolsPlugin#configure()`.** RuneLite installs
+  the plugin as a Guice module in its own child injector, so this scopes them to the plugin. Without
+  it every injection point (plugin, overlays, other trackers) gets its **own** instance and they
+  silently stop sharing state; `@Singleton` on the class instead risks Guice creating it in the
+  parent injector (all its deps live there), outliving the plugin. New feature class = add it to
+  that list.
+- **Threads:** game state only on the client thread (game events, overlays, `clientThread.invoke`
+  from hotkeys). The sidebar only on the Swing EDT - `PrepToolsPlugin#onSwing()` hands it a
+  snapshot. It used to be updated straight from `onGameTick` (client thread), which Swing doesn't
+  allow. Values the sidebar writes (pin, config lists, Mapper preview) are `volatile` swaps.
+
 ## Open questions / unverified
 
 Everything built but not yet confirmed in game / on a real machine - move an item into the relevant
@@ -250,6 +285,13 @@ section (or delete it) once the user confirms it:
   teammates from the caller's target and hiding teammate Attack. The pile finder already excluded
   teammates, so the report's "set as a pile" was most likely the *target* highlight (primary caller
   following the leader); confirm the leader no longer gets any highlight in game.
+- **The 2026-09-24 refactor** (plugin split into the classes in the Code map) - tests cover the
+  logic, but it hasn't run in game yet. Watch for: highlights, menu priority, freeze/TB timers,
+  sidebar status, hotkeys, scout. Also the bug fixes it shipped with: freeze not restarted by a hit
+  while frozen/immune; shift-walk now beats a prioritised Attack; a random enemy's Attack only
+  promoted when the removed teammate entry was the left-click; tracked players cleared on
+  hop/logout; "Add caller"/"Add to snipe list" hidden when already added; freeze status row works
+  with Freeze Timers off; Scout's multi-line format.
 - **Attackers highlight + the 4-slot Attack priority, "Keep border while frozen", Scout's new
   `2x Team-50 (EoP)` format** - built 2026-09-24, not yet seen in game. Scout sending itself is
   CONFIRMED working.
@@ -270,7 +312,8 @@ section (or delete it) once the user confirms it:
 ./gradlew :client:shadowJar       # build runelite-client/build/libs/client-*-shaded.jar
 ./run-runelite.sh                 # launch the locally built client (2x UI scale)
 
-./gradlew :client:test            # unit tests (incl. WildernessLocationStoreTest) - run before pushing
+./gradlew :client:test --tests 'net.runelite.client.plugins.preptools.*'   # plugin tests only (seconds)
+./gradlew :client:test            # all unit tests (incl. PluginManagerTest) - run before pushing
 ./gradlew :client:checkstyleMain  # style rules CI enforces
 ./gradlew :buildAll               # what CI actually runs (ci/build.sh): compile, checkstyle, tests, javadoc
 ```
@@ -460,7 +503,7 @@ These cost real debugging time to find. Don't rediscover them the hard way:
   reference field read cross-thread without synchronization (e.g. `lastKnownWorldPoint`) is fine -
   reference assignment is atomic; this is specifically a collection-structural-mutation problem.
 - **`ScriptID.CHAT_SEND`'s "modes" integer, all CONFIRMED in game:** public = 0 (Spammer/Pile
-  Spam), clan chat = 1, friends chat = 2 (`PrepToolsPlugin`'s `CHAT_MODE_*` constants). Neither
+  Spam), clan chat = 1, friends chat = 2 (`ChatHotkeys`'s `CHAT_MODE_*` constants). Neither
   RuneLite's source/docs nor a web search had the literal values - they were guessed (FC/clan
   initially swapped) and fixed by testing.
 - **A `PluginPanel` with its own per-tab scroll panes must call `super(false)`.** The default
@@ -492,6 +535,10 @@ These cost real debugging time to find. Don't rediscover them the hard way:
   while CI fails. To reproduce CI locally after `./gradlew :client:javadoc`:
   `sed '/^-d /d' runelite-client/build/tmp/javadoc/javadoc.options > /tmp/jd.options && javadoc @/tmp/jd.options -Xdoclint:all,-missing -d /tmp/jd 2>&1 | grep error`.
   (`//` comments are unaffected.)
+- **A freeze spell's graphic shows on every hit, frozen or not** - a barrage on someone already
+  frozen, or immune (5 ticks after a freeze), still plays the ice graphic but doesn't freeze or
+  refresh. `FreezeTracker` ignores freeze graphics on anyone it's already tracking (frozen or
+  immune); it used to restart the countdown, showing freezes that weren't there.
 - **Git remotes/identity:** `origin` is the user's own fork (`git@github.com:J-Haynes/Runelite-pgtools.git`,
   push here); `upstream` is `runelite/runelite` (fetch only - never push). The user has set their
   own git `user.name`/`user.email`; Claude still must not change git config itself. The `gh` CLI

@@ -27,13 +27,10 @@ import net.runelite.client.ui.overlay.OverlayPosition;
  * Positioning technique matches the uploaded FrozenIconOverlay.class reference: the icon is
  * placed with Perspective.getCanvasImageLocation(), the purpose-built RuneLite API for
  * positioning an image at a world location that automatically centres based on the image's own
- * dimensions - this is more correct than manually re-deriving a centred position from text
- * metrics, which is what the previous version of this file did. The countdown text is then
- * anchored to the right of wherever the icon actually ended up.
+ * dimensions. The countdown text is anchored to the right of wherever the icon ended up.
  *
- * Sprites are fetched with the synchronous SpriteManager.getSprite(int, int) - also matching the
- * reference plugin - rather than the async callback + manual cache used previously. Sprites are
- * part of the client's core cache, so this resolves immediately in practice; no caching needed.
+ * Sprites come from the synchronous SpriteManager.getSprite(int, int), like the reference plugin -
+ * they're in the client's core cache, so no async load or caching is needed.
  *
  * Layer is ABOVE_WIDGETS - strictly higher than CallerTargetOverlay/CallerNameOverlay's
  * UNDER_WIDGETS - so the freeze icon and countdown always render on top of the caller/target
@@ -46,15 +43,15 @@ public class FreezeOverlay extends Overlay
 	private static final int ANCHOR_WORLD_OFFSET = 20;
 	private static final int ICON_TEXT_GAP = 6;
 
-	private final PrepToolsPlugin plugin;
+	private final FreezeTracker freezes;
 	private final PrepToolsConfig config;
 	private final Client client;
 	private final SpriteManager spriteManager;
 
 	@Inject
-	private FreezeOverlay(PrepToolsPlugin plugin, PrepToolsConfig config, Client client, SpriteManager spriteManager)
+	private FreezeOverlay(FreezeTracker freezes, PrepToolsConfig config, Client client, SpriteManager spriteManager)
 	{
-		this.plugin = plugin;
+		this.freezes = freezes;
 		this.config = config;
 		this.client = client;
 		this.spriteManager = spriteManager;
@@ -70,7 +67,7 @@ public class FreezeOverlay extends Overlay
 			return null;
 		}
 
-		Map<Player, PrepToolsPlugin.FreezeState> freezeStates = plugin.getFreezeStates();
+		Map<Player, FreezeState> freezeStates = freezes.getFreezeStates();
 		if (freezeStates.isEmpty())
 		{
 			return null;
@@ -89,10 +86,10 @@ public class FreezeOverlay extends Overlay
 
 		graphics.setFont(graphics.getFont().deriveFont(Font.BOLD, 18f));
 
-		for (Map.Entry<Player, PrepToolsPlugin.FreezeState> entry : freezeStates.entrySet())
+		for (Map.Entry<Player, FreezeState> entry : freezeStates.entrySet())
 		{
 			Player player = entry.getKey();
-			PrepToolsPlugin.FreezeState state = entry.getValue();
+			FreezeState state = entry.getValue();
 			if (player == null)
 			{
 				continue;
@@ -115,7 +112,7 @@ public class FreezeOverlay extends Overlay
 				}
 				else
 				{
-					double remainingSeconds = (PrepToolsPlugin.FREEZE_IMMUNITY_DURATION_MILLIS - (now - state.immunityStartTimeMillis)) / 1000.0;
+					double remainingSeconds = (FreezeTracker.FREEZE_IMMUNITY_DURATION_MILLIS - (now - state.immunityStartTimeMillis)) / 1000.0;
 					if (remainingSeconds <= 0)
 					{
 						continue;

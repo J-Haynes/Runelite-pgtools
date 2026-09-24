@@ -17,13 +17,13 @@ import net.runelite.client.ui.overlay.OverlayUtil;
  */
 public class CallerMinimapOverlay extends Overlay
 {
-	private final PrepToolsPlugin plugin;
+	private final HighlightTracker highlights;
 	private final PrepToolsConfig config;
 
 	@Inject
-	private CallerMinimapOverlay(PrepToolsPlugin plugin, PrepToolsConfig config)
+	private CallerMinimapOverlay(HighlightTracker highlights, PrepToolsConfig config)
 	{
-		this.plugin = plugin;
+		this.highlights = highlights;
 		this.config = config;
 		setPosition(OverlayPosition.DYNAMIC);
 		setLayer(OverlayLayer.ABOVE_WIDGETS);
@@ -32,7 +32,7 @@ public class CallerMinimapOverlay extends Overlay
 	@Override
 	public Dimension render(Graphics2D graphics)
 	{
-		Player primary = plugin.getPrimaryCaller();
+		Player primary = highlights.getPrimaryCaller();
 		if (primary == null)
 		{
 			return null;
@@ -50,7 +50,7 @@ public class CallerMinimapOverlay extends Overlay
 		if (config.showNames())
 		{
 			String name = config.preferNicknameDisplay()
-				? plugin.getCallerNicknames().getOrDefault(primary, primary.getName())
+				? highlights.getCallerNicknames().getOrDefault(primary, primary.getName())
 				: primary.getName();
 			if (name != null)
 			{

@@ -87,18 +87,16 @@ public class FightInfoOverlay extends Overlay
 	private static final Color SELF_ACCENT_COLOR = Color.WHITE;
 	private static final Color OPPONENT_ACCENT_COLOR = new Color(200, 70, 70);
 
-	// Generous offscreen buffer size - just needs to comfortably fit the panel; unused area stays
-	// transparent. BUG FIX: this was 320x220, sized back when the panel only had three possible
-	// sections (opponent prayers/weapons/attacking you, ~190px tall at most). With hitpoints,
-	// freeze status and target's prayer added on top, every section enabled at once in normal
-	// (non-compact) mode needs ~330px - taller than the old buffer, so content past 220px was
-	// silently clipped by the fixed-size BufferedImage below. Sized here with real headroom above
-	// that ~330px worst case (now ~380px wide too, since "Your Stats" can draw up to four stats
-	// inline on one row) so the panel doesn't break again the next time a section is added.
+	// Offscreen buffer, sized with headroom over the panel's worst case (every section on, normal
+	// mode: ~330px tall; "Your Stats" up to four stats on one row). Anything past it is silently
+	// clipped - grow it when adding a section.
 	private static final int BUFFER_WIDTH = 380;
 	private static final int BUFFER_HEIGHT = 420;
 
-	private final PrepToolsPlugin plugin;
+	private final FightInfoTracker fightInfo;
+	private final FreezeTracker freezes;
+	private final HighlightTracker highlights;
+	private final LocationTracker locations;
 	private final PrepToolsConfig config;
 	private final Client client;
 	private final ItemManager itemManager;
@@ -107,18 +105,18 @@ public class FightInfoOverlay extends Overlay
 	// Simple cache so we only request each sprite from SpriteManager once.
 	private final Map<Integer, BufferedImage> spriteCache = new HashMap<>();
 
-	// PERFORMANCE: this pair used to be a `new BufferedImage(BUFFER_WIDTH, BUFFER_HEIGHT, ...)` +
-	// createGraphics() allocated fresh on every single render() call (every frame, ~every 16ms) -
-	// a ~571KB (340*420*4 bytes) heap allocation roughly 60 times a second whenever the overlay was
-	// enabled, purely to be thrown away and GC'd moments later. Allocated once, lazily, on first
-	// render instead, and reused every frame after - see render()'s clearBuffer() call below.
+	// Allocated once on first render and cleared each frame - a fresh ~600KB image every frame was
+	// a measurable FPS cost.
 	private BufferedImage buffer;
 	private Graphics2D bufferGraphics;
 
 	@Inject
-	private FightInfoOverlay(PrepToolsPlugin plugin, PrepToolsConfig config, Client client, ItemManager itemManager, SpriteManager spriteManager)
+	private FightInfoOverlay(FightInfoTracker fightInfo, FreezeTracker freezes, HighlightTracker highlights, LocationTracker locations, PrepToolsConfig config, Client client, ItemManager itemManager, SpriteManager spriteManager)
 	{
-		this.plugin = plugin;
+		this.fightInfo = fightInfo;
+		this.freezes = freezes;
+		this.highlights = highlights;
+		this.locations = locations;
 		this.config = config;
 		this.client = client;
 		this.itemManager = itemManager;
@@ -261,7 +259,7 @@ public class FightInfoOverlay extends Overlay
 			anySectionDrawn = true;
 		}
 
-		boolean hasOpponents = !plugin.getCurrentOpponents().isEmpty();
+		boolean hasOpponents = fightInfo.isAnyOpponents();
 
 		if (prayersEnabled && hasOpponents)
 		{
@@ -271,9 +269,9 @@ public class FightInfoOverlay extends Overlay
 
 			int x = PADDING;
 
-			x += drawSpriteIcon(graphics, SPRITE_PROTECT_MELEE, plugin.getOpponentMeleePrayerCount(), x, y);
-			x += drawSpriteIcon(graphics, SPRITE_PROTECT_RANGED, plugin.getOpponentRangedPrayerCount(), x, y);
-			x += drawSpriteIcon(graphics, SPRITE_PROTECT_MAGIC, plugin.getOpponentMagicPrayerCount(), x, y);
+			x += drawSpriteIcon(graphics, SPRITE_PROTECT_MELEE, fightInfo.getOpponentMeleePrayerCount(), x, y);
+			x += drawSpriteIcon(graphics, SPRITE_PROTECT_RANGED, fightInfo.getOpponentRangedPrayerCount(), x, y);
+			x += drawSpriteIcon(graphics, SPRITE_PROTECT_MAGIC, fightInfo.getOpponentMagicPrayerCount(), x, y);
 
 			maxWidth = Math.max(maxWidth, x);
 			y += ROW_HEIGHT + SECTION_GAP;
@@ -282,8 +280,8 @@ public class FightInfoOverlay extends Overlay
 
 		if (weaponsEnabled && hasOpponents)
 		{
-			boolean anyWeapons = plugin.getOpponentMeleeWeaponCount() > 0 || plugin.getOpponentRangedWeaponCount() > 0
-				|| plugin.getOpponentMagicWeaponCount() > 0;
+			boolean anyWeapons = fightInfo.getOpponentMeleeWeaponCount() > 0 || fightInfo.getOpponentRangedWeaponCount() > 0
+				|| fightInfo.getOpponentMagicWeaponCount() > 0;
 			if (anyWeapons)
 			{
 				drawSeparatorIfNeeded(graphics, anySectionDrawn, y, Math.max(maxWidth, PANEL_MIN_WIDTH));
@@ -292,17 +290,17 @@ public class FightInfoOverlay extends Overlay
 
 				int x = PADDING;
 
-				if (plugin.getOpponentMeleeWeaponCount() > 0)
+				if (fightInfo.getOpponentMeleeWeaponCount() > 0)
 				{
-					x += drawItemIcon(graphics, MELEE_WEAPON_ICON_ITEM_ID, plugin.getOpponentMeleeWeaponCount(), x, y);
+					x += drawItemIcon(graphics, MELEE_WEAPON_ICON_ITEM_ID, fightInfo.getOpponentMeleeWeaponCount(), x, y);
 				}
-				if (plugin.getOpponentRangedWeaponCount() > 0)
+				if (fightInfo.getOpponentRangedWeaponCount() > 0)
 				{
-					x += drawItemIcon(graphics, RANGED_WEAPON_ICON_ITEM_ID, plugin.getOpponentRangedWeaponCount(), x, y);
+					x += drawItemIcon(graphics, RANGED_WEAPON_ICON_ITEM_ID, fightInfo.getOpponentRangedWeaponCount(), x, y);
 				}
-				if (plugin.getOpponentMagicWeaponCount() > 0)
+				if (fightInfo.getOpponentMagicWeaponCount() > 0)
 				{
-					x += drawItemIcon(graphics, MAGIC_WEAPON_ICON_ITEM_ID, plugin.getOpponentMagicWeaponCount(), x, y);
+					x += drawItemIcon(graphics, MAGIC_WEAPON_ICON_ITEM_ID, fightInfo.getOpponentMagicWeaponCount(), x, y);
 				}
 
 				maxWidth = Math.max(maxWidth, x);
@@ -314,7 +312,7 @@ public class FightInfoOverlay extends Overlay
 		if (attackingEnabled)
 		{
 			// "Attacking You" section - ALWAYS shown when enabled, space always reserved, even when empty.
-			boolean blinkOn = plugin.isFlashingAttacker() && (System.currentTimeMillis() / FLASH_BLINK_PERIOD_MILLIS) % 2 == 0;
+			boolean blinkOn = fightInfo.isFlashingAttacker() && (System.currentTimeMillis() / FLASH_BLINK_PERIOD_MILLIS) % 2 == 0;
 
 			drawSeparatorIfNeeded(graphics, anySectionDrawn, y, Math.max(maxWidth, PANEL_MIN_WIDTH));
 
@@ -334,7 +332,7 @@ public class FightInfoOverlay extends Overlay
 
 			int x = PADDING;
 
-			if (plugin.getMeleeAttackerCount() == 0 && plugin.getRangedAttackerCount() == 0 && plugin.getMagicAttackerCount() == 0)
+			if (fightInfo.getMeleeAttackerCount() == 0 && fightInfo.getRangedAttackerCount() == 0 && fightInfo.getMagicAttackerCount() == 0)
 			{
 				graphics.setFont(graphics.getFont().deriveFont(Font.PLAIN, 13f));
 				graphics.setColor(Color.LIGHT_GRAY);
@@ -343,17 +341,17 @@ public class FightInfoOverlay extends Overlay
 			}
 			else
 			{
-				if (plugin.getMeleeAttackerCount() > 0)
+				if (fightInfo.getMeleeAttackerCount() > 0)
 				{
-					x += drawItemIcon(graphics, MELEE_WEAPON_ICON_ITEM_ID, plugin.getMeleeAttackerCount(), x, y);
+					x += drawItemIcon(graphics, MELEE_WEAPON_ICON_ITEM_ID, fightInfo.getMeleeAttackerCount(), x, y);
 				}
-				if (plugin.getRangedAttackerCount() > 0)
+				if (fightInfo.getRangedAttackerCount() > 0)
 				{
-					x += drawItemIcon(graphics, RANGED_WEAPON_ICON_ITEM_ID, plugin.getRangedAttackerCount(), x, y);
+					x += drawItemIcon(graphics, RANGED_WEAPON_ICON_ITEM_ID, fightInfo.getRangedAttackerCount(), x, y);
 				}
-				if (plugin.getMagicAttackerCount() > 0)
+				if (fightInfo.getMagicAttackerCount() > 0)
 				{
-					x += drawItemIcon(graphics, MAGIC_WEAPON_ICON_ITEM_ID, plugin.getMagicAttackerCount(), x, y);
+					x += drawItemIcon(graphics, MAGIC_WEAPON_ICON_ITEM_ID, fightInfo.getMagicAttackerCount(), x, y);
 				}
 			}
 
@@ -406,10 +404,9 @@ public class FightInfoOverlay extends Overlay
 
 	/**
 	 * Compact layout: no section labels, tighter padding throughout, each row instead marked with
-	 * a thin coloured accent stripe (see drawAccentStripe()). Opponent prayers and opponent
-	 * weapons used to share a single row here; they now each get their own row like every other
-	 * section, for the same reason they already did in normal mode - a shared row made it harder
-	 * to tell at a glance which icon belonged to which count. The "Attacking You" row still always
+	 * a thin coloured accent stripe (see drawAccentStripe()). Opponent prayers and weapons get a
+	 * row each, as in normal mode - a shared row made it hard to tell which icon had which count.
+	 * The "Attacking You" row still always
 	 * reserves its space - just with a small dash placeholder instead of the word "None" to save room.
 	 */
 	private Dimension renderCompact(Graphics2D graphics)
@@ -468,16 +465,16 @@ public class FightInfoOverlay extends Overlay
 			y += ROW_HEIGHT + COMPACT_ROW_GAP;
 		}
 
-		boolean hasOpponents = !plugin.getCurrentOpponents().isEmpty();
+		boolean hasOpponents = fightInfo.isAnyOpponents();
 
 		if (prayersEnabled && hasOpponents)
 		{
 			drawAccentStripe(graphics, y, OPPONENT_ACCENT_COLOR);
 
 			int x = COMPACT_PADDING;
-			x += drawSpriteIcon(graphics, SPRITE_PROTECT_MELEE, plugin.getOpponentMeleePrayerCount(), x, y);
-			x += drawSpriteIcon(graphics, SPRITE_PROTECT_RANGED, plugin.getOpponentRangedPrayerCount(), x, y);
-			x += drawSpriteIcon(graphics, SPRITE_PROTECT_MAGIC, plugin.getOpponentMagicPrayerCount(), x, y);
+			x += drawSpriteIcon(graphics, SPRITE_PROTECT_MELEE, fightInfo.getOpponentMeleePrayerCount(), x, y);
+			x += drawSpriteIcon(graphics, SPRITE_PROTECT_RANGED, fightInfo.getOpponentRangedPrayerCount(), x, y);
+			x += drawSpriteIcon(graphics, SPRITE_PROTECT_MAGIC, fightInfo.getOpponentMagicPrayerCount(), x, y);
 
 			maxWidth = Math.max(maxWidth, x);
 			y += ROW_HEIGHT + COMPACT_ROW_GAP;
@@ -485,24 +482,24 @@ public class FightInfoOverlay extends Overlay
 
 		if (weaponsEnabled && hasOpponents)
 		{
-			boolean anyWeapons = plugin.getOpponentMeleeWeaponCount() > 0 || plugin.getOpponentRangedWeaponCount() > 0
-				|| plugin.getOpponentMagicWeaponCount() > 0;
+			boolean anyWeapons = fightInfo.getOpponentMeleeWeaponCount() > 0 || fightInfo.getOpponentRangedWeaponCount() > 0
+				|| fightInfo.getOpponentMagicWeaponCount() > 0;
 			if (anyWeapons)
 			{
 				drawAccentStripe(graphics, y, OPPONENT_ACCENT_COLOR);
 
 				int x = COMPACT_PADDING;
-				if (plugin.getOpponentMeleeWeaponCount() > 0)
+				if (fightInfo.getOpponentMeleeWeaponCount() > 0)
 				{
-					x += drawItemIcon(graphics, MELEE_WEAPON_ICON_ITEM_ID, plugin.getOpponentMeleeWeaponCount(), x, y);
+					x += drawItemIcon(graphics, MELEE_WEAPON_ICON_ITEM_ID, fightInfo.getOpponentMeleeWeaponCount(), x, y);
 				}
-				if (plugin.getOpponentRangedWeaponCount() > 0)
+				if (fightInfo.getOpponentRangedWeaponCount() > 0)
 				{
-					x += drawItemIcon(graphics, RANGED_WEAPON_ICON_ITEM_ID, plugin.getOpponentRangedWeaponCount(), x, y);
+					x += drawItemIcon(graphics, RANGED_WEAPON_ICON_ITEM_ID, fightInfo.getOpponentRangedWeaponCount(), x, y);
 				}
-				if (plugin.getOpponentMagicWeaponCount() > 0)
+				if (fightInfo.getOpponentMagicWeaponCount() > 0)
 				{
-					x += drawItemIcon(graphics, MAGIC_WEAPON_ICON_ITEM_ID, plugin.getOpponentMagicWeaponCount(), x, y);
+					x += drawItemIcon(graphics, MAGIC_WEAPON_ICON_ITEM_ID, fightInfo.getOpponentMagicWeaponCount(), x, y);
 				}
 
 				maxWidth = Math.max(maxWidth, x);
@@ -512,7 +509,7 @@ public class FightInfoOverlay extends Overlay
 
 		if (attackingEnabled)
 		{
-			boolean blinkOn = plugin.isFlashingAttacker() && (System.currentTimeMillis() / FLASH_BLINK_PERIOD_MILLIS) % 2 == 0;
+			boolean blinkOn = fightInfo.isFlashingAttacker() && (System.currentTimeMillis() / FLASH_BLINK_PERIOD_MILLIS) % 2 == 0;
 			int sectionTop = y;
 			int sectionWidth = Math.max(maxWidth, COMPACT_MIN_WIDTH);
 
@@ -527,7 +524,7 @@ public class FightInfoOverlay extends Overlay
 
 			int x = COMPACT_PADDING;
 
-			if (plugin.getMeleeAttackerCount() == 0 && plugin.getRangedAttackerCount() == 0 && plugin.getMagicAttackerCount() == 0)
+			if (fightInfo.getMeleeAttackerCount() == 0 && fightInfo.getRangedAttackerCount() == 0 && fightInfo.getMagicAttackerCount() == 0)
 			{
 				graphics.setFont(graphics.getFont().deriveFont(Font.PLAIN, 13f));
 				graphics.setColor(Color.LIGHT_GRAY);
@@ -536,17 +533,17 @@ public class FightInfoOverlay extends Overlay
 			}
 			else
 			{
-				if (plugin.getMeleeAttackerCount() > 0)
+				if (fightInfo.getMeleeAttackerCount() > 0)
 				{
-					x += drawItemIcon(graphics, MELEE_WEAPON_ICON_ITEM_ID, plugin.getMeleeAttackerCount(), x, y);
+					x += drawItemIcon(graphics, MELEE_WEAPON_ICON_ITEM_ID, fightInfo.getMeleeAttackerCount(), x, y);
 				}
-				if (plugin.getRangedAttackerCount() > 0)
+				if (fightInfo.getRangedAttackerCount() > 0)
 				{
-					x += drawItemIcon(graphics, RANGED_WEAPON_ICON_ITEM_ID, plugin.getRangedAttackerCount(), x, y);
+					x += drawItemIcon(graphics, RANGED_WEAPON_ICON_ITEM_ID, fightInfo.getRangedAttackerCount(), x, y);
 				}
-				if (plugin.getMagicAttackerCount() > 0)
+				if (fightInfo.getMagicAttackerCount() > 0)
 				{
-					x += drawItemIcon(graphics, MAGIC_WEAPON_ICON_ITEM_ID, plugin.getMagicAttackerCount(), x, y);
+					x += drawItemIcon(graphics, MAGIC_WEAPON_ICON_ITEM_ID, fightInfo.getMagicAttackerCount(), x, y);
 				}
 			}
 
@@ -653,13 +650,13 @@ public class FightInfoOverlay extends Overlay
 
 		if (config.showPlayerPrayer())
 		{
-			Color color = plugin.isPrayerBoosted() ? config.prayerBoostColor() : Color.WHITE;
+			Color color = fightInfo.isPrayerBoosted() ? config.prayerBoostColor() : Color.WHITE;
 			drawnX += drawSkillLevelStat(graphics, SpriteID.SKILL_PRAYER, client.getBoostedSkillLevel(Skill.PRAYER), drawnX, y, color);
 		}
 
 		if (config.showPlayerStrength())
 		{
-			Color color = plugin.isStrengthBoosted() ? config.strengthPeakColor() : Color.WHITE;
+			Color color = fightInfo.isStrengthBoosted() ? config.strengthPeakColor() : Color.WHITE;
 			drawnX += drawSkillLevelStat(graphics, SpriteID.SKILL_STRENGTH, client.getBoostedSkillLevel(Skill.STRENGTH), drawnX, y, color);
 		}
 
@@ -693,8 +690,8 @@ public class FightInfoOverlay extends Overlay
 	 * A single current (boosted) skill level, e.g. prayer points remaining or a buffed Strength
 	 * level - boosted rather than base, since knowing whether a potion has worn off is the whole
 	 * point of showing it during a fight. Colour is caller-chosen: Strength turns green while the
-	 * boost exceeds the configured threshold (plugin.isStrengthBoosted()), Prayer turns green
-	 * while boosted at all above the real level (plugin.isPrayerBoosted()), Ranged has no such
+	 * boost exceeds the configured threshold (fightInfo.isStrengthBoosted()), Prayer turns green
+	 * while boosted at all above the real level (fightInfo.isPrayerBoosted()), Ranged has no such
 	 * distinction and always draws white.
 	 */
 	private int drawSkillLevelStat(Graphics2D graphics, int spriteId, int level, int x, int y, Color color)
@@ -706,7 +703,7 @@ public class FightInfoOverlay extends Overlay
 	/**
 	 * Your own freeze status: a faded placeholder icon while unfrozen, or the active spell's own
 	 * icon and a countdown while frozen/immune - identical detection state and countdown maths as
-	 * FreezeOverlay (same PrepToolsPlugin.FreezeState entry, same PrepToolsConfig colour/format
+	 * FreezeOverlay (same FreezeState entry, same PrepToolsConfig colour/format
 	 * settings), just laid out as a fixed panel row instead of drawn above your character's head.
 	 *
 	 * The immune phase is prefixed "Immune " here (e.g. "Immune 2.1s"), unlike FreezeOverlay's
@@ -717,7 +714,7 @@ public class FightInfoOverlay extends Overlay
 	private int drawFreezeStatusRow(Graphics2D graphics, int x, int y)
 	{
 		Player local = client.getLocalPlayer();
-		PrepToolsPlugin.FreezeState state = local != null ? plugin.getFreezeStates().get(local) : null;
+		FreezeState state = freezes.getLocalFreeze();
 
 		if (state == null)
 		{
@@ -743,7 +740,7 @@ public class FightInfoOverlay extends Overlay
 			}
 			else
 			{
-				double remainingSeconds = (PrepToolsPlugin.FREEZE_IMMUNITY_DURATION_MILLIS - (now - state.immunityStartTimeMillis)) / 1000.0;
+				double remainingSeconds = (FreezeTracker.FREEZE_IMMUNITY_DURATION_MILLIS - (now - state.immunityStartTimeMillis)) / 1000.0;
 				countdown = String.format("%.1fs", Math.max(0, remainingSeconds));
 			}
 			text = "Immune " + countdown;
@@ -776,7 +773,7 @@ public class FightInfoOverlay extends Overlay
 	private int drawTargetPrayerRow(Graphics2D graphics, int x, int y)
 	{
 		Player target = null;
-		for (Player candidate : plugin.getTargets())
+		for (Player candidate : highlights.getTargets())
 		{
 			if (candidate != null)
 			{
@@ -883,8 +880,8 @@ public class FightInfoOverlay extends Overlay
 	 */
 	private int drawLocationRow(Graphics2D graphics, int x, int y)
 	{
-		String name = plugin.getCurrentLocationName();
-		Integer level = plugin.getCurrentWildernessLevel();
+		String name = locations.getLocationName();
+		Integer level = locations.getWildernessLevel();
 
 		String text;
 		if (name == null && level == null)

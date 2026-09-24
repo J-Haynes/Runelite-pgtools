@@ -21,15 +21,9 @@ import net.runelite.client.ui.overlay.OverlayLayer;
 import net.runelite.client.ui.overlay.OverlayPosition;
 
 /**
- * Draws a tele-block icon and countdown at the base of any player's model - including your own -
- * currently believed to be tele-blocked. Same positioning/rendering approach as FreezeOverlay (see
- * its doc), just for PrepToolsPlugin#teleblockStates instead of freezeStates, and with no
- * immunity-phase concept (teleblock doesn't grant post-expiry immunity the way freezes do).
- *
- * BUG FIX: both overlays anchor at the exact same spot, so a player who was frozen AND
- * tele-blocked had the two icons drawn directly on top of each other. When FreezeOverlay is also
- * drawing for this player, the teleblock row is pushed down one row (icon height + a small gap)
- * so both show, freeze on top.
+ * A teleblock icon and countdown at the base of each tele-blocked player's model (you included),
+ * positioned like FreezeOverlay. Both overlays share an anchor, so for a player who's also frozen
+ * the teleblock row is drawn one row lower - freeze on top.
  */
 public class TeleblockOverlay extends Overlay
 {
@@ -37,15 +31,15 @@ public class TeleblockOverlay extends Overlay
 	private static final int ICON_TEXT_GAP = 6;
 	private static final int STACKED_ROW_GAP = 2;
 
-	private final PrepToolsPlugin plugin;
+	private final FreezeTracker freezes;
 	private final PrepToolsConfig config;
 	private final Client client;
 	private final SpriteManager spriteManager;
 
 	@Inject
-	private TeleblockOverlay(PrepToolsPlugin plugin, PrepToolsConfig config, Client client, SpriteManager spriteManager)
+	private TeleblockOverlay(FreezeTracker freezes, PrepToolsConfig config, Client client, SpriteManager spriteManager)
 	{
-		this.plugin = plugin;
+		this.freezes = freezes;
 		this.config = config;
 		this.client = client;
 		this.spriteManager = spriteManager;
@@ -61,7 +55,7 @@ public class TeleblockOverlay extends Overlay
 			return null;
 		}
 
-		Map<Player, PrepToolsPlugin.TeleblockState> states = plugin.getTeleblockStates();
+		Map<Player, TeleblockState> states = freezes.getTeleblockStates();
 		if (states.isEmpty())
 		{
 			return null;
@@ -79,13 +73,13 @@ public class TeleblockOverlay extends Overlay
 
 		graphics.setFont(graphics.getFont().deriveFont(Font.BOLD, 18f));
 
-		Map<Player, PrepToolsPlugin.FreezeState> freezeStates = config.showFreezeTimers()
-			? plugin.getFreezeStates() : java.util.Collections.emptyMap();
+		Map<Player, FreezeState> freezeStates = config.showFreezeTimers()
+			? freezes.getFreezeStates() : java.util.Collections.emptyMap();
 
-		for (Map.Entry<Player, PrepToolsPlugin.TeleblockState> entry : states.entrySet())
+		for (Map.Entry<Player, TeleblockState> entry : states.entrySet())
 		{
 			Player player = entry.getKey();
-			PrepToolsPlugin.TeleblockState state = entry.getValue();
+			TeleblockState state = entry.getValue();
 			if (player == null)
 			{
 				continue;

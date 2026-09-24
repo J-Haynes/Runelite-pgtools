@@ -1,5 +1,7 @@
 package net.runelite.client.plugins.preptools;
 
+import java.util.Objects;
+
 /**
  * One row of the sidebar's "Clan Info" tab - a friends chat/clan member (or yourself) currently on
  * screen, plus their client-side player id (Player#getId()) and whether they're "you"/a configured
@@ -26,5 +28,23 @@ class ClanIdRow
 		this.id = id;
 		this.isYou = isYou;
 		this.isCaller = isCaller;
+	}
+
+	@Override
+	public boolean equals(Object o)
+	{
+		if (!(o instanceof ClanIdRow))
+		{
+			return false;
+		}
+		ClanIdRow other = (ClanIdRow) o;
+		return id == other.id && isYou == other.isYou && isCaller == other.isCaller
+			&& name.equals(other.name) && Objects.equals(nickname, other.nickname);
+	}
+
+	@Override
+	public int hashCode()
+	{
+		return Objects.hash(name, nickname, id, isYou, isCaller);
 	}
 }

@@ -12,19 +12,19 @@ import net.runelite.client.ui.overlay.OverlayPosition;
 /**
  * The Attack Alert's flashing border around the whole game screen, when you're attacked or frozen
  * (PrepToolsConfig#borderFlashWhenAttacked()/borderFlashWhenFrozen()). The plugin decides when and
- * in what colour (PrepToolsPlugin#getBorderFlashColorNow(), which also handles the blink) - this
+ * in what colour (AttackAlert#getBorderColorNow(), which also handles the blink) - this
  * just draws it, above every interface so a full-screen UI can't hide it.
  */
 public class ScreenBorderFlashOverlay extends Overlay
 {
-	private final PrepToolsPlugin plugin;
+	private final AttackAlert attackAlert;
 	private final PrepToolsConfig config;
 	private final Client client;
 
 	@Inject
-	private ScreenBorderFlashOverlay(PrepToolsPlugin plugin, PrepToolsConfig config, Client client)
+	private ScreenBorderFlashOverlay(AttackAlert attackAlert, PrepToolsConfig config, Client client)
 	{
-		this.plugin = plugin;
+		this.attackAlert = attackAlert;
 		this.config = config;
 		this.client = client;
 		setPosition(OverlayPosition.DYNAMIC);
@@ -35,7 +35,7 @@ public class ScreenBorderFlashOverlay extends Overlay
 	@Override
 	public Dimension render(Graphics2D graphics)
 	{
-		Color color = plugin.getBorderFlashColorNow();
+		Color color = attackAlert.getBorderColorNow();
 		if (color == null)
 		{
 			return null;

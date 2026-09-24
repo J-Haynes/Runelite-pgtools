@@ -29,13 +29,13 @@ import net.runelite.client.ui.overlay.OverlayUtil;
  */
 public class CallerNameOverlay extends Overlay
 {
-	private final PrepToolsPlugin plugin;
+	private final HighlightTracker highlights;
 	private final PrepToolsConfig config;
 
 	@Inject
-	private CallerNameOverlay(PrepToolsPlugin plugin, PrepToolsConfig config)
+	private CallerNameOverlay(HighlightTracker highlights, PrepToolsConfig config)
 	{
-		this.plugin = plugin;
+		this.highlights = highlights;
 		this.config = config;
 		setPosition(OverlayPosition.DYNAMIC);
 		setLayer(OverlayLayer.UNDER_WIDGETS);
@@ -54,11 +54,11 @@ public class CallerNameOverlay extends Overlay
 		graphics.setRenderingHint(RenderingHints.KEY_RENDERING, RenderingHints.VALUE_RENDER_QUALITY);
 		graphics.setRenderingHint(RenderingHints.KEY_FRACTIONALMETRICS, RenderingHints.VALUE_FRACTIONALMETRICS_ON);
 
-		Map<Player, PrepToolsPlugin.HighlightStyle> highlights = plugin.computeHighlightStyles(config);
+		Map<Player, HighlightStyle> styles = highlights.getStyles();
 
-		for (Map.Entry<Player, PrepToolsPlugin.HighlightStyle> entry : highlights.entrySet())
+		for (Map.Entry<Player, HighlightStyle> entry : styles.entrySet())
 		{
-			PrepToolsPlugin.HighlightStyle style = entry.getValue();
+			HighlightStyle style = entry.getValue();
 			graphics.setFont(graphics.getFont().deriveFont(style.fontStyle.getAwtStyle(), (float) style.fontSize));
 			renderName(graphics, entry.getKey(), style.color);
 		}
@@ -69,7 +69,7 @@ public class CallerNameOverlay extends Overlay
 	private void renderName(Graphics2D graphics, Player player, Color color)
 	{
 		String name = config.preferNicknameDisplay()
-			? plugin.getCallerNicknames().getOrDefault(player, player.getName())
+			? highlights.getCallerNicknames().getOrDefault(player, player.getName())
 			: player.getName();
 		if (name == null)
 		{

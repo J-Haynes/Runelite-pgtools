@@ -16,32 +16,25 @@ import net.runelite.client.ui.overlay.OverlayPosition;
 import net.runelite.client.ui.overlay.outline.ModelOutlineRenderer;
 
 /**
- * Draws the highlight for callers, targets, and pile-finder hits, on UNDER_WIDGETS - the same
- * layer as CallerNameOverlay - so it renders above overhead icons but never covers an open
- * interface or the right-click menu. This used to be ALWAYS_ON_TOP, which drew over literally
- * everything including the right-click context menu; matching the name overlay's layer keeps the
- * two visually consistent and fixes that.
- *
- * Two highlight shapes, shared across every category (Overlay section - PrepToolsConfig#highlightShape,
- * carried per player on HighlightStyle#shape): the usual model outline "shell" (ModelOutlineRenderer,
- * as before), or an experimental "Blue Dot Robot" mode that instead draws a plain coloured dot at
- * the centre of the player's model - each player's own per-category colour (Callers/Target/Pile
- * Finder section), shared dot diameter via HighlightStyle#dotSize.
+ * Draws every highlighted player (HighlightTracker#getStyles()): a model outline, or with the
+ * "Blue Dot Robot" shape a coloured dot at the model's centre. UNDER_WIDGETS, like
+ * CallerNameOverlay - above overhead icons, never over an open interface or the right-click menu
+ * (ALWAYS_ON_TOP drew over the menu).
  */
 public class CallerTargetOverlay extends Overlay
 {
 	// "Feather" controls the softness/blur of the outline edge; 0 = hard edge.
 	private static final int OUTLINE_FEATHER = 2;
 
-	private final PrepToolsPlugin plugin;
+	private final HighlightTracker highlights;
 	private final PrepToolsConfig config;
 	private final Client client;
 	private final ModelOutlineRenderer modelOutlineRenderer;
 
 	@Inject
-	private CallerTargetOverlay(PrepToolsPlugin plugin, PrepToolsConfig config, Client client, ModelOutlineRenderer modelOutlineRenderer)
+	private CallerTargetOverlay(HighlightTracker highlights, PrepToolsConfig config, Client client, ModelOutlineRenderer modelOutlineRenderer)
 	{
-		this.plugin = plugin;
+		this.highlights = highlights;
 		this.config = config;
 		this.client = client;
 		this.modelOutlineRenderer = modelOutlineRenderer;
@@ -52,11 +45,11 @@ public class CallerTargetOverlay extends Overlay
 	@Override
 	public Dimension render(Graphics2D graphics)
 	{
-		Map<Player, PrepToolsPlugin.HighlightStyle> highlights = plugin.computeHighlightStyles(config);
+		Map<Player, HighlightStyle> styles = highlights.getStyles();
 
-		for (Map.Entry<Player, PrepToolsPlugin.HighlightStyle> entry : highlights.entrySet())
+		for (Map.Entry<Player, HighlightStyle> entry : styles.entrySet())
 		{
-			PrepToolsPlugin.HighlightStyle style = entry.getValue();
+			HighlightStyle style = entry.getValue();
 			if (style.shape == HighlightShape.DOT)
 			{
 				drawDot(graphics, entry.getKey(), style.color, style.dotSize);
