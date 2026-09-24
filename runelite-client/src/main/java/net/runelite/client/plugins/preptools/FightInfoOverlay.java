@@ -713,7 +713,6 @@ public class FightInfoOverlay extends Overlay
 	 */
 	private int drawFreezeStatusRow(Graphics2D graphics, int x, int y)
 	{
-		Player local = client.getLocalPlayer();
 		FreezeState state = freezes.getLocalFreeze();
 
 		if (state == null)

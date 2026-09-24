@@ -314,10 +314,12 @@ section (or delete it) once the user confirms it:
 
 ./gradlew :client:test --tests 'net.runelite.client.plugins.preptools.*'   # plugin tests only (seconds)
 ./gradlew :client:test            # all unit tests (incl. PluginManagerTest) - run before pushing
-./gradlew :client:checkstyleMain  # style rules CI enforces
+./gradlew :client:checkstyleMain :client:pmdMain  # style + static analysis CI enforces
 ./gradlew :buildAll               # what CI actually runs (ci/build.sh): compile, checkstyle, tests, javadoc
 ```
 
+Run `:buildAll` (or at least checkstyle **and PMD**) before pushing - PMD's unused field/local
+variable rules failed CI after a refactor that passed compile, checkstyle and tests.
 `:buildAll` passing locally is NOT enough for Javadoc - this machine's JDK only warns where CI
 errors; see the strict Javadoc check in the lessons below.
 
@@ -542,7 +544,10 @@ These cost real debugging time to find. Don't rediscover them the hard way:
 - **Git remotes/identity:** `origin` is the user's own fork (`git@github.com:J-Haynes/Runelite-pgtools.git`,
   push here); `upstream` is `runelite/runelite` (fetch only - never push). The user has set their
   own git `user.name`/`user.email`; Claude still must not change git config itself. The `gh` CLI
-  is not installed.
+  is installed and logged in as J-Haynes (installed 2026-09-24; SSH git protocol): check CI after a
+  push with `gh run list --repo J-Haynes/Runelite-pgtools` and
+  `gh run view <id> --repo J-Haynes/Runelite-pgtools --log-failed | grep -E "FAILED|What went wrong|violation| error:"`
+  (the raw log is thousands of lines of unrelated upstream warnings).
 - **`git commit` commits the whole index, not just what you just `git add`ed.** If files were
   staged earlier in a long session and forgotten about, a later `git add <specific files> && git
   commit` can silently sweep in everything already staged. Run `git status --short` immediately

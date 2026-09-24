@@ -27,15 +27,13 @@ public class CallerTargetOverlay extends Overlay
 	private static final int OUTLINE_FEATHER = 2;
 
 	private final HighlightTracker highlights;
-	private final PrepToolsConfig config;
 	private final Client client;
 	private final ModelOutlineRenderer modelOutlineRenderer;
 
 	@Inject
-	private CallerTargetOverlay(HighlightTracker highlights, PrepToolsConfig config, Client client, ModelOutlineRenderer modelOutlineRenderer)
+	private CallerTargetOverlay(HighlightTracker highlights, Client client, ModelOutlineRenderer modelOutlineRenderer)
 	{
 		this.highlights = highlights;
-		this.config = config;
 		this.client = client;
 		this.modelOutlineRenderer = modelOutlineRenderer;
 		setPosition(OverlayPosition.DYNAMIC);
