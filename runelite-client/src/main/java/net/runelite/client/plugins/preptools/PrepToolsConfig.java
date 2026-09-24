@@ -1193,7 +1193,7 @@ public interface PrepToolsConfig extends Config
 
 	@ConfigSection(
 		name = "Attack Alert",
-		description = "Plays a sound when an enemy player starts attacking you.",
+		description = "A sound and/or a flashing screen border when you're attacked or frozen.",
 		position = 16,
 		closedByDefault = true
 	)
@@ -1209,34 +1209,20 @@ public interface PrepToolsConfig extends Config
 	)
 	default boolean attackAlertSound()
 	{
-		return true;
+		return false;
 	}
 
 	@ConfigItem(
-		keyName = "attackAlertSoundSource",
+		keyName = "attackAlertGameSound",
 		name = "Sound",
-		description = "<html>Game sound: an in-game sound effect, picked by ID below.<br>"
-			+ "Custom file: a .wav file of your own, path below.</html>",
+		description = "<html>Which sound to play - an in-game sound, or 'Custom file'<br>"
+			+ "to use the .wav file set below.</html>",
 		position = 2,
 		section = "attackAlertSection"
 	)
-	default AttackAlertSoundSource attackAlertSoundSource()
+	default AttackAlertSound attackAlertGameSound()
 	{
-		return AttackAlertSoundSource.GAME_SOUND;
-	}
-
-	@ConfigItem(
-		keyName = "attackAlertSoundId",
-		name = "Game sound ID",
-		description = "<html>In-game sound effect ID, used when Sound is 'Game sound'.<br>"
-			+ "Default 3925 is the Grand Exchange offer-complete ding. IDs<br>"
-			+ "are listed on the OSRS Wiki's sound pages (search 'sound id').</html>",
-		position = 3,
-		section = "attackAlertSection"
-	)
-	default int attackAlertSoundId()
-	{
-		return 3925;
+		return AttackAlertSound.BELL;
 	}
 
 	@ConfigItem(
@@ -1244,7 +1230,7 @@ public interface PrepToolsConfig extends Config
 		name = "Custom file",
 		description = "<html>Full path to a .wav file, used when Sound is 'Custom file',<br>"
 			+ "e.g. /home/you/alert.wav or C:\\Users\\you\\alert.wav.</html>",
-		position = 4,
+		position = 3,
 		section = "attackAlertSection"
 	)
 	default String attackAlertSoundFile()
@@ -1257,7 +1243,7 @@ public interface PrepToolsConfig extends Config
 		keyName = "attackAlertVolume",
 		name = "Volume",
 		description = "Volume from 0 to 100. Applies to both game sounds and custom files.",
-		position = 5,
+		position = 4,
 		section = "attackAlertSection"
 	)
 	default int attackAlertVolume()
@@ -1268,9 +1254,10 @@ public interface PrepToolsConfig extends Config
 	@ConfigItem(
 		keyName = "attackAlertCooldownMillis",
 		name = "Cooldown (ms)",
-		description = "<html>Minimum time between two alerts, so being attacked on and<br>"
-			+ "off during a fight doesn't play the sound over and over.</html>",
-		position = 6,
+		description = "<html>Minimum time between two 'attacked' alerts (sound and border<br>"
+			+ "flash), so being attacked on and off during a fight doesn't<br>"
+			+ "repeat them over and over.</html>",
+		position = 5,
 		section = "attackAlertSection"
 	)
 	default int attackAlertCooldownMillis()
@@ -1278,12 +1265,130 @@ public interface PrepToolsConfig extends Config
 		return 5000;
 	}
 
+	@ConfigItem(
+		keyName = "borderFlashWhenAttacked",
+		name = "Flash border when attacked",
+		description = "<html>Flashes a coloured border around the whole game screen<br>"
+			+ "when an enemy player starts attacking you.</html>",
+		position = 6,
+		section = "attackAlertSection"
+	)
+	default boolean borderFlashWhenAttacked()
+	{
+		return false;
+	}
+
+	@Alpha
+	@ConfigItem(
+		keyName = "borderFlashAttackedColor",
+		name = "Attacked colour",
+		description = "Border colour when you're attacked.",
+		position = 7,
+		section = "attackAlertSection"
+	)
+	default Color borderFlashAttackedColor()
+	{
+		return new Color(255, 40, 40, 200);
+	}
+
+	@ConfigItem(
+		keyName = "borderFlashWhenFrozen",
+		name = "Flash border when frozen",
+		description = "<html>Flashes a coloured border around the whole game screen<br>"
+			+ "when you're hit by Bind/Snare/Entangle or an Ice spell.<br>"
+			+ "Works even with Freeze Timers turned off.</html>",
+		position = 8,
+		section = "attackAlertSection"
+	)
+	default boolean borderFlashWhenFrozen()
+	{
+		return false;
+	}
+
+	@Alpha
+	@ConfigItem(
+		keyName = "borderFlashFrozenColor",
+		name = "Frozen colour",
+		description = "Border colour when you're frozen.",
+		position = 9,
+		section = "attackAlertSection"
+	)
+	default Color borderFlashFrozenColor()
+	{
+		return new Color(80, 200, 255, 200);
+	}
+
+	@Range(min = 1, max = 60)
+	@ConfigItem(
+		keyName = "borderFlashWidth",
+		name = "Border width",
+		description = "Thickness of the flashing border, in pixels.",
+		position = 10,
+		section = "attackAlertSection"
+	)
+	default int borderFlashWidth()
+	{
+		return 10;
+	}
+
+	@ConfigItem(
+		keyName = "borderFlashDurationMillis",
+		name = "Flash duration (ms)",
+		description = "How long the border keeps flashing.",
+		position = 11,
+		section = "attackAlertSection"
+	)
+	default int borderFlashDurationMillis()
+	{
+		return 1500;
+	}
+
+	// --- Scout section ---
+
+	@ConfigSection(
+		name = "Scout (Discord)",
+		description = "<html>Hotkey that posts a scout report - team capes seen near<br>"
+			+ "you, world and location - to a Discord channel.</html>",
+		position = 17,
+		closedByDefault = true
+	)
+	String scoutSection = "scoutSection";
+
+	@ConfigItem(
+		keyName = "scoutWebhookUrl",
+		name = "Discord webhook URL",
+		description = "<html>The channel's webhook URL. In Discord: channel settings,<br>"
+			+ "Integrations, Webhooks, New Webhook, Copy Webhook URL.<br>"
+			+ "Keep it private - anyone with it can post in that channel.</html>",
+		position = 1,
+		section = "scoutSection",
+		secret = true
+	)
+	default String scoutWebhookUrl()
+	{
+		return "";
+	}
+
+	@ConfigItem(
+		keyName = "scoutHotkey",
+		name = "Scout hotkey",
+		description = "<html>Pressing this posts e.g. '10 Team 50 (Vengy) capes, 4 other<br>"
+			+ "players, W308, Ferox Enclave, lvl 15 wild' to the webhook's<br>"
+			+ "channel. Your own team isn't counted.</html>",
+		position = 2,
+		section = "scoutSection"
+	)
+	default Keybind scoutHotkey()
+	{
+		return new Keybind(KeyEvent.VK_F9, 0);
+	}
+
 	// --- Debug section ---
 
 	@ConfigSection(
 		name = "Debug",
 		description = "Diagnostic logging - only needed if something isn't working.",
-		position = 17,
+		position = 18,
 		closedByDefault = true
 	)
 	String debugSection = "debugSection";

@@ -88,6 +88,14 @@ import net.runelite.client.ui.overlay.infobox.InfoBoxManager;
 import net.runelite.client.util.ColorUtil;
 import net.runelite.client.util.HotkeyListener;
 import net.runelite.client.util.Text;
+import okhttp3.Call;
+import okhttp3.Callback;
+import okhttp3.HttpUrl;
+import okhttp3.MediaType;
+import okhttp3.OkHttpClient;
+import okhttp3.Request;
+import okhttp3.RequestBody;
+import okhttp3.Response;
 
 @Slf4j
 @PluginDescriptor(
@@ -275,6 +283,9 @@ public class PrepToolsPlugin extends Plugin
 	private MultiLinesOverlay multiLinesOverlay;
 
 	@Inject
+	private ScreenBorderFlashOverlay screenBorderFlashOverlay;
+
+	@Inject
 	private InfoBoxManager infoBoxManager;
 
 	@Inject
@@ -291,6 +302,9 @@ public class PrepToolsPlugin extends Plugin
 
 	@Inject
 	private AudioPlayer audioPlayer;
+
+	@Inject
+	private OkHttpClient okHttpClient;
 
 	@Inject
 	private ScheduledExecutorService executor;
@@ -339,7 +353,7 @@ public class PrepToolsPlugin extends Plugin
 
 	/**
 	 * Standardized real name to nickname, for every configured caller that has one (enabled or
-	 * not) - used by the Clan IDs tab to show "Name (Nickname)".
+	 * not) - used by the Clan Info tab to show "Name (Nickname)".
 	 */
 	private Map<String, String> configuredCallerNicknames = Collections.emptyMap();
 
@@ -432,6 +446,15 @@ public class PrepToolsPlugin extends Plugin
 	 */
 	private boolean previouslyAttackedByEnemy;
 	private long lastAttackAlertMillis;
+
+	/**
+	 * Screen border flash state - see startBorderFlash()/getBorderFlashColorNow(). Written on the
+	 * client thread, read by ScreenBorderFlashOverlay; volatile as the three are read together.
+	 */
+	private static final long BORDER_FLASH_BLINK_MILLIS = 250;
+	private volatile Color borderFlashColor;
+	private volatile long borderFlashStartMillis;
+	private volatile long borderFlashEndMillis;
 	private boolean previouslyBeingAttacked;
 
 	/**
@@ -549,6 +572,15 @@ public class PrepToolsPlugin extends Plugin
 		}
 	};
 
+	private final HotkeyListener scoutHotkeyListener = new HotkeyListener(() -> config.scoutHotkey())
+	{
+		@Override
+		public void hotkeyPressed()
+		{
+			postScoutReport();
+		}
+	};
+
 	private final HotkeyListener locationSpamHotkeyListener = new HotkeyListener(() -> config.locationSpamHotkey())
 	{
 		@Override
@@ -575,9 +607,11 @@ public class PrepToolsPlugin extends Plugin
 		overlayManager.add(teleblockOverlay);
 		overlayManager.add(teamCapeOverlay);
 		overlayManager.add(wildernessLocationDebugOverlay);
+		overlayManager.add(screenBorderFlashOverlay);
 		keyManager.registerKeyListener(pileSpamHotkeyListener);
 		keyManager.registerKeyListener(locationSpamHotkeyListener);
 		keyManager.registerKeyListener(spamHotkeyListener);
+		keyManager.registerKeyListener(scoutHotkeyListener);
 		overlayManager.add(multiLinesOverlay);
 		multiLinesOverlay.load();
 
@@ -620,6 +654,7 @@ public class PrepToolsPlugin extends Plugin
 		overlayManager.remove(overlay);
 		overlayManager.remove(nameOverlay);
 		overlayManager.remove(minimapOverlay);
+		overlayManager.remove(screenBorderFlashOverlay);
 		overlayManager.remove(fightInfoOverlay);
 		overlayManager.remove(freezeOverlay);
 		overlayManager.remove(teleblockOverlay);
@@ -628,6 +663,7 @@ public class PrepToolsPlugin extends Plugin
 		keyManager.unregisterKeyListener(pileSpamHotkeyListener);
 		keyManager.unregisterKeyListener(locationSpamHotkeyListener);
 		keyManager.unregisterKeyListener(spamHotkeyListener);
+		keyManager.unregisterKeyListener(scoutHotkeyListener);
 		overlayManager.remove(multiLinesOverlay);
 		multiLinesOverlay.clear();
 		removeMemberCountInfoBoxes();
@@ -670,6 +706,7 @@ public class PrepToolsPlugin extends Plugin
 		attackerFlashEndTime = 0;
 		previouslyAttackedByEnemy = false;
 		lastAttackAlertMillis = 0;
+		borderFlashEndMillis = 0;
 		previouslyBeingAttacked = false;
 		opponentMeleePrayerCount = 0;
 		opponentRangedPrayerCount = 0;
@@ -699,6 +736,7 @@ public class PrepToolsPlugin extends Plugin
 		prayerBoosted = false;
 		lastSpamMessage = null;
 		lastSpamSentMillis = 0;
+		lastScoutSentMillis = 0;
 	}
 
 	@Subscribe
@@ -736,6 +774,7 @@ public class PrepToolsPlugin extends Plugin
 		panel.updateStatus(onScreenStandardNames, primaryCaller != null ? Text.standardize(primaryCaller.getName()) : null);
 		panel.updateMissingMembers(missingFriendsChatMembers);
 		panel.updateClanIds(computeClanIdRows(onScreenStandardNames));
+		panel.updateClanWeapons(computeClanWeapons());
 
 		Set<String> onScreenSnipeNames = new HashSet<>();
 		for (Player player : snipedPlayers)
@@ -1650,7 +1689,7 @@ public class PrepToolsPlugin extends Plugin
 	}
 
 	/**
-	 * Builds the sidebar's "Clan IDs" tab data: your own player id plus every friends chat member
+	 * Builds the sidebar's "Clan Info" tab data: your own player id plus every friends chat member
 	 * currently on screen, sorted ascending by id so the two extremes (the min and max - both
 	 * candidates for landing on the literal default Attack menu slot, see
 	 * MENU_ORDER_PID_INVESTIGATION.md) are visually obvious at the top and bottom of the list.
@@ -1685,6 +1724,50 @@ public class PrepToolsPlugin extends Plugin
 
 		rows.sort(Comparator.comparingInt(row -> row.id));
 		return rows;
+	}
+
+	/**
+	 * Builds the Clan Info tab's weapon breakdown: every on-screen teammate (isOwnTeamMember() -
+	 * you, callers, FC/clan members) by their wielded weapon's style.
+	 */
+	private ClanWeaponSummary computeClanWeapons()
+	{
+		List<String> melee = new ArrayList<>();
+		List<String> ranged = new ArrayList<>();
+		List<String> magic = new ArrayList<>();
+		int unknown = 0;
+
+		for (Player player : client.getPlayers())
+		{
+			if (player == null || player.getName() == null || !isOwnTeamMember(player))
+			{
+				continue;
+			}
+
+			int weaponId = getEquippedWeaponId(player);
+			String name = Text.removeTags(player.getName());
+			if (MELEE_WEAPON_IDS.contains(weaponId))
+			{
+				melee.add(name);
+			}
+			else if (RANGED_WEAPON_IDS.contains(weaponId))
+			{
+				ranged.add(name);
+			}
+			else if (MAGIC_WEAPON_IDS.contains(weaponId))
+			{
+				magic.add(name);
+			}
+			else
+			{
+				unknown++;
+			}
+		}
+
+		melee.sort(String.CASE_INSENSITIVE_ORDER);
+		ranged.sort(String.CASE_INSENSITIVE_ORDER);
+		magic.sort(String.CASE_INSENSITIVE_ORDER);
+		return new ClanWeaponSummary(melee, ranged, magic, unknown);
 	}
 
 	private ClanIdRow buildClanIdRow(Player player, boolean isYou, Set<String> onScreenCallerStandardNames)
@@ -2718,6 +2801,12 @@ public class PrepToolsPlugin extends Plugin
 
 		Player player = (Player) actor;
 
+		if (player == client.getLocalPlayer() && config.borderFlashWhenFrozen()
+			&& FREEZE_SPELL_INFO.containsKey(actor.getGraphic()))
+		{
+			startBorderFlash(config.borderFlashFrozenColor());
+		}
+
 		if (config.showFreezeTimers())
 		{
 			FreezeSpellInfo info = FREEZE_SPELL_INFO.get(actor.getGraphic());
@@ -3022,16 +3111,18 @@ public class PrepToolsPlugin extends Plugin
 	}
 
 	/**
-	 * Plays the Attack Alert sound when an enemy (non-team) player starts interacting with you and
-	 * none were the tick before - the same "someone new engaged you" edge as the infobox flash, but
-	 * independent of the infobox being shown, and ignoring teammates (who interact with you just by
-	 * following). Rate-limited by attackAlertCooldownMillis.
+	 * Fires the "attacked" Attack Alert - sound and/or border flash - when an enemy (non-team) player
+	 * starts interacting with you and none were the tick before. The same "someone new engaged you"
+	 * edge as the infobox flash, but independent of the infobox being shown, and ignoring teammates
+	 * (who interact with you just by following). Rate-limited by attackAlertCooldownMillis.
 	 */
 	private void updateAttackAlert()
 	{
+		boolean sound = config.attackAlertSound();
+		boolean flash = config.borderFlashWhenAttacked();
 		Player local = client.getLocalPlayer();
 		boolean attacked = false;
-		if (config.attackAlertSound() && local != null)
+		if ((sound || flash) && local != null)
 		{
 			for (Player player : client.getPlayers())
 			{
@@ -3048,7 +3139,14 @@ public class PrepToolsPlugin extends Plugin
 			&& now - lastAttackAlertMillis >= Math.max(0, config.attackAlertCooldownMillis()))
 		{
 			lastAttackAlertMillis = now;
-			playAttackAlert();
+			if (sound)
+			{
+				playAttackAlert();
+			}
+			if (flash)
+			{
+				startBorderFlash(config.borderFlashAttackedColor());
+			}
 		}
 		previouslyAttackedByEnemy = attacked;
 	}
@@ -3061,11 +3159,12 @@ public class PrepToolsPlugin extends Plugin
 			return;
 		}
 
-		if (config.attackAlertSoundSource() == AttackAlertSoundSource.GAME_SOUND)
+		AttackAlertSound choice = config.attackAlertGameSound();
+		if (choice != AttackAlertSound.CUSTOM_FILE)
 		{
 			// playSoundEffect's volume is 0-127 (SoundEffectVolume.HIGH), and plays at that volume
 			// even when the game's own sound effect volume is muted.
-			client.playSoundEffect(config.attackAlertSoundId(), volume * SoundEffectVolume.HIGH / 100);
+			client.playSoundEffect(choice.soundId, volume * SoundEffectVolume.HIGH / 100);
 			return;
 		}
 
@@ -3089,6 +3188,30 @@ public class PrepToolsPlugin extends Plugin
 				log.warn("PvP Tools: couldn't play attack alert sound file '{}': {}", path, e.getMessage());
 			}
 		});
+	}
+
+	/**
+	 * Starts (or restarts) the screen border flash drawn by ScreenBorderFlashOverlay.
+	 */
+	private void startBorderFlash(Color color)
+	{
+		borderFlashColor = color;
+		borderFlashStartMillis = System.currentTimeMillis();
+		borderFlashEndMillis = borderFlashStartMillis + Math.max(0, config.borderFlashDurationMillis());
+	}
+
+	/**
+	 * The border colour to draw this frame, or null for none - blinks on/off every
+	 * BORDER_FLASH_BLINK_MILLIS until the flash ends.
+	 */
+	Color getBorderFlashColorNow()
+	{
+		long now = System.currentTimeMillis();
+		if (now >= borderFlashEndMillis)
+		{
+			return null;
+		}
+		return ((now - borderFlashStartMillis) / BORDER_FLASH_BLINK_MILLIS) % 2 == 0 ? borderFlashColor : null;
 	}
 
 	/**
@@ -3679,6 +3802,153 @@ public class PrepToolsPlugin extends Plugin
 
 			sendChatMessage(sb.toString(), config.locationSpamChannel());
 		});
+	}
+
+	/**
+	 * Minimum gap between two scout reports - Discord rate-limits webhooks (about 30 messages a
+	 * minute per channel), and a held/double-pressed hotkey shouldn't spam the channel.
+	 */
+	private static final long SCOUT_COOLDOWN_MILLIS = 5000;
+	private static final MediaType JSON_MEDIA_TYPE = MediaType.get("application/json; charset=utf-8");
+	private long lastScoutSentMillis;
+
+	/**
+	 * Scout hotkey: posts buildScoutReport() to the configured Discord webhook, under your own name.
+	 * Only ever sends to a Discord webhook URL (validated below), with mentions disabled so a team
+	 * cape name can't ping the channel. The result is echoed to your own chatbox as a console line.
+	 */
+	private void postScoutReport()
+	{
+		clientThread.invoke(() ->
+		{
+			HttpUrl url = HttpUrl.parse(config.scoutWebhookUrl().trim());
+			if (url == null || !isDiscordWebhook(url))
+			{
+				printConsoleMessage("Scout: set a Discord webhook URL in the PvP Tools settings (Scout section) first.");
+				return;
+			}
+
+			long now = System.currentTimeMillis();
+			long remainingMillis = lastScoutSentMillis + SCOUT_COOLDOWN_MILLIS - now;
+			if (remainingMillis > 0)
+			{
+				printConsoleMessage(String.format("Scout on cooldown - %.1fs left.", remainingMillis / 1000.0));
+				return;
+			}
+			lastScoutSentMillis = now;
+
+			String report = buildScoutReport();
+			Player local = client.getLocalPlayer();
+			Map<String, Object> payload = new LinkedHashMap<>();
+			payload.put("content", report);
+			if (local != null && local.getName() != null)
+			{
+				payload.put("username", Text.removeTags(local.getName()));
+			}
+			payload.put("allowed_mentions", Collections.singletonMap("parse", Collections.emptyList()));
+
+			Request request = new Request.Builder()
+				.url(url)
+				.post(RequestBody.create(JSON_MEDIA_TYPE, gson.toJson(payload)))
+				.build();
+
+			okHttpClient.newCall(request).enqueue(new Callback()
+			{
+				@Override
+				public void onFailure(Call call, IOException e)
+				{
+					log.warn("PvP Tools: scout webhook failed", e);
+					printConsoleMessage("Scout failed to send: " + e.getMessage());
+				}
+
+				@Override
+				public void onResponse(Call call, Response response)
+				{
+					try (response)
+					{
+						printConsoleMessage(response.isSuccessful()
+							? "Scout sent: " + report
+							: "Scout failed to send: Discord replied HTTP " + response.code());
+					}
+				}
+			});
+		});
+	}
+
+	private static boolean isDiscordWebhook(HttpUrl url)
+	{
+		String host = url.host();
+		boolean discordHost = host.equals("discord.com") || host.endsWith(".discord.com")
+			|| host.equals("discordapp.com") || host.endsWith(".discordapp.com");
+		return url.isHttps() && discordHost && url.encodedPath().startsWith("/api/webhooks/");
+	}
+
+	/**
+	 * e.g. "10 Team 50 (Vengy) capes, 1 Team 12 cape, 4 other players, W308, Ferox Enclave, lvl 15
+	 * wild". Counts every on-screen player who isn't on your own team (you, callers, FC/clan) - by
+	 * team cape number, most first, using the Capes tab's name for that number if it has one - then
+	 * everyone without a team cape. Location is the same as Location Spam's; parts that aren't
+	 * known are left out.
+	 */
+	private String buildScoutReport()
+	{
+		Map<Integer, Integer> capeCounts = new HashMap<>();
+		int noCape = 0;
+		for (Player player : client.getPlayers())
+		{
+			if (player == null || player.getName() == null || isOwnTeamMember(player))
+			{
+				continue;
+			}
+
+			if (player.getTeam() > 0)
+			{
+				capeCounts.merge(player.getTeam(), 1, Integer::sum);
+			}
+			else
+			{
+				noCape++;
+			}
+		}
+
+		List<String> parts = new ArrayList<>();
+		capeCounts.entrySet().stream()
+			.sorted(Map.Entry.<Integer, Integer>comparingByValue().reversed()
+				.thenComparing(Map.Entry.comparingByKey()))
+			.forEach(e ->
+			{
+				String name = teamCapeNames.get(e.getKey());
+				parts.add(e.getValue() + " Team " + e.getKey()
+					+ (name != null && !name.isEmpty() ? " (" + name + ")" : "")
+					+ (e.getValue() == 1 ? " cape" : " capes"));
+			});
+		if (noCape > 0)
+		{
+			parts.add(noCape + (noCape == 1 ? " other player" : " other players"));
+		}
+		if (parts.isEmpty())
+		{
+			parts.add("No enemies in sight");
+		}
+
+		parts.add("W" + client.getWorld());
+		if (currentLocationName != null)
+		{
+			parts.add(currentLocationName);
+		}
+		if (currentWildernessLevel != null)
+		{
+			parts.add("lvl " + currentWildernessLevel + " wild");
+		}
+		return String.join(", ", parts);
+	}
+
+	private void printConsoleMessage(String message)
+	{
+		chatMessageManager.queue(QueuedMessage.builder()
+			.type(ChatMessageType.CONSOLE)
+			.value("PvP Tools: " + message)
+			.build());
 	}
 
 	/**

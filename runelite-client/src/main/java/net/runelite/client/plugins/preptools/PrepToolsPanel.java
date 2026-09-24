@@ -135,8 +135,13 @@ public class PrepToolsPanel extends PluginPanel
 	// Same programmatic-change guard as updatingProgrammatically, for the spam radios/checkbox.
 	private boolean updatingSpamProgrammatically;
 
-	// --- Clan IDs ---
+	// --- Clan Info ---
 	private final JPanel clanIdsListPanel = new JPanel();
+	private final JPanel clanWeaponsPanel = new JPanel();
+	private JButton copyClanIdsButton;
+	private JButton copyClanWeaponsButton;
+	private List<ClanIdRow> lastClanIdRows = Collections.emptyList();
+	private ClanWeaponSummary lastClanWeapons;
 
 	// --- Friends chat log ---
 	private JTextArea friendsChatLogArea;
@@ -189,7 +194,7 @@ public class PrepToolsPanel extends PluginPanel
 		MaterialTab callersTab = new MaterialTab("Callers", tabGroup, wrapTabContent(buildCallersSection()));
 		MaterialTab snipeTab = new MaterialTab("Snipe", tabGroup, wrapTabContent(buildSnipeListSection()));
 		MaterialTab spamTab = new MaterialTab("Spam", tabGroup, wrapTabContent(buildSpamSection()));
-		MaterialTab clanIdsTab = new MaterialTab("Clan IDs", tabGroup, wrapTabContent(buildClanIdsSection()));
+		MaterialTab clanIdsTab = new MaterialTab("Clan Info", tabGroup, wrapTabContent(buildClanIdsSection()));
 		MaterialTab fcLogTab = new MaterialTab("FC", tabGroup, wrapTabContent(buildFriendsChatLogSection()));
 		MaterialTab capesTab = new MaterialTab("Capes", tabGroup, wrapTabContent(buildTeamCapeNamesSection()));
 		MaterialTab locationTab = new MaterialTab("Location", tabGroup, wrapTabContent(buildLocationMapperSection()));
@@ -1223,7 +1228,7 @@ public class PrepToolsPanel extends PluginPanel
 	}
 
 	// ============================================================================================
-	// Clan IDs - see MENU_ORDER_PID_INVESTIGATION.md at the repo root for what a player's id is and
+	// Clan Info - the team's weapon styles, then player ids. Ids: see MENU_ORDER_PID_INVESTIGATION.md at the repo root for what a player's id is and
 	// why the min/max of a stack matter for right-click menu Attack-option exposure. Clan/FC members
 	// only (not enemies) - confirmed with the user that OSRS's own friendly-fire protection means an
 	// enemy's menu on your team's pile is built exclusively from your team's ids, so an enemy's own
@@ -1233,6 +1238,9 @@ public class PrepToolsPanel extends PluginPanel
 	private static final Color CALLER_HIGHLIGHT_COLOR = new Color(230, 180, 60);
 	private static final Color ID_RISK_COLOR = new Color(220, 100, 90);
 	private static final Color YOU_HIGHLIGHT_COLOR = new Color(100, 180, 255);
+	private static final Color MELEE_COLOR = new Color(230, 90, 80);
+	private static final Color RANGED_COLOR = new Color(100, 200, 90);
+	private static final Color MAGIC_COLOR = new Color(100, 160, 255);
 
 	private JPanel buildClanIdsSection()
 	{
@@ -1242,7 +1250,23 @@ public class PrepToolsPanel extends PluginPanel
 		section.setAlignmentX(LEFT_ALIGNMENT);
 		section.setMaximumSize(new Dimension(PluginPanel.PANEL_WIDTH, Integer.MAX_VALUE));
 
-		JLabel title = createSectionTitle("Clan IDs", 0);
+		JLabel title = createSectionTitle("Clan Info", 0);
+
+		copyClanWeaponsButton = createSmallButton("Copy", "Copy the weapon styles to clipboard, one style per line");
+		copyClanWeaponsButton.setEnabled(false);
+		copyClanWeaponsButton.addActionListener(e -> copyClanWeaponsToClipboard());
+		JTextArea weaponsDescription = createDescriptionArea(
+			"Your team on screen (you included) by the weapon they're wielding - the same weapon "
+				+ "lists as the infobox's \"Attacking you\" row.");
+
+		clanWeaponsPanel.setLayout(new BoxLayout(clanWeaponsPanel, BoxLayout.Y_AXIS));
+		clanWeaponsPanel.setBackground(ColorScheme.DARK_GRAY_COLOR);
+		clanWeaponsPanel.setAlignmentX(LEFT_ALIGNMENT);
+		clanWeaponsPanel.setMaximumSize(new Dimension(PluginPanel.PANEL_WIDTH, Integer.MAX_VALUE));
+
+		copyClanIdsButton = createSmallButton("Copy", "Copy the player ids to clipboard, one player per line");
+		copyClanIdsButton.setEnabled(false);
+		copyClanIdsButton.addActionListener(e -> copyClanIdsToClipboard());
 
 		JTextArea instructions = createDescriptionArea(
 			"You + friends chat and clan members currently on screen, sorted by id. "
@@ -1258,21 +1282,151 @@ public class PrepToolsPanel extends PluginPanel
 
 		section.add(title);
 		section.add(Box.createVerticalStrut(TIER_GAP));
+		section.add(createSubHeader("Weapons", copyClanWeaponsButton));
+		section.add(Box.createVerticalStrut(4));
+		section.add(weaponsDescription);
+		section.add(Box.createVerticalStrut(TIER_GAP));
+		section.add(clanWeaponsPanel);
+		section.add(Box.createVerticalStrut(TIER_GAP * 2));
+		section.add(createSubHeader("Player IDs", copyClanIdsButton));
+		section.add(Box.createVerticalStrut(4));
 		section.add(instructions);
 		section.add(Box.createVerticalStrut(TIER_GAP));
 		section.add(clanIdsListPanel);
 		updateClanIds(Collections.emptyList());
+		updateClanWeapons(new ClanWeaponSummary(Collections.emptyList(), Collections.emptyList(), Collections.emptyList(), 0));
 		return section;
 	}
 
 	/**
-	 * Rebuilds the Clan IDs row list from scratch every call - unlike the caller/snipe lists (which
+	 * A bold sub-heading with a small button (e.g. Copy) on the right - same look as the FC tab's
+	 * "Log" header.
+	 */
+	private JPanel createSubHeader(String text, JButton button)
+	{
+		JLabel label = new JLabel(text);
+		label.setForeground(Color.WHITE);
+		label.setFont(FontManager.getRunescapeBoldFont());
+
+		JPanel header = new JPanel(new BorderLayout());
+		header.setBackground(ColorScheme.DARK_GRAY_COLOR);
+		header.setAlignmentX(LEFT_ALIGNMENT);
+		header.setMaximumSize(new Dimension(PluginPanel.PANEL_WIDTH, Integer.MAX_VALUE));
+		header.add(label, BorderLayout.WEST);
+		header.add(button, BorderLayout.EAST);
+		return header;
+	}
+
+	/**
+	 * Rebuilds the weapon columns - only when the breakdown actually changed since last tick, so
+	 * the labels aren't torn down and rebuilt every 600ms for nothing.
+	 */
+	void updateClanWeapons(ClanWeaponSummary summary)
+	{
+		if (summary.equals(lastClanWeapons))
+		{
+			return;
+		}
+		lastClanWeapons = summary;
+		copyClanWeaponsButton.setEnabled(!summary.melee.isEmpty() || !summary.ranged.isEmpty() || !summary.magic.isEmpty());
+
+		clanWeaponsPanel.removeAll();
+
+		// GridLayout: three equal-width columns; a name too long for its column is cut off with
+		// "..." by JLabel itself, full name in the tooltip.
+		JPanel columns = new JPanel(new GridLayout(1, 3, 4, 0));
+		columns.setBackground(ColorScheme.DARK_GRAY_COLOR);
+		columns.setAlignmentX(LEFT_ALIGNMENT);
+		columns.setMaximumSize(new Dimension(PluginPanel.PANEL_WIDTH, Integer.MAX_VALUE));
+		columns.add(buildWeaponColumn("Melee", MELEE_COLOR, summary.melee));
+		columns.add(buildWeaponColumn("Ranged", RANGED_COLOR, summary.ranged));
+		columns.add(buildWeaponColumn("Magic", MAGIC_COLOR, summary.magic));
+		clanWeaponsPanel.add(columns);
+
+		if (summary.unknown > 0)
+		{
+			JLabel unknown = new JLabel(summary.unknown + " with a weapon not in any list");
+			unknown.setFont(FontManager.getRunescapeSmallFont());
+			unknown.setForeground(ColorScheme.LIGHT_GRAY_COLOR);
+			unknown.setAlignmentX(LEFT_ALIGNMENT);
+			unknown.setBorder(new EmptyBorder(6, 0, 0, 0));
+			clanWeaponsPanel.add(unknown);
+		}
+
+		revalidate();
+		repaint();
+	}
+
+	private JPanel buildWeaponColumn(String style, Color color, List<String> names)
+	{
+		JPanel column = new JPanel();
+		column.setLayout(new BoxLayout(column, BoxLayout.Y_AXIS));
+		column.setBackground(ColorScheme.DARKER_GRAY_COLOR);
+		column.setBorder(BorderFactory.createCompoundBorder(
+			BorderFactory.createMatteBorder(2, 0, 0, 0, color),
+			new EmptyBorder(4, 4, 4, 4)));
+
+		JLabel header = new JLabel(style + " " + names.size());
+		header.setFont(FontManager.getRunescapeBoldFont());
+		header.setForeground(color);
+		column.add(header);
+
+		for (String name : names)
+		{
+			JLabel label = new JLabel(name);
+			label.setFont(FontManager.getRunescapeSmallFont());
+			label.setForeground(Color.WHITE);
+			label.setToolTipText(name);
+			column.add(label);
+		}
+		return column;
+	}
+
+	private void copyClanWeaponsToClipboard()
+	{
+		ClanWeaponSummary summary = lastClanWeapons;
+		if (summary == null)
+		{
+			return;
+		}
+
+		String text = "Melee (" + summary.melee.size() + "): " + String.join(", ", summary.melee)
+			+ "\nRanged (" + summary.ranged.size() + "): " + String.join(", ", summary.ranged)
+			+ "\nMagic (" + summary.magic.size() + "): " + String.join(", ", summary.magic);
+		Toolkit.getDefaultToolkit().getSystemClipboard().setContents(new StringSelection(text), null);
+	}
+
+	private void copyClanIdsToClipboard()
+	{
+		if (lastClanIdRows.isEmpty())
+		{
+			return;
+		}
+
+		StringBuilder sb = new StringBuilder();
+		for (ClanIdRow row : lastClanIdRows)
+		{
+			sb.append(clanIdDisplayName(row)).append(" - id ").append(row.id).append('\n');
+		}
+		Toolkit.getDefaultToolkit().getSystemClipboard().setContents(new StringSelection(sb.toString().trim()), null);
+	}
+
+	private static String clanIdDisplayName(ClanIdRow row)
+	{
+		String displayName = row.nickname != null ? row.name + " (" + row.nickname + ")" : row.name;
+		return row.isYou ? displayName + " (you)" : displayName;
+	}
+
+	/**
+	 * Rebuilds the Clan Info tab's player id list from scratch every call - unlike the caller/snipe lists (which
 	 * only rebuild on a config change and get cheap per-tick label updates in between), the id order
 	 * itself changes as players move on/off screen or relog, so there's no stable "same set of rows,
 	 * just update status text" split to make here. Called once per tick; cheap at clan-sized lists.
 	 */
 	void updateClanIds(List<ClanIdRow> rows)
 	{
+		lastClanIdRows = new ArrayList<>(rows);
+		copyClanIdsButton.setEnabled(!rows.isEmpty());
 		clanIdsListPanel.removeAll();
 
 		if (rows.isEmpty())
@@ -1309,12 +1463,7 @@ public class PrepToolsPanel extends PluginPanel
 				BorderFactory.createEmptyBorder(2, 4, 2, 2))
 			: BorderFactory.createEmptyBorder(2, 6, 2, 2));
 
-		String displayName = row.nickname != null ? row.name + " (" + row.nickname + ")" : row.name;
-		if (row.isYou)
-		{
-			displayName += " (you)";
-		}
-		JLabel nameLabel = new JLabel(displayName);
+		JLabel nameLabel = new JLabel(clanIdDisplayName(row));
 		// You get your own colour, distinct from callers and everyone else - and it wins if you're
 		// also a caller, since "where am I in this list" is what you're looking for.
 		nameLabel.setFont(row.isYou || row.isCaller ? FontManager.getRunescapeBoldFont() : FontManager.getRunescapeFont());

@@ -14,7 +14,7 @@ client with similar team-coordination features. Core pieces:
 - **Team** — "your team" everywhere in this plugin (`PrepToolsPlugin#isOwnTeamMember()`) = you +
   friends chat members + **clan members** (`Player#isClanMember()` - teams don't always run an FC)
   + every configured caller, enabled or disabled. Used by pile finder, opponent prayer/weapon
-  counts, freeze/TB "hide for own team", teammate freeze-spell blocking, and the Clan IDs tab.
+  counts, freeze/TB "hide for own team", teammate freeze-spell blocking, and the Clan Info tab.
 - **Caller list** — primary/backup callers, reorderable/deletable from a sidebar panel, one-click
   primary switching. Each caller has an enable checkbox: disabled callers stay in the list (stored
   with a leading `!` in the `callers` config text) and on the team, but are never primary/backup/
@@ -69,14 +69,25 @@ client with similar team-coordination features. Core pieces:
 - **Friends chat log** — sidebar panel (the "FC" tab, alongside the "Missing" list), newest-first,
   logs members joining/leaving/dying (other members' deaths from the death animation, your own as
   "You died" from `ActorDeath`); copyable via a header Copy button.
-- **Attack Alert** — sound when an enemy (non-team) player starts interacting with you and none
-  were the tick before (`PrepToolsPlugin#updateAttackAlert()`), with a cooldown. Either an in-game
-  sound effect by ID (`client.playSoundEffect(id, volume)`, volume 0-127 - plays even with game
-  sounds muted) or a custom `.wav` via core's `AudioPlayer` (off the client thread). Independent of
-  the infobox, whose "Attacking you" row still counts *anyone* interacting with you, teammates
-  following you included. (Core's `Notification` config type + `Notifier` was the alternative:
-  free customisation UI incl. a whole-screen flash, but no in-game sounds and it skips while the
-  client is focused unless the user ticks "send when focused".)
+- **Attack Alert** (config section, everything **default off**) — two triggers: *attacked* = an
+  enemy (non-team) player starts interacting with you and none were the tick before
+  (`PrepToolsPlugin#updateAttackAlert()`, shared cooldown), and *frozen* = a freeze spell graphic on
+  you (`onGraphicChanged`, independent of Freeze Timers being on). Attacked can play a sound - a
+  dropdown of 7 in-game sounds (`AttackAlertSound`, `SoundEffectID` constants, picked by us not
+  the user; `client.playSoundEffect(id, volume)`, volume 0-127, plays even with game sounds muted)
+  or a custom `.wav` via core's `AudioPlayer` off the client thread. Either trigger can flash a
+  coloured border round the whole screen (`ScreenBorderFlashOverlay`, `ALWAYS_ON_TOP`, blinking,
+  per-trigger colour). Replaced a raw sound-ID field (asked for a dropdown instead). The infobox's
+  "Attacking you" row, unlike this, still counts *anyone* interacting with you, teammates
+  following you included. (Core's `Notification` config type + `Notifier` was considered: free UI
+  incl. a whole-screen tint, but no in-game sounds and silent while focused by default.)
+- **Scout (Discord)** — hotkey (F9 default) posts e.g. `10 Team 50 (Vengy) capes, 4 other players,
+  W308, Ferox Enclave, lvl 15 wild` to a Discord webhook (`scoutWebhookUrl`, `secret = true`),
+  with your in-game name as the poster (`PrepToolsPlugin#postScoutReport()`/`#buildScoutReport()`).
+  Counts on-screen players NOT on your team, by team cape number (Capes tab name added if set),
+  then capeless ones; location parts are Location Spam's. Only sends to a real Discord webhook URL
+  (`isDiscordWebhook()`), `allowed_mentions` empty so a cape name can't ping, 5s cooldown (Discord
+  allows ~30/min per channel); result echoed as a console chat line.
 - **Pile Spam** (was "Chat Spam") — hotkey (F12 default) that sends the name of whoever you're
   following/piling straight to **public/game chat**, always — no channel option (removed
   deliberately: this is for whoever's actually looking at your screen in the moment, not a
@@ -186,10 +197,13 @@ client with similar team-coordination features. Core pieces:
   never coloured or promoted), and (opt-in) shift-click
   "Walk here" on attackable players — vanilla RuneLite's Menu Entry Swapper has this for
   NPCs/objects/ground items but not players.
-- **Clan IDs panel** — sidebar tab surfacing your own and your friends chat/clan members' player ids
+- **Clan Info tab** (was "Clan IDs") — first a **Weapons** breakdown: three columns (melee/ranged/
+  magic, with totals) of on-screen teammates (`isOwnTeamMember()`, you included) by wielded weapon,
+  using the infobox's `*_WEAPON_IDS` lists (`PrepToolsPlugin#computeClanWeapons()`; teammates with
+  an unlisted weapon are just counted). Then **Player IDs**: surfacing your own and your friends chat/clan members' player ids
   (`Player#getId()`), sorted, with the current min/max flagged as click-priority risks and
   configured callers highlighted as "Name (Nickname)", and you in a third colour (blue, wins over
-  caller colour) — see `MENU_ORDER_PID_INVESTIGATION.md` at the repo root for the
+  caller colour). Both sections have a Copy button. See `MENU_ORDER_PID_INVESTIGATION.md` at the repo root for the
   underlying mechanic this is built on (right-click Attack-menu ordering on a stack) and its current
   confidence level/open questions. Clan-only by design: OSRS's friendly-fire protection means an
   enemy's own menu on your team's pile is built exclusively from your team's ids, so enemy ids don't
@@ -198,7 +212,7 @@ client with similar team-coordination features. Core pieces:
 Config file (`PrepToolsConfig.java`) is the fastest way to see the full feature surface — it's kept
 well-commented and organized by section, sections ordered/all collapsed-by-default to match the
 sidebar's own tab order. The sidebar (`PrepToolsPanel.java`) is a `MaterialTabGroup` in a fixed
-3-column grid (Callers/Snipe/Spam, Clan IDs/FC/Capes, Location - 3/3/1; 4 columns was tried and
+3-column grid (Callers/Snipe/Spam, Clan Info/FC/Capes, Location - 3/3/1; 4 columns was tried and
 cut every label off at sidebar width), icon+label
 centred in each cell. Every tab's icon is a **real in-game image**, not a bundled file (the plugin's
 only resources are two data files - `multi_lines.json` and `wilderness_locations.json` in
@@ -223,8 +237,9 @@ section (or delete it) once the user confirms it:
   teammates from the caller's target and hiding teammate Attack. The pile finder already excluded
   teammates, so the report's "set as a pile" was most likely the *target* highlight (primary caller
   following the leader); confirm the leader no longer gets any highlight in game.
-- **Attack Alert, "You died" log line, two-line caller rows, Clan IDs "you" colour** - built
-  2026-09-24, not yet seen in game.
+- **Attack Alert (sounds + border flash), Scout webhook, Clan Info weapons + Copy buttons, "You
+  died" log line, two-line caller rows, Clan Info "you" colour** - built 2026-09-24, not yet seen
+  in game. Also whether "Clan Info" still fits its tab cell at sidebar width.
 - **The fixed `.deb` on the user's other machine** - fixed and validated locally (desktop file,
   `apt-get install --simulate`, packaged client launched on its Java 11), but the machine where it
   failed hasn't retried yet.

@@ -1,7 +1,7 @@
 package net.runelite.client.plugins.preptools;
 
 /**
- * One row of the sidebar's "Clan IDs" tab - a friends chat/clan member (or yourself) currently on
+ * One row of the sidebar's "Clan Info" tab - a friends chat/clan member (or yourself) currently on
  * screen, plus their client-side player id (Player#getId()) and whether they're "you"/a configured
  * caller, for PrepToolsPanel to highlight. See MENU_ORDER_PID_INVESTIGATION.md at the repo root for
  * what this id is and why it matters for right-click menu Attack-option exposure - the min and max
