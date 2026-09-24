@@ -332,12 +332,77 @@ public interface PrepToolsConfig extends Config
 		return 1500;
 	}
 
+	// --- Attackers section ---
+
+	@ConfigSection(
+		name = "Attackers",
+		description = "Highlights enemy players who are attacking YOU.",
+		position = 7,
+		closedByDefault = true
+	)
+	String attackersSection = "attackersSection";
+
+	@ConfigItem(
+		keyName = "highlightAttackers",
+		name = "Highlight attackers",
+		description = "<html>Highlights enemy players (anyone not on your team) who<br>"
+			+ "are attacking you - like Target, but for whoever is<br>"
+			+ "targeting you instead of your caller's target.</html>",
+		position = 1,
+		section = "attackersSection"
+	)
+	default boolean highlightAttackers()
+	{
+		return false;
+	}
+
+	@ConfigItem(
+		keyName = "attackerColor",
+		name = "Attacker colour",
+		description = "<html>Highlight colour for attackers. A player who's also a<br>"
+			+ "snipe, pile hit or target shows that colour instead.</html>",
+		position = 2,
+		section = "attackersSection"
+	)
+	default Color attackerColor()
+	{
+		return new Color(255, 140, 0);
+	}
+
+	@ConfigItem(
+		keyName = "maxAttackers",
+		name = "Max highlighted",
+		description = "<html>Highlight at most this many attackers - the ones who<br>"
+			+ "started attacking you first. 0 = no limit.</html>",
+		position = 3,
+		section = "attackersSection"
+	)
+	default int maxAttackers()
+	{
+		return 0;
+	}
+
+	@ConfigItem(
+		keyName = "prioritiseAttackerAttack",
+		name = "Prioritise attack option",
+		description = "<html>Forces 'Attack' to the top of the right-click menu for<br>"
+			+ "a highlighted attacker, so they're left-click attackable.<br>"
+			+ "Tie-break against target/pile/snipe is set in the Menu<br>"
+			+ "section.</html>",
+		position = 4,
+		section = "attackersSection"
+	)
+	default boolean prioritiseAttackerAttack()
+	{
+		return false;
+	}
+
 	// --- Menu section ---
 
 	@ConfigSection(
 		name = "Menu",
 		description = "Right-click menu tweaks that aren't tied to callers/targets specifically.",
-		position = 7,
+		position = 8,
 		closedByDefault = true
 	)
 	String menuSection = "menuSection";
@@ -358,20 +423,56 @@ public interface PrepToolsConfig extends Config
 	}
 
 	@ConfigItem(
-		keyName = "attackPriorityOrder",
-		name = "Attack priority order",
-		description = "<html>When a target, a pile hit, and a snipe list hit all land<br>"
-			+ "on the same tile, this decides which one's 'Attack' wins the<br>"
-			+ "top of the menu. Each category's own prioritisation can still<br>"
-			+ "be turned off individually (Target section, Pile Finder<br>"
-			+ "section, Snipe List section) - this only breaks the tie<br>"
-			+ "between whichever categories are actually still enabled.</html>",
+		keyName = "attackPriority1",
+		name = "1st Attack priority",
+		description = "<html>When more than one of target, pile hit, snipe list hit and<br>"
+			+ "attacker land on the same tile, whose 'Attack' wins the top of<br>"
+			+ "the menu - checked 1st to 4th. Each category's own<br>"
+			+ "prioritisation can still be turned off in its own section;<br>"
+			+ "this only breaks the tie. A category left out (picked twice<br>"
+			+ "elsewhere) goes last.</html>",
 		position = 2,
 		section = "menuSection"
 	)
-	default AttackPriorityOrder attackPriorityOrder()
+	default AttackCategory attackPriority1()
 	{
-		return AttackPriorityOrder.TARGET_PILE_SNIPE;
+		return AttackCategory.TARGET;
+	}
+
+	@ConfigItem(
+		keyName = "attackPriority2",
+		name = "2nd Attack priority",
+		description = "See '1st Attack priority'.",
+		position = 3,
+		section = "menuSection"
+	)
+	default AttackCategory attackPriority2()
+	{
+		return AttackCategory.PILE;
+	}
+
+	@ConfigItem(
+		keyName = "attackPriority3",
+		name = "3rd Attack priority",
+		description = "See '1st Attack priority'.",
+		position = 4,
+		section = "menuSection"
+	)
+	default AttackCategory attackPriority3()
+	{
+		return AttackCategory.SNIPE;
+	}
+
+	@ConfigItem(
+		keyName = "attackPriority4",
+		name = "4th Attack priority",
+		description = "See '1st Attack priority'.",
+		position = 5,
+		section = "menuSection"
+	)
+	default AttackCategory attackPriority4()
+	{
+		return AttackCategory.ATTACKER;
 	}
 
 	@ConfigItem(
@@ -381,7 +482,7 @@ public interface PrepToolsConfig extends Config
 			+ "own team - a configured caller, friends chat or clan member.<br>"
 			+ "Stops a mis-click on whoever is leading the fall-in (or<br>"
 			+ "anyone else stacked in your pile) from attacking them.</html>",
-		position = 3,
+		position = 6,
 		section = "menuSection"
 	)
 	default boolean hideAttackOnTeammates()
@@ -738,7 +839,7 @@ public interface PrepToolsConfig extends Config
 	@ConfigSection(
 		name = "Team Capes",
 		description = "Custom names for team cape numbers, shown alongside the vanilla team cape counter.",
-		position = 8,
+		position = 9,
 		closedByDefault = true
 	)
 	String teamCapeSection = "teamCapeSection";
@@ -818,7 +919,7 @@ public interface PrepToolsConfig extends Config
 	@ConfigSection(
 		name = "Friends Chat Log",
 		description = "A newest-first log of friends chat join/leave/death activity, shown in the sidebar panel.",
-		position = 9,
+		position = 10,
 		closedByDefault = true
 	)
 	String friendsChatLogSection = "friendsChatLogSection";
@@ -854,7 +955,7 @@ public interface PrepToolsConfig extends Config
 	@ConfigSection(
 		name = "Pile Spam",
 		description = "Quickly post the name of whoever you're following/piling into public chat.",
-		position = 10,
+		position = 11,
 		closedByDefault = true
 	)
 	String pileSpamSection = "pileSpamSection";
@@ -893,7 +994,7 @@ public interface PrepToolsConfig extends Config
 			+ "chat. Also holds the location-mapping tool in the sidebar<br>"
 			+ "panel, for building/editing that list from your own<br>"
 			+ "in-game coordinates.</html>",
-		position = 11,
+		position = 12,
 		closedByDefault = true
 	)
 	String locationSection = "locationSection";
@@ -941,7 +1042,7 @@ public interface PrepToolsConfig extends Config
 		name = "Spammer",
 		description = "<html>A hotkey that sends one of your saved messages to public<br>"
 			+ "chat. Messages are added/selected from the sidebar's Spam tab.</html>",
-		position = 12,
+		position = 13,
 		closedByDefault = true
 	)
 	String spammerSection = "spammerSection";
@@ -1004,7 +1105,7 @@ public interface PrepToolsConfig extends Config
 		name = "Multi Lines",
 		description = "<html>Draws the borders of multi-combat areas, and the level 20/30<br>"
 			+ "lines, on the ground.</html>",
-		position = 13,
+		position = 14,
 		closedByDefault = true
 	)
 	String multiLinesSection = "multiLinesSection";
@@ -1133,7 +1234,7 @@ public interface PrepToolsConfig extends Config
 	@ConfigSection(
 		name = "Teleblock Timers",
 		description = "Countdown shown when a player - including you - gets tele-blocked.",
-		position = 15,
+		position = 16,
 		closedByDefault = true
 	)
 	String teleblockSection = "teleblockSection";
@@ -1194,7 +1295,7 @@ public interface PrepToolsConfig extends Config
 	@ConfigSection(
 		name = "Attack Alert",
 		description = "A sound and/or a flashing screen border when you're attacked or frozen.",
-		position = 16,
+		position = 17,
 		closedByDefault = true
 	)
 	String attackAlertSection = "attackAlertSection";
@@ -1305,12 +1406,25 @@ public interface PrepToolsConfig extends Config
 		return false;
 	}
 
+	@ConfigItem(
+		keyName = "borderStayWhileFrozen",
+		name = "Keep border while frozen",
+		description = "<html>With 'Flash border when frozen' on: after flashing, the<br>"
+			+ "border stays on screen (solid) until your freeze ends.</html>",
+		position = 9,
+		section = "attackAlertSection"
+	)
+	default boolean borderStayWhileFrozen()
+	{
+		return false;
+	}
+
 	@Alpha
 	@ConfigItem(
 		keyName = "borderFlashFrozenColor",
 		name = "Frozen colour",
 		description = "Border colour when you're frozen.",
-		position = 9,
+		position = 10,
 		section = "attackAlertSection"
 	)
 	default Color borderFlashFrozenColor()
@@ -1323,7 +1437,7 @@ public interface PrepToolsConfig extends Config
 		keyName = "borderFlashWidth",
 		name = "Border width",
 		description = "Thickness of the flashing border, in pixels.",
-		position = 10,
+		position = 11,
 		section = "attackAlertSection"
 	)
 	default int borderFlashWidth()
@@ -1335,7 +1449,7 @@ public interface PrepToolsConfig extends Config
 		keyName = "borderFlashDurationMillis",
 		name = "Flash duration (ms)",
 		description = "How long the border keeps flashing.",
-		position = 11,
+		position = 12,
 		section = "attackAlertSection"
 	)
 	default int borderFlashDurationMillis()
@@ -1349,7 +1463,7 @@ public interface PrepToolsConfig extends Config
 		name = "Scout (Discord)",
 		description = "<html>Hotkey that posts a scout report - team capes seen near<br>"
 			+ "you, world and location - to a Discord channel.</html>",
-		position = 17,
+		position = 18,
 		closedByDefault = true
 	)
 	String scoutSection = "scoutSection";
@@ -1372,9 +1486,9 @@ public interface PrepToolsConfig extends Config
 	@ConfigItem(
 		keyName = "scoutHotkey",
 		name = "Scout hotkey",
-		description = "<html>Pressing this posts e.g. '10 Team 50 (Vengy) capes, 4 other<br>"
-			+ "players, W308, Ferox Enclave, lvl 15 wild' to the webhook's<br>"
-			+ "channel. Your own team isn't counted.</html>",
+		description = "<html>Pressing this posts e.g. '10x Team-50 (EoP), 3x Team-12,<br>"
+			+ "W308, Ferox Enclave, lvl 15 wild' to the webhook's channel.<br>"
+			+ "Your own team isn't counted.</html>",
 		position = 2,
 		section = "scoutSection"
 	)
@@ -1383,12 +1497,26 @@ public interface PrepToolsConfig extends Config
 		return new Keybind(KeyEvent.VK_F9, 0);
 	}
 
+	@Range(min = 1)
+	@ConfigItem(
+		keyName = "scoutMinCapeCount",
+		name = "Minimum capes",
+		description = "<html>Only report a team cape if at least this many (non-team)<br>"
+			+ "players near you are wearing it.</html>",
+		position = 3,
+		section = "scoutSection"
+	)
+	default int scoutMinCapeCount()
+	{
+		return 2;
+	}
+
 	// --- Debug section ---
 
 	@ConfigSection(
 		name = "Debug",
 		description = "Diagnostic logging - only needed if something isn't working.",
-		position = 18,
+		position = 19,
 		closedByDefault = true
 	)
 	String debugSection = "debugSection";
@@ -1430,7 +1558,7 @@ public interface PrepToolsConfig extends Config
 	@ConfigSection(
 		name = "Freeze Timers",
 		description = "Countdown shown when a player - including you - gets frozen.",
-		position = 14,
+		position = 15,
 		closedByDefault = true
 	)
 	String freezeSection = "freezeSection";

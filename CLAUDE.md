@@ -29,8 +29,8 @@ client with similar team-coordination features. Core pieces:
   colour, but sharing one rendering style (shape/outline width/font/dot size — the config's
   "Overlay" section, `PrepToolsConfig#highlightShape()` etc.) so every highlighted player looks
   visually consistent no matter which category put them there. Priority when a player qualifies
-  for more than one at once, lowest to highest: backup caller < snipe list < pile finder < primary
-  caller < target (`PrepToolsPlugin#rebuildHighlightStyles()`, cached once per tick;
+  for more than one at once, lowest to highest: backup caller < attacker < snipe list < pile
+  finder < primary caller < target (`PrepToolsPlugin#rebuildHighlightStyles()`, cached once per tick;
   `#computeHighlightStyles()` adds the per-frame new-target flash on top) - e.g. a target overrides
   its own pile-finder highlight.
   - **Caller** — the primary caller and any backup callers from the caller list get an outline
@@ -44,6 +44,10 @@ client with similar team-coordination features. Core pieces:
     Optionally flashes a configurable colour for a moment when a *new* target first appears
     (`showTargetFlash()`/`targetFlashColor()`/`targetFlashDurationMillis()`), and can be prioritised
     to the default left-click Attack action (`prioritiseTargetAttack()`).
+  - **Attackers** (own config section, default off) — enemy (non-team) players whose
+    `getInteracting()` is *you* (`PrepToolsPlugin#updateAttackers()`). Insertion-ordered, so the
+    `maxAttackers` cap (0 = no limit) keeps whoever engaged you first. Optional left-click
+    Attack (`prioritiseAttackerAttack()`, default off), in the Menu section's priority order.
   - **Pile Finder** — a different mechanic: detects an *uncalled* pile by counting, per candidate
     target, how many of your own team (FC/clan members, callers, you) are simultaneously interacting
     with the same non-team player (`PrepToolsPlugin#updateTargetedPlayers()`); once that count meets a configurable
@@ -77,15 +81,19 @@ client with similar team-coordination features. Core pieces:
   the user; `client.playSoundEffect(id, volume)`, volume 0-127, plays even with game sounds muted)
   or a custom `.wav` via core's `AudioPlayer` off the client thread. Either trigger can flash a
   coloured border round the whole screen (`ScreenBorderFlashOverlay`, `ALWAYS_ON_TOP`, blinking,
-  per-trigger colour). Replaced a raw sound-ID field (asked for a dropdown instead). The infobox's
+  per-trigger colour). "Keep border while frozen" (default off) leaves it on, solid, until your
+  freeze ends - your own freeze is tracked separately from `freezeStates`
+  (`#updateLocalFreeze()`: duration, early movement after the grace ticks, death), so it works
+  with Freeze Timers off. Replaced a raw sound-ID field (asked for a dropdown instead). The infobox's
   "Attacking you" row, unlike this, still counts *anyone* interacting with you, teammates
   following you included. (Core's `Notification` config type + `Notifier` was considered: free UI
   incl. a whole-screen tint, but no in-game sounds and silent while focused by default.)
-- **Scout (Discord)** — hotkey (F9 default) posts e.g. `10 Team 50 (Vengy) capes, 4 other players,
-  W308, Ferox Enclave, lvl 15 wild` to a Discord webhook (`scoutWebhookUrl`, `secret = true`),
+- **Scout (Discord)** — hotkey (F9 default) posts e.g. `10x Team-50 (EoP), 3x Team-12, W308,
+  Ferox Enclave, lvl 15 wild` to a Discord webhook (`scoutWebhookUrl`, `secret = true`),
   with your in-game name as the poster (`PrepToolsPlugin#postScoutReport()`/`#buildScoutReport()`).
   Counts on-screen players NOT on your team, by team cape number (Capes tab name added if set),
-  then capeless ones; location parts are Location Spam's. Only sends to a real Discord webhook URL
+  only capes with at least `scoutMinCapeCount` (default 2) wearers; capeless players are left out
+  on purpose ("7 other players" was called useless); location parts are Location Spam's. Only sends to a real Discord webhook URL
   (`isDiscordWebhook()`), `allowed_mentions` empty so a cape name can't ping, 5s cooldown (Discord
   allows ~30/min per channel); result echoed as a console chat line.
 - **Pile Spam** (was "Chat Spam") — hotkey (F12 default) that sends the name of whoever you're
@@ -190,8 +198,11 @@ client with similar team-coordination features. Core pieces:
   number (`PrepToolsConfig#teamCapeNames`).
 - **Right-click menu integration** — prioritises/recolours Attack and freeze-spell casts (target,
   pile, and now snipe-list hits too, with a configurable tie-break order —
-  `PrepToolsConfig#attackPriorityOrder()`, default Target > Pile > Snipe — when more than one
-  applies to the same menu), blocks casting a freeze spell on a teammate, removes Attack on
+  four "1st..4th Attack priority" dropdowns, `PrepToolsConfig#attackPriority1()`.., default
+  Target > Pile > Snipe > Attacker — when more than one applies to the same menu; a category left
+  out of the four still goes last. Replaced the single `attackPriorityOrder` enum of orderings
+  when Attackers made it 24; `PrepToolsPlugin#migrateAttackPriorityOrder()` carries an old
+  choice over once), blocks casting a freeze spell on a teammate, removes Attack on
   teammates (`hideAttackOnTeammates`, default on - the game can offer Attack on FC members in
   the wilderness, and a fall-in stacks the team on one member; a teammate's Attack, if kept, is
   never coloured or promoted), and (opt-in) shift-click
@@ -237,7 +248,10 @@ section (or delete it) once the user confirms it:
   teammates from the caller's target and hiding teammate Attack. The pile finder already excluded
   teammates, so the report's "set as a pile" was most likely the *target* highlight (primary caller
   following the leader); confirm the leader no longer gets any highlight in game.
-- **Attack Alert (sounds + border flash), Scout webhook, Clan Info weapons + Copy buttons, "You
+- **Attackers highlight + the 4-slot Attack priority, "Keep border while frozen", Scout's new
+  `2x Team-50 (EoP)` format** - built 2026-09-24, not yet seen in game. Scout sending itself is
+  CONFIRMED working.
+- **Attack Alert (sounds + border flash), Clan Info weapons + Copy buttons, "You
   died" log line, two-line caller rows, Clan Info "you" colour** - built 2026-09-24, not yet seen
   in game. Also whether "Clan Info" still fits its tab cell at sidebar width.
 - **The fixed `.deb` on the user's other machine** - fixed and validated locally (desktop file,

@@ -19,9 +19,11 @@ import java.util.Collections;
 import java.util.Comparator;
 import java.util.Date;
 import java.util.Deque;
+import java.util.EnumMap;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
@@ -382,6 +384,14 @@ public class PrepToolsPlugin extends Plugin
 	private final Set<Player> targets = new HashSet<>();
 
 	/**
+	 * Enemy players currently interacting with you (Attackers section), capped at maxAttackers -
+	 * in the order they started, so the cap keeps whoever engaged you first and doesn't flicker.
+	 * See updateAttackers().
+	 */
+	@Getter
+	private final Set<Player> attackers = new LinkedHashSet<>();
+
+	/**
 	 * Players outside your friends chat that enough of your friends chat members are piling on.
 	 */
 	@Getter
@@ -455,6 +465,14 @@ public class PrepToolsPlugin extends Plugin
 	private volatile Color borderFlashColor;
 	private volatile long borderFlashStartMillis;
 	private volatile long borderFlashEndMillis;
+
+	/**
+	 * Your own current freeze, for "Keep border while frozen" - see updateLocalFreeze(). -1 when
+	 * not frozen; volatile as the overlay reads it.
+	 */
+	private volatile int localFreezeEndTick = -1;
+	private int localFreezeStartTick;
+	private WorldPoint localFreezeLocation;
 	private boolean previouslyBeingAttacked;
 
 	/**
@@ -630,6 +648,7 @@ public class PrepToolsPlugin extends Plugin
 			}
 		}, gson);
 		locationStore.load();
+		migrateAttackPriorityOrder();
 
 		panel = new PrepToolsPanel(this, spriteManager, itemManager);
 		navButton = NavigationButton.builder()
@@ -698,6 +717,7 @@ public class PrepToolsPlugin extends Plugin
 		configuredCallerNicknames = Collections.emptyMap();
 		targets.clear();
 		targetedPlayers.clear();
+		attackers.clear();
 		currentOpponents.clear();
 		freezeStates.clear();
 		freezeLastKnownLocation.clear();
@@ -707,6 +727,8 @@ public class PrepToolsPlugin extends Plugin
 		previouslyAttackedByEnemy = false;
 		lastAttackAlertMillis = 0;
 		borderFlashEndMillis = 0;
+		localFreezeEndTick = -1;
+		localFreezeLocation = null;
 		previouslyBeingAttacked = false;
 		opponentMeleePrayerCount = 0;
 		opponentRangedPrayerCount = 0;
@@ -746,9 +768,11 @@ public class PrepToolsPlugin extends Plugin
 		updateCallersAndTargets();
 		updateSnipeList();
 		updateTargetedPlayers();
+		updateAttackers();
 		updateOpponentInfo();
 		updateWeaponIndicators();
 		updateAttackAlert();
+		updateLocalFreeze();
 		updateMissingMembers();
 		updateFreezeTimers();
 		updateTeleblockTimers();
@@ -1089,7 +1113,7 @@ public class PrepToolsPlugin extends Plugin
 	/**
 	 * Rebuilds cachedHighlightStyles: the display colour/weight/font/shape for every
 	 * currently-highlighted player, including the priority order, lowest to highest: backup caller,
-	 * snipe list, pile finder, primary caller, target. Weight/font/shape/dot size are shared across every category (the
+	 * attacker, snipe list, pile finder, primary caller, target. Weight/font/shape/dot size are shared across every category (the
 	 * Overlay section in PrepToolsConfig) - only colour stays per-category (Callers/Target/Pile
 	 * Finder sections). This used to be five independently-configurable settings per category
 	 * (fifteen settings total for the same three visual knobs), which turned out to be more
@@ -1119,6 +1143,12 @@ public class PrepToolsPlugin extends Plugin
 			{
 				highlights.put(player, backupStyle);
 			}
+		}
+
+		HighlightStyle attackerStyle = new HighlightStyle(config.attackerColor(), outlineWidth, fontStyle, fontSize, shape, dotSize);
+		for (Player player : attackers)
+		{
+			highlights.put(player, attackerStyle);
 		}
 
 		HighlightStyle snipeStyle = new HighlightStyle(config.snipeColor(), outlineWidth, fontStyle, fontSize, shape, dotSize);
@@ -1403,6 +1433,49 @@ public class PrepToolsPlugin extends Plugin
 		targetFlashEndTimes.entrySet().removeIf(e -> e.getValue() < now);
 
 		previousTargets = new HashSet<>(targets);
+	}
+
+	/**
+	 * Rebuilds attackers: every non-team player whose interacting target is you. Players already
+	 * in the set keep their place (it's insertion-ordered), newcomers go to the back, and the
+	 * set is trimmed to maxAttackers (0 = no limit) from the back.
+	 */
+	private void updateAttackers()
+	{
+		Player local = client.getLocalPlayer();
+		if (!config.highlightAttackers() || local == null)
+		{
+			attackers.clear();
+			return;
+		}
+
+		Set<Player> current = new HashSet<>();
+		for (Player player : client.getPlayers())
+		{
+			if (player != null && player != local && player.getName() != null
+				&& player.getInteracting() == local && !isOwnTeamMember(player))
+			{
+				current.add(player);
+			}
+		}
+
+		attackers.retainAll(current);
+		attackers.addAll(current);
+
+		int max = config.maxAttackers();
+		if (max > 0 && attackers.size() > max)
+		{
+			Set<Player> kept = new LinkedHashSet<>();
+			for (Player player : attackers)
+			{
+				if (kept.size() >= max)
+				{
+					break;
+				}
+				kept.add(player);
+			}
+			attackers.retainAll(kept);
+		}
 	}
 
 	/**
@@ -1904,6 +1977,7 @@ public class PrepToolsPlugin extends Plugin
 		int targetIndex = -1;
 		int pileIndex = -1;
 		int snipeIndex = -1;
+		int attackerIndex = -1;
 		int primaryCallerFollowIndex = -1;
 		int backupCallerFollowIndex = -1;
 		int anyEnemyAttackIndex = -1;
@@ -1987,8 +2061,8 @@ public class PrepToolsPlugin extends Plugin
 					}
 				}
 
-				// Target/pile/snipe are tracked independently (rather than one shared priorityIndex
-				// overwritten by whichever matches last) so the configured AttackPriorityOrder can
+				// Target/pile/snipe/attacker are tracked independently (rather than one shared priorityIndex
+				// overwritten by whichever matches last) so the configured Attack priority can
 				// deliberately choose between them below, instead of an undocumented "last one the
 				// loop happened to see wins" tie-break.
 				boolean isPriorityHit = false;
@@ -2005,6 +2079,11 @@ public class PrepToolsPlugin extends Plugin
 				if (config.prioritiseAttackForSnipes() && snipedPlayers.contains(player))
 				{
 					snipeIndex = filtered.size();
+					isPriorityHit = true;
+				}
+				if (config.prioritiseAttackerAttack() && attackers.contains(player))
+				{
+					attackerIndex = filtered.size();
 					isPriorityHit = true;
 				}
 
@@ -2066,7 +2145,12 @@ public class PrepToolsPlugin extends Plugin
 			}
 		}
 
-		int priorityIndex = resolvePriorityIndex(config.attackPriorityOrder(), targetIndex, pileIndex, snipeIndex);
+		Map<AttackCategory, Integer> priorityIndices = new EnumMap<>(AttackCategory.class);
+		priorityIndices.put(AttackCategory.TARGET, targetIndex);
+		priorityIndices.put(AttackCategory.PILE, pileIndex);
+		priorityIndices.put(AttackCategory.SNIPE, snipeIndex);
+		priorityIndices.put(AttackCategory.ATTACKER, attackerIndex);
+		int priorityIndex = resolvePriorityIndex(priorityIndices);
 
 		// A caller's Follow is the next default after a target/pile/snipe Attack - those are an
 		// explicit "hit this player now", so they still win if stacked on the same tile. Primary
@@ -2227,41 +2311,25 @@ public class PrepToolsPlugin extends Plugin
 	}
 
 	/**
-	 * Picks which of target/pile/snipe wins the default Attack slot, per the configured
-	 * AttackPriorityOrder - the first category in that order whose index is actually present (non-negative)
-	 * wins. Returns -1 if none of the three matched anything in this menu.
+	 * Picks which of target/pile/snipe/attacker wins the default Attack slot, per the Menu
+	 * section's 1st to 4th Attack priority - the first category in that order whose index is
+	 * present (non-negative) wins. A category not picked in any slot (another picked twice) is
+	 * checked last, so it can't be silently dropped. Returns -1 if nothing matched in this menu.
 	 */
-	private static int resolvePriorityIndex(AttackPriorityOrder order, int targetIndex, int pileIndex, int snipeIndex)
+	private int resolvePriorityIndex(Map<AttackCategory, Integer> indices)
 	{
-		switch (order)
+		List<AttackCategory> order = new ArrayList<>(Arrays.asList(
+			config.attackPriority1(), config.attackPriority2(), config.attackPriority3(), config.attackPriority4()));
+		order.addAll(Arrays.asList(AttackCategory.values()));
+		for (AttackCategory category : order)
 		{
-			case TARGET_SNIPE_PILE:
-				return firstPositive(targetIndex, snipeIndex, pileIndex);
-			case PILE_TARGET_SNIPE:
-				return firstPositive(pileIndex, targetIndex, snipeIndex);
-			case PILE_SNIPE_TARGET:
-				return firstPositive(pileIndex, snipeIndex, targetIndex);
-			case SNIPE_TARGET_PILE:
-				return firstPositive(snipeIndex, targetIndex, pileIndex);
-			case SNIPE_PILE_TARGET:
-				return firstPositive(snipeIndex, pileIndex, targetIndex);
-			case TARGET_PILE_SNIPE:
-			default:
-				return firstPositive(targetIndex, pileIndex, snipeIndex);
+			int index = indices.getOrDefault(category, -1);
+			if (index >= 0)
+			{
+				return index;
+			}
 		}
-	}
-
-	private static int firstPositive(int a, int b, int c)
-	{
-		if (a >= 0)
-		{
-			return a;
-		}
-		if (b >= 0)
-		{
-			return b;
-		}
-		return c;
+		return -1;
 	}
 
 	/**
@@ -2801,10 +2869,19 @@ public class PrepToolsPlugin extends Plugin
 
 		Player player = (Player) actor;
 
-		if (player == client.getLocalPlayer() && config.borderFlashWhenFrozen()
-			&& FREEZE_SPELL_INFO.containsKey(actor.getGraphic()))
+		FreezeSpellInfo localFreeze = player == client.getLocalPlayer() ? FREEZE_SPELL_INFO.get(actor.getGraphic()) : null;
+		if (localFreeze != null)
 		{
-			startBorderFlash(config.borderFlashFrozenColor());
+			// Tracked separately from freezeStates so the frozen border works with Freeze Timers
+			// off - same duration (+1 tick) and early-movement rule, see updateLocalFreeze().
+			int now = client.getTickCount();
+			localFreezeStartTick = now;
+			localFreezeEndTick = Math.max(localFreezeEndTick, now + localFreeze.durationTicks + 1);
+			localFreezeLocation = player.getWorldLocation();
+			if (config.borderFlashWhenFrozen())
+			{
+				startBorderFlash(config.borderFlashFrozenColor());
+			}
 		}
 
 		if (config.showFreezeTimers())
@@ -3111,6 +3188,39 @@ public class PrepToolsPlugin extends Plugin
 	}
 
 	/**
+	 * The Menu section's Attack priority used to be one dropdown of Target/Pile/Snipe orderings
+	 * (key attackPriorityOrder, values like PILE_TARGET_SNIPE). Adding Attackers made that 24
+	 * orderings, so it's now four 1st to 4th dropdowns - carry an old choice over once, attacker
+	 * last, then drop the old key.
+	 */
+	private void migrateAttackPriorityOrder()
+	{
+		String old = configManager.getConfiguration(PrepToolsConfig.GROUP, "attackPriorityOrder");
+		if (old == null)
+		{
+			return;
+		}
+
+		String[] parts = old.split("_");
+		if (parts.length == 3 && configManager.getConfiguration(PrepToolsConfig.GROUP, "attackPriority1") == null)
+		{
+			try
+			{
+				for (int i = 0; i < 3; i++)
+				{
+					configManager.setConfiguration(PrepToolsConfig.GROUP, "attackPriority" + (i + 1), AttackCategory.valueOf(parts[i]));
+				}
+				configManager.setConfiguration(PrepToolsConfig.GROUP, "attackPriority4", AttackCategory.ATTACKER);
+			}
+			catch (IllegalArgumentException e)
+			{
+				log.warn("PvP Tools: couldn't migrate attackPriorityOrder '{}'", old);
+			}
+		}
+		configManager.unsetConfiguration(PrepToolsConfig.GROUP, "attackPriorityOrder");
+	}
+
+	/**
 	 * Fires the "attacked" Attack Alert - sound and/or border flash - when an enemy (non-team) player
 	 * starts interacting with you and none were the tick before. The same "someone new engaged you"
 	 * edge as the infobox flash, but independent of the infobox being shown, and ignoring teammates
@@ -3201,17 +3311,50 @@ public class PrepToolsPlugin extends Plugin
 	}
 
 	/**
+	 * Ends your tracked freeze once its duration is up, or early if you move (after the same
+	 * MOVEMENT_CHECK_GRACE_TICKS as updateFreezeTimers(), for a step queued before the freeze).
+	 */
+	private void updateLocalFreeze()
+	{
+		if (localFreezeEndTick < 0)
+		{
+			return;
+		}
+
+		Player local = client.getLocalPlayer();
+		int now = client.getTickCount();
+		boolean moved = local != null && localFreezeLocation != null
+			&& now - localFreezeStartTick >= MOVEMENT_CHECK_GRACE_TICKS
+			&& !local.getWorldLocation().equals(localFreezeLocation);
+		if (local == null || now >= localFreezeEndTick || moved)
+		{
+			localFreezeEndTick = -1;
+			localFreezeLocation = null;
+		}
+		else if (now - localFreezeStartTick < MOVEMENT_CHECK_GRACE_TICKS)
+		{
+			// A queued step can still land in the grace period - compare against where it ended.
+			localFreezeLocation = local.getWorldLocation();
+		}
+	}
+
+	/**
 	 * The border colour to draw this frame, or null for none - blinks on/off every
-	 * BORDER_FLASH_BLINK_MILLIS until the flash ends.
+	 * BORDER_FLASH_BLINK_MILLIS until the flash ends, then (with "Keep border while frozen") stays
+	 * solid in the frozen colour until your freeze ends.
 	 */
 	Color getBorderFlashColorNow()
 	{
 		long now = System.currentTimeMillis();
-		if (now >= borderFlashEndMillis)
+		if (now < borderFlashEndMillis)
 		{
-			return null;
+			return ((now - borderFlashStartMillis) / BORDER_FLASH_BLINK_MILLIS) % 2 == 0 ? borderFlashColor : null;
 		}
-		return ((now - borderFlashStartMillis) / BORDER_FLASH_BLINK_MILLIS) % 2 == 0 ? borderFlashColor : null;
+		if (localFreezeEndTick >= 0 && config.borderFlashWhenFrozen() && config.borderStayWhileFrozen())
+		{
+			return config.borderFlashFrozenColor();
+		}
+		return null;
 	}
 
 	/**
@@ -3884,51 +4027,38 @@ public class PrepToolsPlugin extends Plugin
 	}
 
 	/**
-	 * e.g. "10 Team 50 (Vengy) capes, 1 Team 12 cape, 4 other players, W308, Ferox Enclave, lvl 15
-	 * wild". Counts every on-screen player who isn't on your own team (you, callers, FC/clan) - by
-	 * team cape number, most first, using the Capes tab's name for that number if it has one - then
-	 * everyone without a team cape. Location is the same as Location Spam's; parts that aren't
-	 * known are left out.
+	 * e.g. "10x Team-50 (EoP), 3x Team-12, W308, Ferox Enclave, lvl 15 wild". Counts on-screen
+	 * players who aren't on your own team (you, callers, FC/clan) by team cape number, most first,
+	 * with the Capes tab's name for that number if it has one; capes worn by fewer than
+	 * scoutMinCapeCount players are left out. Location is the same as Location Spam's; parts that
+	 * aren't known are left out.
 	 */
 	private String buildScoutReport()
 	{
 		Map<Integer, Integer> capeCounts = new HashMap<>();
-		int noCape = 0;
 		for (Player player : client.getPlayers())
 		{
-			if (player == null || player.getName() == null || isOwnTeamMember(player))
-			{
-				continue;
-			}
-
-			if (player.getTeam() > 0)
+			if (player != null && player.getName() != null && player.getTeam() > 0 && !isOwnTeamMember(player))
 			{
 				capeCounts.merge(player.getTeam(), 1, Integer::sum);
 			}
-			else
-			{
-				noCape++;
-			}
 		}
 
+		int minCount = Math.max(1, config.scoutMinCapeCount());
 		List<String> parts = new ArrayList<>();
 		capeCounts.entrySet().stream()
+			.filter(e -> e.getValue() >= minCount)
 			.sorted(Map.Entry.<Integer, Integer>comparingByValue().reversed()
 				.thenComparing(Map.Entry.comparingByKey()))
 			.forEach(e ->
 			{
 				String name = teamCapeNames.get(e.getKey());
-				parts.add(e.getValue() + " Team " + e.getKey()
-					+ (name != null && !name.isEmpty() ? " (" + name + ")" : "")
-					+ (e.getValue() == 1 ? " cape" : " capes"));
+				parts.add(e.getValue() + "x Team-" + e.getKey()
+					+ (name != null && !name.isEmpty() ? " (" + name + ")" : ""));
 			});
-		if (noCape > 0)
-		{
-			parts.add(noCape + (noCape == 1 ? " other player" : " other players"));
-		}
 		if (parts.isEmpty())
 		{
-			parts.add("No enemies in sight");
+			parts.add("No team capes in sight");
 		}
 
 		parts.add("W" + client.getWorld());
@@ -4058,6 +4188,11 @@ public class PrepToolsPlugin extends Plugin
 
 	private void clearTimersOnDeath(Player player)
 	{
+		if (player == client.getLocalPlayer())
+		{
+			localFreezeEndTick = -1;
+			localFreezeLocation = null;
+		}
 		freezeStates.remove(player);
 		freezeLastKnownLocation.remove(player);
 		teleblockStates.remove(player);
