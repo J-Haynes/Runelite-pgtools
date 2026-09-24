@@ -27,6 +27,7 @@ import javax.swing.BorderFactory;
 import javax.swing.Box;
 import javax.swing.BoxLayout;
 import javax.swing.ButtonGroup;
+import javax.swing.Icon;
 import javax.swing.JCheckBox;
 import javax.swing.ImageIcon;
 import javax.swing.JButton;
@@ -42,6 +43,7 @@ import javax.swing.ScrollPaneConstants;
 import javax.swing.SpinnerNumberModel;
 import javax.swing.SwingConstants;
 import javax.swing.SwingUtilities;
+import javax.swing.UIManager;
 import javax.swing.border.EmptyBorder;
 import javax.swing.text.AbstractDocument;
 import javax.swing.text.AttributeSet;
@@ -670,10 +672,7 @@ public class PrepToolsPanel extends PluginPanel
 		for (int i = 0; i < entries.size(); i++)
 		{
 			PrepToolsPlugin.CallerEntry entry = entries.get(i);
-			String label = entry.nickname != null
-				? entry.nickname + " (" + entry.name + ")"
-				: entry.name;
-			addRow(Text.standardize(entry.name), label, entry.name, entry.nickname, entry.enabled, i == 0, i == entries.size() - 1);
+			addRow(Text.standardize(entry.name), entry.name, entry.nickname, entry.enabled, i == 0, i == entries.size() - 1);
 		}
 
 		// The caller being edited was removed (or renamed) from somewhere else - close the form.
@@ -688,13 +687,18 @@ public class PrepToolsPanel extends PluginPanel
 
 	private final Map<String, Boolean> enabledByKey = new HashMap<>();
 
-	private void addRow(String key, String label, String realName, String nickname, boolean enabled, boolean isFirst, boolean isLast)
+	/**
+	 * One caller row, two lines: the radio button + in-game name on top, and the nickname (if any)
+	 * plus on-screen status underneath - one line held name, nickname and status together and was
+	 * too cramped to read. Edit/delete sit on the right, reorder arrows + enable box on the left.
+	 */
+	private void addRow(String key, String realName, String nickname, boolean enabled, boolean isFirst, boolean isLast)
 	{
 		JPanel row = new JPanel(new BorderLayout(6, 0));
-		row.setBackground(ColorScheme.DARK_GRAY_COLOR);
-		row.setBorder(BorderFactory.createEmptyBorder(2, 2, 2, 2));
+		row.setBackground(ColorScheme.DARKER_GRAY_COLOR);
+		row.setBorder(BorderFactory.createEmptyBorder(4, 2, 4, 4));
 
-		JRadioButton radio = new JRadioButton(label);
+		JRadioButton radio = new JRadioButton(realName);
 		radio.setBackground(row.getBackground());
 		radio.setForeground(Color.WHITE);
 		radio.setFont(FontManager.getRunescapeFont());
@@ -732,15 +736,37 @@ public class PrepToolsPanel extends PluginPanel
 		westPanel.add(createReorderButtons(realName, isFirst, isLast));
 		westPanel.add(enabledBox);
 
+		westPanel.setBackground(row.getBackground());
+		for (Component c : westPanel.getComponents())
+		{
+			c.setBackground(row.getBackground());
+		}
+
 		JLabel status = new JLabel();
 		status.setFont(FontManager.getRunescapeSmallFont());
 		statusLabelsByKey.put(key, status);
 
+		JLabel nicknameLabel = new JLabel(nickname != null ? nickname : "");
+		nicknameLabel.setFont(FontManager.getRunescapeSmallFont());
+		nicknameLabel.setForeground(enabled ? CALLER_HIGHLIGHT_COLOR : Color.GRAY);
+
+		// Second line, indented to line up with the radio's text rather than its circle.
+		Icon radioIcon = UIManager.getIcon("RadioButton.icon");
+		int indent = (radioIcon != null ? radioIcon.getIconWidth() : 16) + radio.getIconTextGap();
+		JPanel detailLine = new JPanel(new BorderLayout(6, 0));
+		detailLine.setBackground(row.getBackground());
+		detailLine.setBorder(BorderFactory.createEmptyBorder(0, indent, 0, 0));
+		detailLine.add(nicknameLabel, BorderLayout.CENTER);
+		detailLine.add(status, BorderLayout.EAST);
+
+		JPanel centerPanel = new JPanel(new GridLayout(2, 1, 0, 0));
+		centerPanel.setBackground(row.getBackground());
+		centerPanel.add(radio);
+		centerPanel.add(detailLine);
+
 		JPanel eastPanel = new JPanel();
 		eastPanel.setLayout(new BoxLayout(eastPanel, BoxLayout.X_AXIS));
 		eastPanel.setBackground(row.getBackground());
-		eastPanel.add(status);
-		eastPanel.add(Box.createHorizontalStrut(4));
 		JButton editButton = createSmallButton("✎", "Edit " + realName + "'s name/nickname");
 		editButton.addActionListener(e -> openCallerEdit(realName, nickname));
 		eastPanel.add(editButton);
@@ -748,7 +774,7 @@ public class PrepToolsPanel extends PluginPanel
 		eastPanel.add(createDeleteButton(realName, plugin::removeCaller));
 
 		row.add(westPanel, BorderLayout.WEST);
-		row.add(radio, BorderLayout.CENTER);
+		row.add(centerPanel, BorderLayout.CENTER);
 		row.add(eastPanel, BorderLayout.EAST);
 		listPanel.add(row);
 	}
@@ -1206,6 +1232,7 @@ public class PrepToolsPanel extends PluginPanel
 
 	private static final Color CALLER_HIGHLIGHT_COLOR = new Color(230, 180, 60);
 	private static final Color ID_RISK_COLOR = new Color(220, 100, 90);
+	private static final Color YOU_HIGHLIGHT_COLOR = new Color(100, 180, 255);
 
 	private JPanel buildClanIdsSection()
 	{
@@ -1288,8 +1315,10 @@ public class PrepToolsPanel extends PluginPanel
 			displayName += " (you)";
 		}
 		JLabel nameLabel = new JLabel(displayName);
-		nameLabel.setFont(row.isCaller ? FontManager.getRunescapeBoldFont() : FontManager.getRunescapeFont());
-		nameLabel.setForeground(row.isCaller ? CALLER_HIGHLIGHT_COLOR : Color.WHITE);
+		// You get your own colour, distinct from callers and everyone else - and it wins if you're
+		// also a caller, since "where am I in this list" is what you're looking for.
+		nameLabel.setFont(row.isYou || row.isCaller ? FontManager.getRunescapeBoldFont() : FontManager.getRunescapeFont());
+		nameLabel.setForeground(row.isYou ? YOU_HIGHLIGHT_COLOR : row.isCaller ? CALLER_HIGHLIGHT_COLOR : Color.WHITE);
 
 		JLabel idLabel = new JLabel("id " + row.id);
 		idLabel.setFont(FontManager.getRunescapeSmallFont());

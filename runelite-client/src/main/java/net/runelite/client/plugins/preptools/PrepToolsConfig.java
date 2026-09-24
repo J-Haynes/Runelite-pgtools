@@ -8,6 +8,7 @@ import net.runelite.client.config.ConfigGroup;
 import net.runelite.client.config.ConfigItem;
 import net.runelite.client.config.ConfigSection;
 import net.runelite.client.config.Keybind;
+import net.runelite.client.config.Range;
 
 @ConfigGroup(PrepToolsConfig.GROUP)
 public interface PrepToolsConfig extends Config
@@ -371,6 +372,21 @@ public interface PrepToolsConfig extends Config
 	default AttackPriorityOrder attackPriorityOrder()
 	{
 		return AttackPriorityOrder.TARGET_PILE_SNIPE;
+	}
+
+	@ConfigItem(
+		keyName = "hideAttackOnTeammates",
+		name = "Hide Attack on teammates",
+		description = "<html>Removes 'Attack' from the menu when the player is your<br>"
+			+ "own team - a configured caller, friends chat or clan member.<br>"
+			+ "Stops a mis-click on whoever is leading the fall-in (or<br>"
+			+ "anyone else stacked in your pile) from attacking them.</html>",
+		position = 3,
+		section = "menuSection"
+	)
+	default boolean hideAttackOnTeammates()
+	{
+		return true;
 	}
 
 	// --- Targeted player (friends chat) section ---
@@ -1173,12 +1189,101 @@ public interface PrepToolsConfig extends Config
 		return false;
 	}
 
+	// --- Attack Alert section ---
+
+	@ConfigSection(
+		name = "Attack Alert",
+		description = "Plays a sound when an enemy player starts attacking you.",
+		position = 16,
+		closedByDefault = true
+	)
+	String attackAlertSection = "attackAlertSection";
+
+	@ConfigItem(
+		keyName = "attackAlertSound",
+		name = "Sound when attacked",
+		description = "<html>Plays a sound the moment an enemy player (anyone not on<br>"
+			+ "your team) starts attacking you, if nobody was already.</html>",
+		position = 1,
+		section = "attackAlertSection"
+	)
+	default boolean attackAlertSound()
+	{
+		return true;
+	}
+
+	@ConfigItem(
+		keyName = "attackAlertSoundSource",
+		name = "Sound",
+		description = "<html>Game sound: an in-game sound effect, picked by ID below.<br>"
+			+ "Custom file: a .wav file of your own, path below.</html>",
+		position = 2,
+		section = "attackAlertSection"
+	)
+	default AttackAlertSoundSource attackAlertSoundSource()
+	{
+		return AttackAlertSoundSource.GAME_SOUND;
+	}
+
+	@ConfigItem(
+		keyName = "attackAlertSoundId",
+		name = "Game sound ID",
+		description = "<html>In-game sound effect ID, used when Sound is 'Game sound'.<br>"
+			+ "Default 3925 is the Grand Exchange offer-complete ding. IDs<br>"
+			+ "are listed on the OSRS Wiki's sound pages (search 'sound id').</html>",
+		position = 3,
+		section = "attackAlertSection"
+	)
+	default int attackAlertSoundId()
+	{
+		return 3925;
+	}
+
+	@ConfigItem(
+		keyName = "attackAlertSoundFile",
+		name = "Custom file",
+		description = "<html>Full path to a .wav file, used when Sound is 'Custom file',<br>"
+			+ "e.g. /home/you/alert.wav or C:\\Users\\you\\alert.wav.</html>",
+		position = 4,
+		section = "attackAlertSection"
+	)
+	default String attackAlertSoundFile()
+	{
+		return "";
+	}
+
+	@Range(max = 100)
+	@ConfigItem(
+		keyName = "attackAlertVolume",
+		name = "Volume",
+		description = "Volume from 0 to 100. Applies to both game sounds and custom files.",
+		position = 5,
+		section = "attackAlertSection"
+	)
+	default int attackAlertVolume()
+	{
+		return 80;
+	}
+
+	@ConfigItem(
+		keyName = "attackAlertCooldownMillis",
+		name = "Cooldown (ms)",
+		description = "<html>Minimum time between two alerts, so being attacked on and<br>"
+			+ "off during a fight doesn't play the sound over and over.</html>",
+		position = 6,
+		section = "attackAlertSection"
+	)
+	default int attackAlertCooldownMillis()
+	{
+		return 5000;
+	}
+
 	// --- Debug section ---
 
 	@ConfigSection(
 		name = "Debug",
 		description = "Diagnostic logging - only needed if something isn't working.",
-		position = 16,
+		position = 17,
 		closedByDefault = true
 	)
 	String debugSection = "debugSection";

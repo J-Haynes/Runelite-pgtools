@@ -25,6 +25,7 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.ThreadLocalRandom;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
@@ -46,6 +47,7 @@ import net.runelite.api.Player;
 import net.runelite.api.PlayerComposition;
 import net.runelite.api.ScriptID;
 import net.runelite.api.Skill;
+import net.runelite.api.SoundEffectVolume;
 import net.runelite.api.SpriteID;
 import net.runelite.api.Tile;
 import net.runelite.api.Varbits;
@@ -70,6 +72,7 @@ import net.runelite.client.callback.ClientThread;
 import net.runelite.client.chat.ChatMessageManager;
 import net.runelite.client.chat.QueuedMessage;
 import net.runelite.client.RuneLite;
+import net.runelite.client.audio.AudioPlayer;
 import net.runelite.client.config.ConfigManager;
 import net.runelite.client.eventbus.Subscribe;
 import net.runelite.client.events.ConfigChanged;
@@ -286,6 +289,12 @@ public class PrepToolsPlugin extends Plugin
 	@Inject
 	private Gson gson;
 
+	@Inject
+	private AudioPlayer audioPlayer;
+
+	@Inject
+	private ScheduledExecutorService executor;
+
 	/**
 	 * The current primary caller: the sidebar-pinned caller if one is on screen, otherwise
 	 * the first on-screen caller in list order. Null if no configured caller is on screen.
@@ -417,6 +426,12 @@ public class PrepToolsPlugin extends Plugin
 	// Tracks the flash window for the "someone new is attacking you" cue on the fight info overlay.
 	@Getter
 	private long attackerFlashEndTime;
+
+	/**
+	 * Attack Alert state - see updateAttackAlert().
+	 */
+	private boolean previouslyAttackedByEnemy;
+	private long lastAttackAlertMillis;
 	private boolean previouslyBeingAttacked;
 
 	/**
@@ -653,6 +668,8 @@ public class PrepToolsPlugin extends Plugin
 		targetFlashEndTimes.clear();
 		previousTargets.clear();
 		attackerFlashEndTime = 0;
+		previouslyAttackedByEnemy = false;
+		lastAttackAlertMillis = 0;
 		previouslyBeingAttacked = false;
 		opponentMeleePrayerCount = 0;
 		opponentRangedPrayerCount = 0;
@@ -693,6 +710,7 @@ public class PrepToolsPlugin extends Plugin
 		updateTargetedPlayers();
 		updateOpponentInfo();
 		updateWeaponIndicators();
+		updateAttackAlert();
 		updateMissingMembers();
 		updateFreezeTimers();
 		updateTeleblockTimers();
@@ -1322,7 +1340,9 @@ public class PrepToolsPlugin extends Plugin
 			if (primaryCaller != null)
 			{
 				Actor interacting = primaryCaller.getInteracting();
-				if (interacting instanceof Player && interacting != primaryCaller)
+				// A caller following a teammate (e.g. whoever's leading the fall-in) isn't calling
+				// a target - never highlight or left-click-Attack your own team.
+				if (interacting instanceof Player && interacting != primaryCaller && !isOwnTeamMember((Player) interacting))
 				{
 					targets.add((Player) interacting);
 				}
@@ -1774,6 +1794,7 @@ public class PrepToolsPlugin extends Plugin
 
 		boolean colourOptions = config.colourAttackOption();
 		boolean blockTeammateFreezes = config.preventFreezingTeammates();
+		boolean hideTeammateAttack = config.hideAttackOnTeammates();
 		Map<Player, HighlightStyle> highlights = colourOptions ? computeHighlightStyles(config) : null;
 		Player local = client.getLocalPlayer();
 		String selectedSpellName = getSelectedSpellbookActionName();
@@ -1858,6 +1879,21 @@ public class PrepToolsPlugin extends Plugin
 			}
 			else if ("Attack".equalsIgnoreCase(stripped))
 			{
+				// The game offers Attack on friends chat/clan members in the wilderness; with
+				// lots of the team following one member (a fall-in), a mis-click attacks them.
+				if (player != local && isOwnTeamMember(player))
+				{
+					if (hideTeammateAttack)
+					{
+						teammateRiskRemoved = true;
+						continue; // dropped - never added to filtered
+					}
+
+					// Kept, but never coloured or promoted - a teammate is never a target/pile.
+					filtered.add(entry);
+					continue;
+				}
+
 				// Never colour Attack on a caller - their Follow gets the colour instead (above).
 				if (highlights != null && !isCaller)
 				{
@@ -2986,6 +3022,76 @@ public class PrepToolsPlugin extends Plugin
 	}
 
 	/**
+	 * Plays the Attack Alert sound when an enemy (non-team) player starts interacting with you and
+	 * none were the tick before - the same "someone new engaged you" edge as the infobox flash, but
+	 * independent of the infobox being shown, and ignoring teammates (who interact with you just by
+	 * following). Rate-limited by attackAlertCooldownMillis.
+	 */
+	private void updateAttackAlert()
+	{
+		Player local = client.getLocalPlayer();
+		boolean attacked = false;
+		if (config.attackAlertSound() && local != null)
+		{
+			for (Player player : client.getPlayers())
+			{
+				if (player != null && player != local && player.getInteracting() == local && !isOwnTeamMember(player))
+				{
+					attacked = true;
+					break;
+				}
+			}
+		}
+
+		long now = System.currentTimeMillis();
+		if (attacked && !previouslyAttackedByEnemy
+			&& now - lastAttackAlertMillis >= Math.max(0, config.attackAlertCooldownMillis()))
+		{
+			lastAttackAlertMillis = now;
+			playAttackAlert();
+		}
+		previouslyAttackedByEnemy = attacked;
+	}
+
+	private void playAttackAlert()
+	{
+		int volume = Math.max(0, Math.min(100, config.attackAlertVolume()));
+		if (volume == 0)
+		{
+			return;
+		}
+
+		if (config.attackAlertSoundSource() == AttackAlertSoundSource.GAME_SOUND)
+		{
+			// playSoundEffect's volume is 0-127 (SoundEffectVolume.HIGH), and plays at that volume
+			// even when the game's own sound effect volume is muted.
+			client.playSoundEffect(config.attackAlertSoundId(), volume * SoundEffectVolume.HIGH / 100);
+			return;
+		}
+
+		String path = config.attackAlertSoundFile().trim();
+		if (path.isEmpty())
+		{
+			return;
+		}
+
+		// Loading/decoding a file shouldn't block the client thread. Gain is in dB: 100% plays the
+		// file as-is, lower volumes attenuate (20*log10 of the linear fraction).
+		float gain = (float) (20 * Math.log10(volume / 100.0));
+		executor.execute(() ->
+		{
+			try
+			{
+				audioPlayer.play(new File(path), gain);
+			}
+			catch (Exception e)
+			{
+				log.warn("PvP Tools: couldn't play attack alert sound file '{}': {}", path, e.getMessage());
+			}
+		});
+	}
+
+	/**
 	 * Whether the "Attacking You" row is currently within its "someone new just engaged you" flash window.
 	 */
 	public boolean isFlashingAttacker()
@@ -3646,7 +3752,8 @@ public class PrepToolsPlugin extends Plugin
 		Player player = (Player) actor;
 		clearTimersOnDeath(player);
 
-		if (!config.enableFriendsChatLog())
+		// Your own death is logged from onActorDeath instead (as "You died").
+		if (!config.enableFriendsChatLog() || player == client.getLocalPlayer())
 		{
 			return;
 		}
@@ -3671,6 +3778,11 @@ public class PrepToolsPlugin extends Plugin
 		if (event.getActor() instanceof Player)
 		{
 			clearTimersOnDeath((Player) event.getActor());
+		}
+
+		if (event.getActor() == client.getLocalPlayer())
+		{
+			logFriendsChatActivity("You", "died");
 		}
 	}
 

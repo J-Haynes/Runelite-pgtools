@@ -23,6 +23,8 @@ client with similar team-coordination features. Core pieces:
   ✎ on a row opens an edit form (name + nickname) below the list - a separate panel, not an in-row
   form, because the row list is a `GridLayout` and one taller row would stretch every row
   (`PrepToolsPlugin#editCaller()` keeps list position, enabled state and the primary pin).
+  Each row is two lines (asked for - one line was "too busy"): radio + in-game name on top,
+  nickname + on-screen status underneath (`PrepToolsPanel#addRow()`).
 - **Highlighting** — three independent detection categories, each with its own config section and
   colour, but sharing one rendering style (shape/outline width/font/dot size — the config's
   "Overlay" section, `PrepToolsConfig#highlightShape()` etc.) so every highlighted player looks
@@ -36,7 +38,8 @@ client with similar team-coordination features. Core pieces:
     caller list matching on-screen player names (`PrepToolsPlugin#updateCallersAndTargets()`).
   - **Target** — whoever the *primary* caller is currently interacting with (attacking, following,
     etc. — `Player#getInteracting()`), i.e. one player at a time, only ever derived from the primary
-    caller, never a backup. Wins over a pile-finder highlight on the same player
+    caller, never a backup. **Never a teammate** - a caller following whoever leads the fall-in used
+    to make that teammate the "target" (highlighted + left-click Attack). Wins over a pile-finder highlight on the same player
     (`PrepToolsConfig#targetColor()`'s doc comment: "Always wins over the pile finder colour").
     Optionally flashes a configurable colour for a moment when a *new* target first appears
     (`showTargetFlash()`/`targetFlashColor()`/`targetFlashDurationMillis()`), and can be prioritised
@@ -64,7 +67,16 @@ client with similar team-coordination features. Core pieces:
   `PrepToolsPlugin`'s `MELEE_WEAPON_IDS`/`RANGED_WEAPON_IDS`/`MAGIC_WEAPON_IDS`), who's attacking
   you, current wilderness location, your player index (informational — see the PID note below).
 - **Friends chat log** — sidebar panel (the "FC" tab, alongside the "Missing" list), newest-first,
-  logs members joining/leaving/dying; copyable via a header Copy button.
+  logs members joining/leaving/dying (other members' deaths from the death animation, your own as
+  "You died" from `ActorDeath`); copyable via a header Copy button.
+- **Attack Alert** — sound when an enemy (non-team) player starts interacting with you and none
+  were the tick before (`PrepToolsPlugin#updateAttackAlert()`), with a cooldown. Either an in-game
+  sound effect by ID (`client.playSoundEffect(id, volume)`, volume 0-127 - plays even with game
+  sounds muted) or a custom `.wav` via core's `AudioPlayer` (off the client thread). Independent of
+  the infobox, whose "Attacking you" row still counts *anyone* interacting with you, teammates
+  following you included. (Core's `Notification` config type + `Notifier` was the alternative:
+  free customisation UI incl. a whole-screen flash, but no in-game sounds and it skips while the
+  client is focused unless the user ticks "send when focused".)
 - **Pile Spam** (was "Chat Spam") — hotkey (F12 default) that sends the name of whoever you're
   following/piling straight to **public/game chat**, always — no channel option (removed
   deliberately: this is for whoever's actually looking at your screen in the moment, not a
@@ -168,12 +180,16 @@ client with similar team-coordination features. Core pieces:
 - **Right-click menu integration** — prioritises/recolours Attack and freeze-spell casts (target,
   pile, and now snipe-list hits too, with a configurable tie-break order —
   `PrepToolsConfig#attackPriorityOrder()`, default Target > Pile > Snipe — when more than one
-  applies to the same menu), blocks casting a freeze spell on a teammate, and (opt-in) shift-click
+  applies to the same menu), blocks casting a freeze spell on a teammate, removes Attack on
+  teammates (`hideAttackOnTeammates`, default on - the game can offer Attack on FC members in
+  the wilderness, and a fall-in stacks the team on one member; a teammate's Attack, if kept, is
+  never coloured or promoted), and (opt-in) shift-click
   "Walk here" on attackable players — vanilla RuneLite's Menu Entry Swapper has this for
   NPCs/objects/ground items but not players.
 - **Clan IDs panel** — sidebar tab surfacing your own and your friends chat/clan members' player ids
   (`Player#getId()`), sorted, with the current min/max flagged as click-priority risks and
-  configured callers highlighted as "Name (Nickname)" — see `MENU_ORDER_PID_INVESTIGATION.md` at the repo root for the
+  configured callers highlighted as "Name (Nickname)", and you in a third colour (blue, wins over
+  caller colour) — see `MENU_ORDER_PID_INVESTIGATION.md` at the repo root for the
   underlying mechanic this is built on (right-click Attack-menu ordering on a stack) and its current
   confidence level/open questions. Clan-only by design: OSRS's friendly-fire protection means an
   enemy's own menu on your team's pile is built exclusively from your team's ids, so enemy ids don't
@@ -203,6 +219,12 @@ section (or delete it) once the user confirms it:
 
 - **Multi Lines' wilderness areas and extended-scene heights** - see the Multi Lines entry and the
   `WorldLines` lesson.
+- **Fall-in leader showing Attack / highlighted** (reported 2026-09-24) - fixed by excluding
+  teammates from the caller's target and hiding teammate Attack. The pile finder already excluded
+  teammates, so the report's "set as a pile" was most likely the *target* highlight (primary caller
+  following the leader); confirm the leader no longer gets any highlight in game.
+- **Attack Alert, "You died" log line, two-line caller rows, Clan IDs "you" colour** - built
+  2026-09-24, not yet seen in game.
 - **The fixed `.deb` on the user's other machine** - fixed and validated locally (desktop file,
   `apt-get install --simulate`, packaged client launched on its Java 11), but the machine where it
   failed hasn't retried yet.
