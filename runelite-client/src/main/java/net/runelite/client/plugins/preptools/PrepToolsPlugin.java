@@ -45,6 +45,7 @@ import net.runelite.api.events.GameStateChanged;
 import net.runelite.api.events.GameTick;
 import net.runelite.api.events.GraphicChanged;
 import net.runelite.api.events.MenuOpened;
+import net.runelite.api.events.PlayerDespawned;
 import net.runelite.api.events.PostMenuSort;
 import net.runelite.api.gameval.AnimationID;
 import net.runelite.api.gameval.SpriteID;
@@ -295,8 +296,9 @@ public class PrepToolsPlugin extends Plugin
 	{
 		// Team first - every other feature reads it.
 		team.refresh();
-		highlights.onGameTick();
+		// Freezes before highlights - a frozen target/pile has its own colour.
 		freezes.onGameTick();
+		highlights.onGameTick();
 		fightInfo.onGameTick();
 		attackAlert.onGameTick();
 		locations.onGameTick();
@@ -484,7 +486,7 @@ public class PrepToolsPlugin extends Plugin
 		}
 
 		Player player = (Player) actor;
-		freezes.onDeath(player);
+		freezes.forget(player);
 		String standard = team.standardName(player);
 		if (player != client.getLocalPlayer() && standard != null && team.getFriendsChatNames().contains(standard))
 		{
@@ -493,11 +495,17 @@ public class PrepToolsPlugin extends Plugin
 	}
 
 	@Subscribe
+	public void onPlayerDespawned(PlayerDespawned event)
+	{
+		freezes.forget(event.getPlayer());
+	}
+
+	@Subscribe
 	public void onActorDeath(ActorDeath event)
 	{
 		if (event.getActor() instanceof Player)
 		{
-			freezes.onDeath((Player) event.getActor());
+			freezes.forget((Player) event.getActor());
 		}
 		if (event.getActor() == client.getLocalPlayer())
 		{

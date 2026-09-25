@@ -1092,9 +1092,10 @@ public class PrepToolsPanel extends PluginPanel
 
 		JTextArea instructions = createDescriptionArea(
 			"Press the Spammer hotkey (F10 by default - change it in the plugin's "
-				+ "Spammer settings) to send the selected message to public chat.\n\n"
+				+ "Spammer settings) to type the selected message into your chatbox "
+				+ "for public chat - press Enter to send it.\n\n"
 				+ "Click a message to select it, ✕ to remove it, or tick Random to "
-				+ "send a random one each press instead. Max "
+				+ "use a random one each press instead. Max "
 				+ ConfigListEditor.SPAM_MESSAGE_MAX_LENGTH + " characters, and at most one "
 				+ "message every 5 seconds.");
 

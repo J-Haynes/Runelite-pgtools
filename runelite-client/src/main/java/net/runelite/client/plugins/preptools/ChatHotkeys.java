@@ -10,6 +10,8 @@ import net.runelite.api.ChatMessageType;
 import net.runelite.api.Client;
 import net.runelite.api.Player;
 import net.runelite.api.ScriptID;
+import net.runelite.api.gameval.VarClientID;
+import net.runelite.api.vars.InputType;
 import net.runelite.client.callback.ClientThread;
 import net.runelite.client.chat.ChatMessageManager;
 import net.runelite.client.chat.QueuedMessage;
@@ -21,16 +23,20 @@ import net.runelite.client.util.HotkeyListener;
  * The hotkeys: Pile Spam (followed player's name to public chat), Spammer (saved message to public
  * chat, 5s cooldown), Location Spam (location to FC or clan chat) and Scout (Discord webhook).
  * Hotkeys fire on the AWT thread; everything they do runs on the client thread.
+ *
+ * The chat hotkeys only pre-fill the chatbox - you press Enter to send. The game client blocks a
+ * plugin sending chat itself ("Packet sent from script without permission", since the 2026-09-24
+ * injected-client).
  */
 class ChatHotkeys
 {
 	/**
-	 * CHAT_SEND's "mode" argument, all CONFIRMED in game (guessed at first - neither RuneLite's
-	 * source nor the web had them).
+	 * Chat input prefixes the game's own chat script (ChatDefaultOnKey) turns into a channel and
+	 * strips before sending - so the message goes to that channel whatever the chatbox is set to.
 	 */
-	private static final int CHAT_MODE_PUBLIC = 0;
-	private static final int CHAT_MODE_CLAN_CHAT = 1;
-	private static final int CHAT_MODE_FRIENDS_CHAT = 2;
+	private static final String PREFIX_PUBLIC = "/p ";
+	private static final String PREFIX_CLAN_CHAT = "/c ";
+	private static final String PREFIX_FRIENDS_CHAT = "/f ";
 
 	/**
 	 * Spammer only (anti-abuse, asked for) - Pile/Location Spam carry fight-critical information
@@ -119,7 +125,7 @@ class ChatHotkeys
 		};
 	}
 
-	private void sendPileSpam()
+	void sendPileSpam()
 	{
 		Player local = client.getLocalPlayer();
 		Actor interacting = local != null ? local.getInteracting() : null;
@@ -130,13 +136,13 @@ class ChatHotkeys
 
 		String prefix = config.pileSpamPrefix();
 		String name = interacting.getName();
-		send(prefix == null || prefix.trim().isEmpty() ? name : prefix.trim() + " " + name, CHAT_MODE_PUBLIC);
+		prefill(prefix == null || prefix.trim().isEmpty() ? name : prefix.trim() + " " + name, PREFIX_PUBLIC);
 	}
 
 	/**
 	 * The selected message, or with Random on a random one - never the same twice in a row.
 	 */
-	private void sendSpammerMessage()
+	void sendSpammerMessage()
 	{
 		List<String> messages = ConfigLists.parseSpamMessages(config.spamMessages());
 		if (messages.isEmpty())
@@ -148,11 +154,7 @@ class ChatHotkeys
 		long remainingMillis = lastSpamSentMillis + SPAM_COOLDOWN_MILLIS - now;
 		if (remainingMillis > 0)
 		{
-			// Local console line only, so a blocked press isn't mistaken for a broken hotkey.
-			chatMessageManager.queue(QueuedMessage.builder()
-				.type(ChatMessageType.CONSOLE)
-				.value(String.format("Spammer on cooldown - %.1fs left.", remainingMillis / 1000.0))
-				.build());
+			printConsole(String.format("Spammer on cooldown - %.1fs left.", remainingMillis / 1000.0));
 			return;
 		}
 
@@ -172,12 +174,14 @@ class ChatHotkeys
 			message = messages.contains(selected) ? selected : messages.get(0);
 		}
 
-		lastSpamMessage = message;
-		lastSpamSentMillis = now;
-		send(message, CHAT_MODE_PUBLIC);
+		if (prefill(message, PREFIX_PUBLIC))
+		{
+			lastSpamMessage = message;
+			lastSpamSentMillis = now;
+		}
 	}
 
-	private void sendLocation()
+	void sendLocation()
 	{
 		String name = locations.getLocationName();
 		Integer level = locations.getWildernessLevel();
@@ -185,16 +189,37 @@ class ChatHotkeys
 		{
 			return;
 		}
-		send(formatLocation(client.getWorld(), name, level),
-			config.locationSpamChannel() == ChatSpamChannel.CLAN_CHAT ? CHAT_MODE_CLAN_CHAT : CHAT_MODE_FRIENDS_CHAT);
+		prefill(formatLocation(client.getWorld(), name, level),
+			config.locationSpamChannel() == ChatSpamChannel.CLAN_CHAT ? PREFIX_CLAN_CHAT : PREFIX_FRIENDS_CHAT);
 	}
 
 	/**
-	 * Sends a chat message exactly as if typed and Enter pressed - the same script RuneLite's
-	 * ChatInputManager uses.
+	 * Puts the message in the chatbox, replacing whatever was typed, for you to send with Enter -
+	 * the same as core's ChatKeyboardListener. Not while another chat prompt is open (a private
+	 * message, "Enter amount", a search): the text would go to the hidden chat line instead.
+	 *
+	 * @return false if a prompt was open and nothing was typed
 	 */
-	private void send(String message, int mode)
+	private boolean prefill(String message, String channelPrefix)
 	{
-		client.runScript(ScriptID.CHAT_SEND, message, mode, 0, 0, -1);
+		if (client.getVarcIntValue(VarClientID.MESLAYERMODE) != InputType.NONE.getType())
+		{
+			printConsole("Close the open chat prompt first.");
+			return false;
+		}
+		client.setVarcStrValue(VarClientID.CHATINPUT, channelPrefix + message);
+		client.runScript(ScriptID.CHAT_PROMPT_INIT);
+		return true;
+	}
+
+	/**
+	 * A local console line only, so a blocked press isn't mistaken for a broken hotkey.
+	 */
+	private void printConsole(String message)
+	{
+		chatMessageManager.queue(QueuedMessage.builder()
+			.type(ChatMessageType.CONSOLE)
+			.value(message)
+			.build());
 	}
 }

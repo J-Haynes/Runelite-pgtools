@@ -39,7 +39,9 @@ client with similar team-coordination features. Core pieces:
   - **Target** — whoever the *primary* caller is currently interacting with (attacking, following,
     etc. — `Player#getInteracting()`), i.e. one player at a time, only ever derived from the primary
     caller, never a backup. **Never a teammate** - a caller following whoever leads the fall-in used
-    to make that teammate the "target" (highlighted + left-click Attack). Wins over a pile-finder highlight on the same player
+    to make that teammate the "target" (highlighted + left-click Attack). A frozen target (and a
+    frozen pile) uses its own colour (`frozenTargetColor()`/`frozenPileColor()`; not while immune),
+    which is why `FreezeTracker#onGameTick()` runs before `HighlightTracker`'s. Wins over a pile-finder highlight on the same player
     (`PrepToolsConfig#targetColor()`'s doc comment: "Always wins over the pile finder colour").
     Optionally flashes a configurable colour for a moment when a *new* target first appears
     (`showTargetFlash()`/`targetFlashColor()`/`targetFlashDurationMillis()`), and can be prioritised
@@ -58,11 +60,20 @@ client with similar team-coordination features. Core pieces:
     friends chat *or* clan - either works). Can also be prioritised to left-click Attack
     (`prioritiseAttackForPiles()`), subordinate to the target's own priority.
 - **Freeze tracking** — detects Bind/Snare/Entangle/Ice-spell hits, shows icon + countdown, can
-  hide/block freezes against teammates.
+  hide/block freezes against teammates. Detection uses `Player#hasSpotAnim()`, not the deprecated
+  `getGraphic()`, which returns only one of an actor's spot anims (a barrage landing with a TB was
+  missed). **Every** player's freeze is tracked whatever the settings - `FreezeTracker#isFrozen()`
+  feeds the infobox, the frozen border and the frozen target/pile colours - and the overlays ask
+  `isFreezeShown()` for what to draw. Timing: the shown countdown is spell duration **+1** tick
+  (display only); immunity ends spell duration **+5** after the hit (`FreezeState#immunityEndTick`)
+  - the first tick a refreeze lands, so it's accepted even though the old entry isn't dropped
+  until that tick's `onGameTick`. Refreezes were dropped before both were fixed (2026-09-25).
 - **Teleblock tracking** — same idea as freeze tracking, but for the teleblock spell (icon +
   countdown; 5 min normally, 2.5 min if the target was praying Protect from Magic when it landed).
   Drawn one row below the freeze icon when a player has both (both overlays share an anchor).
-  Both freeze and TB are cleared on death (`ActorDeath` + death animation).
+  Both freeze and TB are cleared on death (`ActorDeath` + death animation) and on
+  `PlayerDespawned` (logout, or leaving view - `FreezeTracker#forget()`); without the latter a
+  logged-out player's icons stayed at their last spot until the timer ran out.
 - **Snipe list** — a flat, always-on highlight list (default red), independent of caller/target
   status. Shift-right-click a player to add them, same idiom as "Add caller" (default green).
 - **Infobox panel** — bottom-right HUD: your stats (HP/prayer/strength/ranged — prayer and
@@ -99,18 +110,22 @@ client with similar team-coordination features. Core pieces:
   on purpose ("7 other players" was called useless); location parts are Location Spam's. Only sends to a real Discord webhook URL
   (`isDiscordWebhook()`), `allowed_mentions` empty so a cape name can't ping, 5s cooldown (Discord
   allows ~30/min per channel); result echoed as a console chat line.
-- **Pile Spam** (was "Chat Spam") — hotkey (F12 default) that sends the name of whoever you're
-  following/piling straight to **public/game chat**, always — no channel option (removed
+- **Chat hotkeys only pre-fill the chatbox - you press Enter.** Pile Spam, Spammer and Location
+  Spam type their message into the chat input with a channel prefix the game's own chat script
+  strips (`/p ` public, `/f ` friends chat, `/c ` clan - `ChatHotkeys#prefill()`, core's
+  `ChatKeyboardListener` pattern). Replaces whatever was typed; does nothing (console line, no
+  Spammer cooldown used) while another chat prompt is open (`MESLAYERMODE`, e.g. a PM). They used to send directly; see the "without permission" lesson.
+- **Pile Spam** (was "Chat Spam") — hotkey (F12 default) that types the name of whoever you're
+  following/piling for **public/game chat**, always — no channel option (removed
   deliberately: this is for whoever's actually looking at your screen in the moment, not a
   coordination channel). Config keys kept as `chatSpamHotkey`/`chatSpamPrefix` (only the section/
   method names changed) so an already-configured hotkey isn't lost by the rename.
-- **Spammer** — hotkey (F10 default) that sends a saved message to **public chat**. Messages are
+- **Spammer** — hotkey (F10 default) that types a saved message for **public chat**. Messages are
   added/selected/deleted from the sidebar "Spam" tab (select = what's sent; or tick Random for a
   random one each press, never the same twice in a row). Stored newline-separated (messages can
   contain commas) in hidden config `spamMessages`/`selectedSpamMessage`; max 80 chars. **5 second
   cooldown** between sends (anti-abuse, asked for explicitly; a blocked press prints a local
   console line) - Spammer only, Pile Spam and Location Spam are deliberately NOT rate-limited.
-  Confirmed working in game.
 - **Multi Lines** — ground lines around multi-combat areas (+ optional dragon-spear range). Two
   sources, both BSD-2 (notices kept in `MultiLinesOverlay.java`), both **bundled** rather than
   downloaded at login like Multi-Lines does:
@@ -128,15 +143,13 @@ client with similar team-coordination features. Core pieces:
   GPU plugin's draw distance via `WorldLines` - see the lesson below.
 - **Member counts** — friends chat / clan member "near you" infoboxes, same as the vanilla Team
   plugin's counters (Team Capes config section).
-- **Location Spam** — hotkey (F11 default) that sends your current wilderness location to chat in a
+- **Location Spam** — hotkey (F11 default) that types your current wilderness location in a
   **fixed format, no configurable prefix**: `Location: W318, Ferox Enclave, lvl 15 wild` (world,
   then name, then the wilderness level if known - the "lvl N wild" part is omitted entirely, comma
   and all, if you're not in the wilderness). World number was briefly dropped, then asked back -
-  it's back for good now, no need to ask again. Sends on a **configurable channel** (Friends Chat
+  it's back for good now, no need to ask again. Goes to a **configurable channel** (Friends Chat
   default, Clan Chat also selectable via `locationSpamChannel`) — unlike Pile Spam, this one's
   meant for a specific coordination channel.
-  Both hotkeys actually *send* (not just pre-fill) via `ChatHotkeys#send()` /
-  `client.runScript(ScriptID.CHAT_SEND, ...)`.
 - **Location Mapper** (sidebar "Location" tab, builds the `WildernessLocation` list Location Spam
   reads from) — coordinate fields are labelled by cardinal direction + axis (West/East X,
   South/North Y), not "Corner A/B"; focused on one, Up/Down arrow keys nudge its value by ±1
@@ -198,7 +211,9 @@ client with similar team-coordination features. Core pieces:
     by hand. A source not used: the game cache's world-map labels (`cache` module) - current, but
     points only.
 - **Team cape overlay** — like vanilla RuneLite's "Teams" plugin, but with a custom name per team
-  number (`PrepToolsConfig#teamCapeNames`).
+  number (`PrepToolsConfig#teamCapeNames`). Every cell reports the tallest cell's height
+  (`EvenHeightCell`): core's wrapping `PanelComponent` moves a new row down by the *last* cell's
+  height, so a named cape (icon + text) in row 2 after a plain icon ended row 1 hung out of the box.
 - **Right-click menu integration** — prioritises/recolours Attack and freeze-spell casts (target,
   pile, and now snipe-list hits too, with a configurable tie-break order —
   four "1st..4th Attack priority" dropdowns, `PrepToolsConfig#attackPriority1()`.., default
@@ -279,6 +294,12 @@ Overlays inject the tracker they draw from, not the plugin. Tests live in
 Everything built but not yet confirmed in game / on a real machine - move an item into the relevant
 section (or delete it) once the user confirms it:
 
+- **Chat hotkeys pre-filling (2026-09-25)** - Spammer/Location/Pile Spam now type into the
+  chatbox with `/p `, `/f ` or `/c `; confirm the text appears and Enter sends it to the right
+  channel.
+- **Refreeze fix, frozen target/pile colours, even-height Team Capes rows (2026-09-25)** - not
+  yet seen in game. The refreeze timing (immunity = duration + 5 from the hit) is from the OSRS
+  wiki; if a refreeze shows a tick early/late, `FreezeTracker#newFreeze()` is where to adjust.
 - **Multi Lines' wilderness areas and extended-scene heights** - see the Multi Lines entry and the
   `WorldLines` lesson.
 - **Fall-in leader showing Attack / highlighted** (reported 2026-09-24) - fixed by excluding
@@ -304,6 +325,19 @@ section (or delete it) once the user confirms it:
 - **Windows `.exe` and macOS `.dmg`** - never built on this machine (jpackage can't cross-compile);
   only a Package workflow run proves them. That includes the WiX PATH fix (below), the `.ico`/`.icns`
   icons, and jpackage 17's launcher running the bundled Java 11 runtime on those OSes.
+
+## Backlog
+
+Agreed with the user but deliberately not built yet. Low priority unless marked otherwise:
+
+- **(Low) Clear a TB when an in-view player leaves the Wilderness** - the game ends it then (OSRS
+  wiki), but the icon stays until the timer runs out. Rare in practice, so deferred on purpose
+  (2026-09-25). If built: a per-tick position check on each teleblocked player
+  (`LocationTracker`'s coordinate formula works for any player).
+- **Decided against (don't re-propose): remembering a TB across the player leaving view.** A TB
+  ends on logout (incl. hop), death, or leaving the Wilderness - all likely out of view - so a
+  remembered TB would usually be stale, and a false TB is worse than none. Freeze/TB state is
+  dropped on `PlayerDespawned`.
 
 ## Build & run
 
@@ -504,10 +538,21 @@ These cost real debugging time to find. Don't rediscover them the hard way:
   stable snapshot. (`CopyOnWriteArrayList` was the first fix and works too.) A single simple
   reference field read cross-thread without synchronization (e.g. `lastKnownWorldPoint`) is fine -
   reference assignment is atomic; this is specifically a collection-structural-mutation problem.
-- **`ScriptID.CHAT_SEND`'s "modes" integer, all CONFIRMED in game:** public = 0 (Spammer/Pile
-  Spam), clan chat = 1, friends chat = 2 (`ChatHotkeys`'s `CHAT_MODE_*` constants). Neither
-  RuneLite's source/docs nor a web search had the literal values - they were guessed (FC/clan
-  initially swapped) and fixed by testing.
+- **A plugin can't send chat any more: `client.runScript(ScriptID.CHAT_SEND, ...)` throws
+  `RuntimeException: Packet sent from script without permission`** (logged as `Client error: 5517
+  5008`, nothing visible in game - the hotkeys just silently did nothing). It came with the
+  `injected-client:1.12.40-SNAPSHOT` Gradle downloaded on 2026-09-24 16:26 - the fork pulls
+  RuneLite's latest snapshot, so the game client can change under an unchanged plugin. Upstream
+  commit `fd5083ef8` ("rl-client: block packets sent from cs2s by default", committed 2026-09-23,
+  not yet merged into this fork) adds an opt-in, `ScriptEvent#setCanSendPackets(true)`. Core uses
+  it only for input the player made themselves: re-sending chat they typed, a bank pin key they
+  pressed, a kick they confirmed. Sending a canned message from a hotkey is against RuneLite's
+  rules: its
+  [Rejected or Rolled Back Features](https://github.com/runelite/runelite/wiki/Rejected-or-Rolled-Back-Features)
+  wiki page bans inserting text into the chatbox "for any reason" as autotyping - which covers
+  the current pre-fill (`setVarcStrValue(VarClientID.CHATINPUT, ...)` +
+  `runScript(ScriptID.CHAT_PROMPT_INIT)`) too. When a feature that worked stops, grep
+  `~/.runelite/logs/client.log` for `Client error` before reading the plugin code.
 - **A `PluginPanel` with its own per-tab scroll panes must call `super(false)`.** The default
   `PluginPanel()` constructor wraps the whole panel in an outer `JScrollPane`. Nested inside that,
   a tab taller than the sidebar grows to full height in the OUTER pane, so its own inner pane has

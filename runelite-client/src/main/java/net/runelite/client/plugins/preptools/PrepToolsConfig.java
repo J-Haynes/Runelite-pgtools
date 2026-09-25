@@ -283,12 +283,26 @@ public interface PrepToolsConfig extends Config
 	}
 
 	@ConfigItem(
+		keyName = "frozenTargetColor",
+		name = "Frozen target colour",
+		description = "<html>Used instead of the target colour while the target is<br>"
+			+ "frozen (not while immune). Works with Freeze Timers off.<br>"
+			+ "Set it to the target colour to turn this off.</html>",
+		position = 2,
+		section = "targetSection"
+	)
+	default Color frozenTargetColor()
+	{
+		return new Color(0, 170, 255); // ice blue
+	}
+
+	@ConfigItem(
 		keyName = "prioritiseTargetAttack",
 		name = "Prioritise attack option",
 		description = "<html>Forces 'Attack' to the top of the right-click menu<br>"
 			+ "for the target, so they're always left-click<br>"
 			+ "attackable even in a crowd.</html>",
-		position = 2,
+		position = 3,
 		section = "targetSection"
 	)
 	default boolean prioritiseTargetAttack()
@@ -300,7 +314,7 @@ public interface PrepToolsConfig extends Config
 		keyName = "showTargetFlash",
 		name = "Flash on new target",
 		description = "Briefly flash a player when they first become the target.",
-		position = 3,
+		position = 4,
 		section = "targetSection"
 	)
 	default boolean showTargetFlash()
@@ -312,7 +326,7 @@ public interface PrepToolsConfig extends Config
 		keyName = "targetFlashColor",
 		name = "Flash colour",
 		description = "Colour flashed when a new target first appears.",
-		position = 4,
+		position = 5,
 		section = "targetSection"
 	)
 	default Color targetFlashColor()
@@ -324,7 +338,7 @@ public interface PrepToolsConfig extends Config
 		keyName = "targetFlashDurationMillis",
 		name = "Flash duration (ms)",
 		description = "How long the new-target flash lasts.",
-		position = 5,
+		position = 6,
 		section = "targetSection"
 	)
 	default int targetFlashDurationMillis()
@@ -540,13 +554,27 @@ public interface PrepToolsConfig extends Config
 	}
 
 	@ConfigItem(
+		keyName = "frozenPileColor",
+		name = "Frozen pile colour",
+		description = "<html>Used instead of the pile colour while that player is<br>"
+			+ "frozen (not while immune). Works with Freeze Timers off.<br>"
+			+ "Set it to the pile colour to turn this off.</html>",
+		position = 4,
+		section = "targetedPlayerSection"
+	)
+	default Color frozenPileColor()
+	{
+		return new Color(215, 140, 255); // light purple
+	}
+
+	@ConfigItem(
 		keyName = "prioritiseAttackForPiles",
 		name = "Prioritise attack option",
 		description = "<html>Forces 'Attack' to the top of the right-click menu<br>"
 			+ "for a player caught by the pile finder. The caller's<br>"
 			+ "target (Target section) always wins over this if a<br>"
 			+ "player happens to be both.</html>",
-		position = 4,
+		position = 5,
 		section = "targetedPlayerSection"
 	)
 	default boolean prioritiseAttackForPiles()
@@ -954,7 +982,7 @@ public interface PrepToolsConfig extends Config
 
 	@ConfigSection(
 		name = "Pile Spam",
-		description = "Quickly post the name of whoever you're following/piling into public chat.",
+		description = "Quickly type the name of whoever you're following/piling into public chat.",
 		position = 11,
 		closedByDefault = true
 	)
@@ -964,7 +992,8 @@ public interface PrepToolsConfig extends Config
 		keyName = "chatSpamHotkey",
 		name = "Hotkey",
 		description = "<html>While following/interacting with a player, pressing this<br>"
-			+ "sends their name straight to public/game chat.</html>",
+			+ "types their name into your chatbox for public chat -<br>"
+			+ "press Enter to send it.</html>",
 		position = 1,
 		section = "pileSpamSection"
 	)
@@ -1014,8 +1043,9 @@ public interface PrepToolsConfig extends Config
 	@ConfigItem(
 		keyName = "locationSpamHotkey",
 		name = "Location hotkey",
-		description = "<html>Pressing this sends your current wilderness location straight<br>"
-			+ "to chat, formatted as 'Location: Ferox Enclave, 15'.</html>",
+		description = "<html>Pressing this types your current wilderness location into<br>"
+			+ "your chatbox, as 'Location: W318, Ferox Enclave, lvl 15 wild' -<br>"
+			+ "press Enter to send it.</html>",
 		position = 2,
 		section = "locationSection"
 	)
@@ -1027,7 +1057,7 @@ public interface PrepToolsConfig extends Config
 	@ConfigItem(
 		keyName = "locationSpamChannel",
 		name = "Channel",
-		description = "Which chat channel the hotkey sends to.",
+		description = "Which chat channel the location goes to.",
 		position = 3,
 		section = "locationSection"
 	)
@@ -1040,7 +1070,7 @@ public interface PrepToolsConfig extends Config
 
 	@ConfigSection(
 		name = "Spammer",
-		description = "<html>A hotkey that sends one of your saved messages to public<br>"
+		description = "<html>A hotkey that types one of your saved messages into public<br>"
 			+ "chat. Messages are added/selected from the sidebar's Spam tab.</html>",
 		position = 13,
 		closedByDefault = true
@@ -1050,7 +1080,7 @@ public interface PrepToolsConfig extends Config
 	@ConfigItem(
 		keyName = "spamHotkey",
 		name = "Hotkey",
-		description = "Pressing this sends the selected (or a random) saved message to public chat - at most once every 5 seconds.",
+		description = "Pressing this types the selected (or a random) saved message into your chatbox for public chat - press Enter to send. At most once every 5 seconds.",
 		position = 1,
 		section = "spammerSection"
 	)

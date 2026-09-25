@@ -7,12 +7,15 @@ import net.runelite.api.Client;
 import net.runelite.api.GraphicID;
 import net.runelite.api.Player;
 import net.runelite.api.coords.WorldPoint;
+import net.runelite.api.gameval.SpotanimID;
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertNull;
+import static org.junit.Assert.assertSame;
 import static org.junit.Assert.assertTrue;
 import org.junit.Before;
 import org.junit.Test;
+import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.Mockito.CALLS_REAL_METHODS;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
@@ -79,36 +82,94 @@ public class TrackerTest
 		assertFalse(team.isChatMember(enemyA));
 	}
 
+	/**
+	 * The player carries exactly these spot anims (hasSpotAnim), like a fresh impact graphic.
+	 */
+	private static void spotAnims(Player player, Integer... ids)
+	{
+		List<Integer> list = Arrays.asList(ids);
+		when(player.hasSpotAnim(anyInt())).thenAnswer(i -> list.contains(i.<Integer>getArgument(0)));
+	}
+
 	@Test
 	public void freezeIsNotRefreshedByAHitWhileFrozenOrImmune()
 	{
-		when(config.showFreezeTimers()).thenReturn(true);
 		FreezeTracker freezes = new FreezeTracker(client, config, team);
-		when(enemyA.getGraphic()).thenReturn(GraphicID.SNARE);
+		spotAnims(enemyA, GraphicID.SNARE);
 
 		assertFalse(freezes.onGraphicChanged(enemyA));
 		FreezeState first = freezes.getFreezeStates().get(enemyA);
+		// Snare is 16 ticks; the countdown shows one extra, immunity ends 16 + 5 after the hit.
 		assertEquals(17, first.endTick);
+		assertEquals(21, first.immunityEndTick);
 
 		// A barrage lands mid-snare: the game doesn't refreeze, so neither do we.
 		tick = 10;
-		when(enemyA.getGraphic()).thenReturn(GraphicID.ICE_BARRAGE);
+		spotAnims(enemyA, GraphicID.ICE_BARRAGE);
 		freezes.onGraphicChanged(enemyA);
-		assertTrue(first == freezes.getFreezeStates().get(enemyA));
+		assertSame(first, freezes.getFreezeStates().get(enemyA));
 
 		// Expires into immunity; a hit during immunity doesn't freeze either.
 		tick = 17;
 		freezes.onGameTick();
 		assertTrue(first.immune);
+		assertFalse(freezes.isFrozen(enemyA));
+		tick = 20;
 		freezes.onGraphicChanged(enemyA);
-		assertTrue(first == freezes.getFreezeStates().get(enemyA));
+		assertSame(first, freezes.getFreezeStates().get(enemyA));
+	}
 
-		// Immunity over: tracking stops, and the next hit is a new freeze.
-		tick = 22;
-		freezes.onGameTick();
-		assertFalse(freezes.getFreezeStates().containsKey(enemyA));
+	@Test
+	public void refreezeOnTheFirstTickAfterImmunityCounts()
+	{
+		FreezeTracker freezes = new FreezeTracker(client, config, team);
+		spotAnims(enemyA, GraphicID.SNARE);
 		freezes.onGraphicChanged(enemyA);
-		assertEquals(22 + 33, freezes.getFreezeStates().get(enemyA).endTick);
+		tick = 17;
+		freezes.onGameTick();
+
+		// Tick 21: immunity is over, and the graphic arrives before this tick's onGameTick has
+		// dropped the old entry - it must still count as a new freeze.
+		tick = 21;
+		spotAnims(enemyA, GraphicID.ICE_BARRAGE);
+		freezes.onGraphicChanged(enemyA);
+		assertEquals(21 + 33, freezes.getFreezeStates().get(enemyA).endTick);
+		assertTrue(freezes.isFrozen(enemyA));
+
+		freezes.onGameTick();
+		assertTrue(freezes.isFrozen(enemyA));
+	}
+
+	@Test
+	public void freezeSeenAlongsideAnotherSpotAnim()
+	{
+		when(config.showTeleblockTimers()).thenReturn(true);
+		FreezeTracker freezes = new FreezeTracker(client, config, team);
+		// A barrage and a teleblock landing together - getGraphic() would only report one.
+		spotAnims(enemyA, SpotanimID.TELE_BLOCK_IMPACT, GraphicID.ICE_BARRAGE);
+
+		freezes.onGraphicChanged(enemyA);
+
+		assertEquals(33, freezes.getFreezeStates().get(enemyA).endTick);
+		assertTrue(freezes.getTeleblockStates().containsKey(enemyA));
+	}
+
+	@Test
+	public void freezesAreTrackedWhateverTheyShow()
+	{
+		when(config.showFreezeTimers()).thenReturn(false);
+		FreezeTracker freezes = new FreezeTracker(client, config, team);
+		spotAnims(enemyA, GraphicID.ICE_BARRAGE);
+		freezes.onGraphicChanged(enemyA);
+		assertTrue(freezes.isFrozen(enemyA));
+		assertFalse(freezes.isFreezeShown(enemyA));
+
+		// "Hide for own team" hides a teammate's timer, never yours.
+		when(config.showFreezeTimers()).thenReturn(true);
+		when(config.hideFreezeTimersForOwnTeam()).thenReturn(true);
+		assertTrue(freezes.isFreezeShown(enemyA));
+		assertFalse(freezes.isFreezeShown(mate));
+		assertTrue(freezes.isFreezeShown(local));
 	}
 
 	@Test
@@ -116,11 +177,10 @@ public class TrackerTest
 	{
 		when(config.showFreezeTimers()).thenReturn(false);
 		FreezeTracker freezes = new FreezeTracker(client, config, team);
-		when(local.getGraphic()).thenReturn(GraphicID.ICE_RUSH);
+		spotAnims(local, GraphicID.ICE_RUSH);
 
 		assertTrue(freezes.onGraphicChanged(local));
 		assertTrue(freezes.isLocalFrozen());
-		assertTrue(freezes.getFreezeStates().isEmpty());
 		// A second hit while frozen isn't a new freeze.
 		assertFalse(freezes.onGraphicChanged(local));
 	}
@@ -129,7 +189,7 @@ public class TrackerTest
 	public void movingAfterTheGraceTicksEndsAFreeze()
 	{
 		FreezeTracker freezes = new FreezeTracker(client, config, team);
-		when(local.getGraphic()).thenReturn(GraphicID.ICE_BARRAGE);
+		spotAnims(local, GraphicID.ICE_BARRAGE);
 		freezes.onGraphicChanged(local);
 
 		// A step queued before the freeze, during the grace ticks, doesn't count.
@@ -148,10 +208,51 @@ public class TrackerTest
 	public void deathEndsFreezes()
 	{
 		FreezeTracker freezes = new FreezeTracker(client, config, team);
-		when(local.getGraphic()).thenReturn(GraphicID.BIND);
+		spotAnims(local, GraphicID.BIND);
 		freezes.onGraphicChanged(local);
-		freezes.onDeath(local);
+		freezes.forget(local);
 		assertNull(freezes.getLocalFreeze());
+	}
+
+	@Test
+	public void despawnedPlayerLosesFreezeAndTeleblock()
+	{
+		when(config.showTeleblockTimers()).thenReturn(true);
+		FreezeTracker freezes = new FreezeTracker(client, config, team);
+		spotAnims(enemyA, GraphicID.BIND, SpotanimID.TELE_BLOCK_IMPACT);
+		freezes.onGraphicChanged(enemyA);
+		assertTrue(freezes.isFrozen(enemyA));
+		assertTrue(freezes.getTeleblockStates().containsKey(enemyA));
+
+		// Logged out (PlayerDespawned).
+		freezes.forget(enemyA);
+		assertFalse(freezes.getFreezeStates().containsKey(enemyA));
+		assertFalse(freezes.getTeleblockStates().containsKey(enemyA));
+	}
+
+	@Test
+	public void frozenTargetAndPileGetTheirFrozenColour()
+	{
+		when(config.enableTargetedPlayerDetection()).thenReturn(true);
+		when(config.targetedPlayerThreshold()).thenReturn(2);
+		FreezeTracker freezes = new FreezeTracker(client, config, team);
+		HighlightTracker highlights = new HighlightTracker(client, config, team, freezes);
+		when(local.getInteracting()).thenReturn(enemyA);
+		when(mate.getInteracting()).thenReturn(enemyA);
+
+		highlights.onGameTick();
+		assertEquals(config.targetedPlayerColor(), highlights.getStyles().get(enemyA).color);
+
+		spotAnims(enemyA, GraphicID.ICE_BARRAGE);
+		freezes.onGraphicChanged(enemyA);
+		highlights.onGameTick();
+		assertEquals(config.frozenPileColor(), highlights.getStyles().get(enemyA).color);
+
+		// Immune isn't frozen - back to the normal colour.
+		tick = 33;
+		freezes.onGameTick();
+		highlights.onGameTick();
+		assertEquals(config.targetedPlayerColor(), highlights.getStyles().get(enemyA).color);
 	}
 
 	@Test
@@ -159,7 +260,7 @@ public class TrackerTest
 	{
 		when(config.enableTargetedPlayerDetection()).thenReturn(true);
 		when(config.targetedPlayerThreshold()).thenReturn(2);
-		HighlightTracker highlights = new HighlightTracker(client, config, team);
+		HighlightTracker highlights = new HighlightTracker(client, config, team, new FreezeTracker(client, config, team));
 
 		when(local.getInteracting()).thenReturn(enemyA);
 		when(mate.getInteracting()).thenReturn(enemyA);
@@ -178,7 +279,7 @@ public class TrackerTest
 	@Test
 	public void callerFollowingATeammateHasNoTarget()
 	{
-		HighlightTracker highlights = new HighlightTracker(client, config, team);
+		HighlightTracker highlights = new HighlightTracker(client, config, team, new FreezeTracker(client, config, team));
 		highlights.setCallers(Collections.singletonList(new CallerEntry("Mate", "M", true)));
 		team.setConfiguredCallers(Collections.singleton("mate"));
 		team.refresh();
@@ -199,7 +300,7 @@ public class TrackerTest
 	{
 		when(config.highlightAttackers()).thenReturn(true);
 		when(config.maxAttackers()).thenReturn(1);
-		HighlightTracker highlights = new HighlightTracker(client, config, team);
+		HighlightTracker highlights = new HighlightTracker(client, config, team, new FreezeTracker(client, config, team));
 
 		when(enemyB.getInteracting()).thenReturn(local);
 		highlights.onGameTick();

@@ -3,6 +3,7 @@ package net.runelite.client.plugins.preptools;
 import java.awt.Dimension;
 import java.awt.Graphics2D;
 import java.awt.Point;
+import java.awt.Rectangle;
 import java.util.Map;
 import javax.inject.Inject;
 import static net.runelite.api.MenuAction.RUNELITE_OVERLAY_CONFIG;
@@ -13,6 +14,7 @@ import net.runelite.client.ui.overlay.OverlayPanel;
 import net.runelite.client.ui.overlay.OverlayPosition;
 import net.runelite.client.ui.overlay.components.ComponentOrientation;
 import net.runelite.client.ui.overlay.components.ImageComponent;
+import net.runelite.client.ui.overlay.components.LayoutableRenderableEntity;
 import net.runelite.client.ui.overlay.components.LineComponent;
 import net.runelite.client.ui.overlay.components.SplitComponent;
 
@@ -28,6 +30,14 @@ public class TeamCapeOverlay extends OverlayPanel
 {
 	// Vertical gap between the cape icon and its name line, when a custom name is shown.
 	private static final Point NAME_GAP = new Point(0, 2);
+
+	/**
+	 * The tallest cell last frame. Every cell reports this height: core's PanelComponent starts a
+	 * wrapped row one LAST-cell-height down, not one row-height, so a row ending on a plain icon
+	 * let a named cape in the next row hang out of the panel.
+	 */
+	private int cellHeight;
+	private int tallestThisFrame;
 
 	private final PrepToolsPlugin plugin;
 	private final PrepToolsConfig config;
@@ -76,20 +86,22 @@ public class TeamCapeOverlay extends OverlayPanel
 			ImageComponent capeImage = new ImageComponent(itemManager.getImage(itemId, count, true));
 
 			String customName = plugin.getTeamCapeNames().get(teamNumber);
+			LayoutableRenderableEntity cell;
 			if (customName == null)
 			{
-				panelComponent.getChildren().add(capeImage);
+				cell = capeImage;
 			}
 			else
 			{
 				LineComponent nameLine = LineComponent.builder().left(customName).build();
-				panelComponent.getChildren().add(SplitComponent.builder()
+				cell = SplitComponent.builder()
 					.first(capeImage)
 					.second(nameLine)
 					.orientation(ComponentOrientation.VERTICAL)
 					.gap(NAME_GAP)
-					.build());
+					.build();
 			}
+			panelComponent.getChildren().add(new EvenHeightCell(cell));
 			anyEntry = true;
 		}
 
@@ -98,7 +110,49 @@ public class TeamCapeOverlay extends OverlayPanel
 			return null;
 		}
 
-		return super.render(graphics);
+		tallestThisFrame = 0;
+		Dimension dimension = super.render(graphics);
+		cellHeight = tallestThisFrame;
+		return dimension;
+	}
+
+	/**
+	 * A cell that reports at least cellHeight tall, so every row is the same height.
+	 */
+	private class EvenHeightCell implements LayoutableRenderableEntity
+	{
+		private final LayoutableRenderableEntity cell;
+
+		EvenHeightCell(LayoutableRenderableEntity cell)
+		{
+			this.cell = cell;
+		}
+
+		@Override
+		public Dimension render(Graphics2D graphics)
+		{
+			Dimension size = cell.render(graphics);
+			tallestThisFrame = Math.max(tallestThisFrame, size.height);
+			return new Dimension(size.width, Math.max(size.height, cellHeight));
+		}
+
+		@Override
+		public Rectangle getBounds()
+		{
+			return cell.getBounds();
+		}
+
+		@Override
+		public void setPreferredLocation(Point position)
+		{
+			cell.setPreferredLocation(position);
+		}
+
+		@Override
+		public void setPreferredSize(Dimension dimension)
+		{
+			cell.setPreferredSize(dimension);
+		}
 	}
 
 	/**

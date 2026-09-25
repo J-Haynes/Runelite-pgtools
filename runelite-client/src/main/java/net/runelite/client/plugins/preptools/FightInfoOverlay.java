@@ -739,7 +739,7 @@ public class FightInfoOverlay extends Overlay
 			}
 			else
 			{
-				double remainingSeconds = (FreezeTracker.FREEZE_IMMUNITY_DURATION_MILLIS - (now - state.immunityStartTimeMillis)) / 1000.0;
+				double remainingSeconds = (state.immunityDurationMillis() - (now - state.immunityStartTimeMillis)) / 1000.0;
 				countdown = String.format("%.1fs", Math.max(0, remainingSeconds));
 			}
 			text = "Immune " + countdown;

@@ -32,6 +32,7 @@ class HighlightTracker
 	private final Client client;
 	private final PrepToolsConfig config;
 	private final TeamTracker team;
+	private final FreezeTracker freezes;
 
 	/**
 	 * Enabled callers from config, in list order - see setCallers().
@@ -93,11 +94,12 @@ class HighlightTracker
 	private Map<Player, HighlightStyle> cachedStyles = Collections.emptyMap();
 
 	@Inject
-	HighlightTracker(Client client, PrepToolsConfig config, TeamTracker team)
+	HighlightTracker(Client client, PrepToolsConfig config, TeamTracker team, FreezeTracker freezes)
 	{
 		this.client = client;
 		this.config = config;
 		this.team = team;
+		this.freezes = freezes;
 	}
 
 	/**
@@ -395,7 +397,8 @@ class HighlightTracker
 
 	/**
 	 * Highlight priority when a player is in more than one category, lowest to highest: backup
-	 * caller, attacker, snipe, pile, primary caller, target - later puts win.
+	 * caller, attacker, snipe, pile, primary caller, target - later puts win. A frozen pile or
+	 * target gets its frozen colour (FreezeTracker has already moved on to this tick).
 	 */
 	private void rebuildStyles()
 	{
@@ -406,14 +409,23 @@ class HighlightTracker
 		putAll(styles, backupCallers, base.withColor(config.backupCallerColor()));
 		putAll(styles, attackers, base.withColor(config.attackerColor()));
 		putAll(styles, snipedPlayers, base.withColor(config.snipeColor()));
-		putAll(styles, piledPlayers, base.withColor(config.targetedPlayerColor()));
+		putAll(styles, piledPlayers, base.withColor(config.targetedPlayerColor()), base.withColor(config.frozenPileColor()));
 		if (primaryCaller != null)
 		{
 			styles.put(primaryCaller, base.withColor(config.callerColor()));
 		}
-		putAll(styles, targets, base.withColor(config.targetColor()));
+		putAll(styles, targets, base.withColor(config.targetColor()), base.withColor(config.frozenTargetColor()));
 
 		cachedStyles = styles;
+	}
+
+	private void putAll(Map<Player, HighlightStyle> styles, Set<Player> players, HighlightStyle style,
+		HighlightStyle frozenStyle)
+	{
+		for (Player player : players)
+		{
+			styles.put(player, freezes.isFrozen(player) ? frozenStyle : style);
+		}
 	}
 
 	private static void putAll(Map<Player, HighlightStyle> styles, Set<Player> players, HighlightStyle style)

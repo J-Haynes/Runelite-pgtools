@@ -90,7 +90,7 @@ public class FreezeOverlay extends Overlay
 		{
 			Player player = entry.getKey();
 			FreezeState state = entry.getValue();
-			if (player == null)
+			if (player == null || !freezes.isFreezeShown(player))
 			{
 				continue;
 			}
@@ -112,7 +112,7 @@ public class FreezeOverlay extends Overlay
 				}
 				else
 				{
-					double remainingSeconds = (FreezeTracker.FREEZE_IMMUNITY_DURATION_MILLIS - (now - state.immunityStartTimeMillis)) / 1000.0;
+					double remainingSeconds = (state.immunityDurationMillis() - (now - state.immunityStartTimeMillis)) / 1000.0;
 					if (remainingSeconds <= 0)
 					{
 						continue;

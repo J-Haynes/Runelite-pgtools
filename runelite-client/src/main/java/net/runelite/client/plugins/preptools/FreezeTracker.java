@@ -13,10 +13,10 @@ import net.runelite.api.coords.WorldPoint;
 import net.runelite.api.gameval.SpotanimID;
 
 /**
- * Freeze and teleblock timers, detected from spell impact graphics (GraphicChanged). Players shown
- * by FreezeOverlay/TeleblockOverlay live in freezeStates/teleblockStates, gated by their config
- * toggles; your own freeze is ALSO always tracked separately in localFreeze, for the infobox and
- * the Attack Alert's frozen border. Client thread only.
+ * Freeze and teleblock timers, detected from spell impact graphics (GraphicChanged). Every
+ * player's freeze is tracked whatever the Freeze Timers settings - the infobox, the Attack Alert's
+ * frozen border and the frozen target/pile colours need it - and the overlays ask
+ * isFreezeShown() for what to draw. Teleblocks are only tracked when shown. Client thread only.
  */
 class FreezeTracker
 {
@@ -57,7 +57,13 @@ class FreezeTracker
 	 * After a freeze ends the player can't be frozen again for 5 ticks (OSRS wiki).
 	 */
 	private static final int FREEZE_IMMUNITY_TICKS = 5;
-	static final long FREEZE_IMMUNITY_DURATION_MILLIS = FREEZE_IMMUNITY_TICKS * 600L;
+
+	/**
+	 * Added to the shown freeze countdown only: it otherwise hits zero a tick before the player can
+	 * actually move. Not added to immunity - that ends spell duration + 5 ticks after the hit, the
+	 * first tick a refreeze lands, so a well-timed refreeze isn't thrown away as "immune".
+	 */
+	private static final int DISPLAY_EXTRA_TICKS = 1;
 
 	/**
 	 * 5 minutes, halved if the target was praying Protect from Magic when it landed (OSRS wiki).
@@ -75,13 +81,6 @@ class FreezeTracker
 	@Getter
 	private final Map<Player, TeleblockState> teleblockStates = new HashMap<>();
 
-	/**
-	 * Your own freeze (then immunity), tracked whatever the Freeze Timers settings are. Null when
-	 * neither.
-	 */
-	@Getter
-	private FreezeState localFreeze;
-
 	@Inject
 	FreezeTracker(Client client, PrepToolsConfig config, TeamTracker team)
 	{
@@ -90,9 +89,13 @@ class FreezeTracker
 		this.team = team;
 	}
 
-	static boolean isFreezeGraphic(int graphicId)
+	/**
+	 * Your own freeze (then immunity), or null when neither.
+	 */
+	FreezeState getLocalFreeze()
 	{
-		return FREEZE_SPELLS.containsKey(graphicId);
+		Player local = client.getLocalPlayer();
+		return local != null ? freezeStates.get(local) : null;
 	}
 
 	/**
@@ -100,7 +103,26 @@ class FreezeTracker
 	 */
 	boolean isLocalFrozen()
 	{
-		return localFreeze != null && !localFreeze.immune;
+		return isFrozen(client.getLocalPlayer());
+	}
+
+	/**
+	 * Whether the player is frozen right now (not counting post-freeze immunity).
+	 */
+	boolean isFrozen(Player player)
+	{
+		FreezeState state = player != null ? freezeStates.get(player) : null;
+		return state != null && !state.immune;
+	}
+
+	/**
+	 * Whether FreezeOverlay (and the teleblock row offset) should draw this player's freeze: Freeze
+	 * Timers on, and not a teammate hidden by "Hide for own team" - which never hides your own.
+	 */
+	boolean isFreezeShown(Player player)
+	{
+		return config.showFreezeTimers()
+			&& !(config.hideFreezeTimersForOwnTeam() && player != client.getLocalPlayer() && team.isOwnTeam(player));
 	}
 
 	/**
@@ -112,29 +134,24 @@ class FreezeTracker
 	 */
 	boolean onGraphicChanged(Player player)
 	{
-		int graphic = player.getGraphic();
 		Player local = client.getLocalPlayer();
 		int tick = client.getTickCount();
 
-		FreezeSpell spell = FREEZE_SPELLS.get(graphic);
 		boolean localNewlyFrozen = false;
+		FreezeSpell spell = freezeSpellOn(player);
 		if (spell != null)
 		{
-			if (player == local && localFreeze == null)
-			{
-				localFreeze = newFreeze(spell, player, tick);
-				localNewlyFrozen = true;
-			}
-
-			// "Hide for own team" never hides your own freeze.
-			boolean hidden = config.hideFreezeTimersForOwnTeam() && player != local && team.isOwnTeam(player);
-			if (config.showFreezeTimers() && !hidden && !freezeStates.containsKey(player))
+			// The entry isn't dropped until onGameTick, which runs after this tick's graphics - so
+			// an entry whose immunity has already run out mustn't block the new freeze.
+			FreezeState existing = freezeStates.get(player);
+			if (existing == null || tick >= existing.immunityEndTick)
 			{
 				freezeStates.put(player, newFreeze(spell, player, tick));
+				localNewlyFrozen = player == local;
 			}
 		}
 
-		if (graphic == SpotanimID.TELE_BLOCK_IMPACT && config.showTeleblockTimers()
+		if (player.hasSpotAnim(SpotanimID.TELE_BLOCK_IMPACT) && config.showTeleblockTimers()
 			&& !(config.hideTeleblockTimersForOwnTeam() && player != local && team.isOwnTeam(player)))
 		{
 			// Protect from Magic is read at impact - it can be switched off straight after.
@@ -154,18 +171,7 @@ class FreezeTracker
 		Player local = client.getLocalPlayer();
 		int tick = client.getTickCount();
 
-		// Also drops someone who became a teammate mid-freeze, or everyone once "Hide for own team"
-		// is switched on.
-		if (config.hideFreezeTimersForOwnTeam())
-		{
-			freezeStates.keySet().removeIf(player -> player != local && team.isOwnTeam(player));
-		}
 		freezeStates.entrySet().removeIf(entry -> !advance(entry.getKey(), entry.getValue(), tick));
-
-		if (localFreeze != null && (local == null || !advance(local, localFreeze, tick)))
-		{
-			localFreeze = null;
-		}
 
 		if (config.hideTeleblockTimersForOwnTeam())
 		{
@@ -175,31 +181,46 @@ class FreezeTracker
 	}
 
 	/**
-	 * Dying ends freezes and teleblocks.
+	 * Stops tracking a player's freeze and teleblock: they died (which ends both), or despawned -
+	 * logged out or left view - and would otherwise be drawn at their last position until the
+	 * timer ran out (up to 5 minutes for a TB). Back in view they're a new Player anyway.
 	 */
-	void onDeath(Player player)
+	void forget(Player player)
 	{
 		freezeStates.remove(player);
 		teleblockStates.remove(player);
-		if (player == client.getLocalPlayer())
-		{
-			localFreeze = null;
-		}
 	}
 
 	void clear()
 	{
 		freezeStates.clear();
 		teleblockStates.clear();
-		localFreeze = null;
+	}
+
+	/**
+	 * The longest freeze spell whose impact graphic the player has. An actor can carry several
+	 * spot anims at once (a barrage landing with a teleblock or a spec), and the deprecated
+	 * getGraphic() only returns one of them.
+	 */
+	private static FreezeSpell freezeSpellOn(Player player)
+	{
+		FreezeSpell longest = null;
+		for (Map.Entry<Integer, FreezeSpell> entry : FREEZE_SPELLS.entrySet())
+		{
+			FreezeSpell spell = entry.getValue();
+			if (player.hasSpotAnim(entry.getKey()) && (longest == null || spell.durationTicks > longest.durationTicks))
+			{
+				longest = spell;
+			}
+		}
+		return longest;
 	}
 
 	private static FreezeState newFreeze(FreezeSpell spell, Player player, int tick)
 	{
-		// +1 tick: the countdown otherwise hits zero a tick before the player can actually move.
-		int duration = spell.durationTicks + 1;
+		int duration = spell.durationTicks + DISPLAY_EXTRA_TICKS;
 		return new FreezeState(spell.spriteId, tick, tick + duration, System.currentTimeMillis(), duration * 600L,
-			player.getWorldLocation());
+			tick + spell.durationTicks + FREEZE_IMMUNITY_TICKS, player.getWorldLocation());
 	}
 
 	/**
@@ -213,7 +234,6 @@ class FreezeTracker
 		if (!state.immune && tick >= state.endTick)
 		{
 			state.immune = true;
-			state.immunityEndTick = state.endTick + FREEZE_IMMUNITY_TICKS;
 			state.immunityStartTimeMillis = System.currentTimeMillis();
 		}
 

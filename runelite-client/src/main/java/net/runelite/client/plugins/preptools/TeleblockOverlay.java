@@ -73,9 +73,6 @@ public class TeleblockOverlay extends Overlay
 
 		graphics.setFont(graphics.getFont().deriveFont(Font.BOLD, 18f));
 
-		Map<Player, FreezeState> freezeStates = config.showFreezeTimers()
-			? freezes.getFreezeStates() : java.util.Collections.emptyMap();
-
 		for (Map.Entry<Player, TeleblockState> entry : states.entrySet())
 		{
 			Player player = entry.getKey();
@@ -105,7 +102,7 @@ public class TeleblockOverlay extends Overlay
 				text = String.format("%.1fs", remainingSeconds);
 			}
 
-			drawIconAndText(graphics, player, text, color, freezeStates.containsKey(player));
+			drawIconAndText(graphics, player, text, color, freezes.getFreezeStates().containsKey(player) && freezes.isFreezeShown(player));
 		}
 
 		return null;

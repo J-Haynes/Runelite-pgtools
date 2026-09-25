@@ -14,8 +14,12 @@ class FreezeState
 	final long startTimeMillis;
 	final long durationMillis;
 
+	/**
+	 * The first tick a new freeze can land - spell duration + 5 immunity ticks after the hit.
+	 */
+	final int immunityEndTick;
+
 	boolean immune;
-	int immunityEndTick;
 	long immunityStartTimeMillis;
 
 	/**
@@ -23,13 +27,23 @@ class FreezeState
 	 */
 	WorldPoint lastLocation;
 
-	FreezeState(int spriteId, int startTick, int endTick, long startTimeMillis, long durationMillis, WorldPoint location)
+	FreezeState(int spriteId, int startTick, int endTick, long startTimeMillis, long durationMillis, int immunityEndTick,
+		WorldPoint location)
 	{
+		this.immunityEndTick = immunityEndTick;
 		this.spriteId = spriteId;
 		this.startTick = startTick;
 		this.endTick = endTick;
 		this.startTimeMillis = startTimeMillis;
 		this.durationMillis = durationMillis;
 		this.lastLocation = location;
+	}
+
+	/**
+	 * How long the immune phase lasts once the shown countdown hits zero.
+	 */
+	long immunityDurationMillis()
+	{
+		return (immunityEndTick - endTick) * 600L;
 	}
 }
