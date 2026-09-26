@@ -576,6 +576,17 @@ These cost real debugging time to find. Don't rediscover them the hard way:
   the current pre-fill (`setVarcStrValue(VarClientID.CHATINPUT, ...)` +
   `runScript(ScriptID.CHAT_PROMPT_INIT)`) too. When a feature that worked stops, grep
   `~/.runelite/logs/client.log` for `Client error` before reading the plugin code.
+- **The injected client can outrun this fork's API: crash at login with `NoSuchMethodError`.**
+  `injected-client` is a `-SNAPSHOT` that any Gradle build re-downloads when upstream publishes a
+  new one, but `runelite-api` is this fork's own source, only as new as the last upstream merge.
+  2026-09-26: a rev 241 injected client (fetched by a test run) called
+  `VarbitChanged.setLongValue(long)`, added by upstream's `376527a13 api: update 241` - the client
+  started fine and died on login. **Fix: merge `upstream/master`** (don't hand-patch the API).
+  `InjectedClientApiTest` (`runelite-client/src/test/java/net/runelite/client/`) scans the
+  injected client's constant pools and fails, listing every missing `net.runelite` method/field,
+  so `:client:test` catches it before a launch. `run-runelite.sh` launches the newest
+  `client-*-shaded.jar` because upstream merges bump the version (1.13.0-SNAPSHOT next) - delete
+  old jars in `runelite-client/build/libs/` if in doubt.
 - **A `PluginPanel` with its own per-tab scroll panes must call `super(false)`.** The default
   `PluginPanel()` constructor wraps the whole panel in an outer `JScrollPane`. Nested inside that,
   a tab taller than the sidebar grows to full height in the OUTER pane, so its own inner pane has
