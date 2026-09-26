@@ -197,6 +197,37 @@ public class MenuHandlerTest
 		assertEquals(Collections.singletonList(snareEnemy), result);
 	}
 
+	private static MenuEntry cast(String option, String spell, Player player)
+	{
+		MenuEntry entry = entry(option, player);
+		entry.setType(MenuAction.WIDGET_TARGET_ON_PLAYER);
+		entry.setTarget("<col=00ff00>" + spell + "</col><col=ffffff> -> <col=ffffff>Name");
+		return entry;
+	}
+
+	@Test
+	public void anySpellOnTeammateIsRemovedButItemsAndSupportSpellsStay()
+	{
+		MenuEntry tbTeammate = cast("Cast", "Tele Block", teammate);
+		MenuEntry blastTeammate = cast("Cast", "Fire Blast", teammate);
+		MenuEntry vengTeammate = cast("Cast", "Vengeance Other", teammate);
+		MenuEntry itemOnTeammate = cast("Use", "Shark", teammate);
+		MenuEntry tbEnemy = cast("Cast", "Tele Block", enemy);
+
+		List<MenuEntry> result = run(tbEnemy, itemOnTeammate, vengTeammate, blastTeammate, tbTeammate);
+
+		assertEquals(Arrays.asList(tbEnemy, itemOnTeammate, vengTeammate), result);
+	}
+
+	@Test
+	public void spellsOnTeammatesAllowedWhenToggledOff()
+	{
+		when(config.preventFreezingTeammates()).thenReturn(false);
+		when(client.getMenuEntries()).thenReturn(new MenuEntry[]{cast("Cast", "Snare", teammate)});
+		menu.onPostMenuSort();
+		verify(client, never()).setMenuEntries(any());
+	}
+
 	@Test
 	public void plainMenuIsLeftAlone()
 	{

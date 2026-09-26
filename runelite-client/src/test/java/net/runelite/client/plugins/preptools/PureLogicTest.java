@@ -47,6 +47,9 @@ public class PureLogicTest
 		assertEquals(WeaponStyle.MELEE, WeaponStyle.of(1333));
 		assertEquals(WeaponStyle.RANGED, WeaponStyle.of(853));
 		assertEquals(WeaponStyle.MAGIC, WeaponStyle.of(1381));
+		// Bryophyta's staff, uncharged and charged - the game reports the exact variant worn.
+		assertEquals(WeaponStyle.MAGIC, WeaponStyle.of(22368));
+		assertEquals(WeaponStyle.MAGIC, WeaponStyle.of(22370));
 		assertEquals(WeaponStyle.UNKNOWN, WeaponStyle.of(-1));
 		assertEquals(WeaponStyle.UNKNOWN, WeaponStyle.of(4151));
 	}

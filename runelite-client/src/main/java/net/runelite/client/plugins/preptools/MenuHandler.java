@@ -21,7 +21,7 @@ import net.runelite.client.util.ColorUtil;
 
 /**
  * Right-click menu changes on players: recolouring and prioritising Attack (target, pile, snipe,
- * attacker), making a caller's Follow the left-click, removing Attack and freeze spells on
+ * attacker), making a caller's Follow the left-click, removing Attack and spell casts on
  * teammates, and shift-click Walk here.
  *
  * Edits happen in PostMenuSort, after the game's own sort - earlier edits get overwritten. The one
@@ -34,6 +34,12 @@ class MenuHandler
 {
 	private static final Set<String> FREEZE_SPELL_NAMES = Set.of(
 		"bind", "snare", "entangle", "ice rush", "ice burst", "ice blitz", "ice barrage");
+
+	/**
+	 * Lunar spells meant for teammates - never blocked by preventFreezingTeammates().
+	 */
+	private static final Set<String> TEAM_SUPPORT_SPELL_NAMES = Set.of(
+		"vengeance other", "heal other", "energy transfer", "cure other", "stat spy");
 
 	private static final Pattern TAG_PATTERN = Pattern.compile("<[^>]*>");
 	private static final long DEBUG_LOG_INTERVAL_MILLIS = 1000;
@@ -80,7 +86,7 @@ class MenuHandler
 	}
 
 	/**
-	 * One pass over the sorted menu: recolour, drop teammate Attack/freeze entries, then pick the
+	 * One pass over the sorted menu: recolour, drop teammate Attack/spell entries, then pick the
 	 * left-click (the last entry). Left-click preference: a prioritised target/pile/snipe/attacker
 	 * Attack (tie-break: the Menu section's Attack priority), then a caller's Follow, then - only if
 	 * we removed the entry that WAS the left-click - some other enemy's Attack. Otherwise the game's
@@ -100,7 +106,7 @@ class MenuHandler
 		}
 
 		Map<Player, HighlightStyle> styles = config.colourAttackOption() ? highlights.getStyles() : null;
-		boolean blockTeammateFreezes = config.preventFreezingTeammates();
+		boolean blockTeammateSpells = config.preventFreezingTeammates();
 		boolean hideTeammateAttack = config.hideAttackOnTeammates();
 		boolean shiftWalk = isShiftWalkActive();
 		boolean prioritiseFollow = config.prioritiseCallerFollow() && !shiftWalk;
@@ -217,17 +223,19 @@ class MenuHandler
 				}
 				kept.add(entry);
 			}
-			else if (isFreezeSpellEntry(entry, option, selectedSpell))
+			else if (isSpellCastEntry(entry, option, selectedSpell))
 			{
-				if (blockTeammateFreezes && teammate)
+				// The spell name is in TARGET ("Snare -> Name (level-92)"); OPTION is just "Cast".
+				String spell = isFreezeSpellName(option) ? option
+					: selectedSpell != null ? selectedSpell : spellNameFromTarget(entry.getTarget());
+				if (blockTeammateSpells && teammate && !isTeamSupportSpellName(spell))
 				{
 					removedAny = true;
 					removedLeftClick |= i == entries.length - 1;
 					continue;
 				}
 
-				// The spell name is in TARGET ("Snare -> Name (level-92)"); OPTION is just "Cast".
-				if (style != null && !recolourSpellTarget(entry, style))
+				if (style != null && isFreezeSpellName(spell) && !recolourSpellTarget(entry, style))
 				{
 					entry.setOption(ColorUtil.wrapWithColorTag(entry.getOption(), style.color));
 				}
@@ -271,22 +279,28 @@ class MenuHandler
 	}
 
 	/**
-	 * A manually cast freeze spell. Its option is "Cast" and the spell name is the part of TARGET
-	 * before "->"; the selected spellbook widget is a second, independent signal.
+	 * A manually cast spell on a player. Its option is "Cast" (the spell name is the part of TARGET
+	 * before "->"); the selected spellbook widget is a second, independent signal. Using an item on
+	 * a player is the same menu action, but its option is "Use" and no spell is selected.
 	 */
-	private static boolean isFreezeSpellEntry(MenuEntry entry, String option, String selectedSpell)
+	private static boolean isSpellCastEntry(MenuEntry entry, String option, String selectedSpell)
 	{
 		if (isFreezeSpellName(option))
 		{
 			return true;
 		}
 		return entry.getType() == MenuAction.WIDGET_TARGET_ON_PLAYER
-			&& (isFreezeSpellName(selectedSpell) || isFreezeSpellName(spellNameFromTarget(entry.getTarget())));
+			&& ("Cast".equalsIgnoreCase(option) || selectedSpell != null);
 	}
 
 	static boolean isFreezeSpellName(String name)
 	{
 		return name != null && FREEZE_SPELL_NAMES.contains(name.toLowerCase());
+	}
+
+	static boolean isTeamSupportSpellName(String name)
+	{
+		return name != null && TEAM_SUPPORT_SPELL_NAMES.contains(name.toLowerCase());
 	}
 
 	/**

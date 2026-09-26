@@ -14,7 +14,7 @@ client with similar team-coordination features. Core pieces:
 - **Team** — "your team" everywhere in this plugin (`TeamTracker#isOwnTeam()`) = you +
   friends chat members + **clan members** (`Player#isClanMember()` - teams don't always run an FC)
   + every configured caller, enabled or disabled. Used by pile finder, opponent prayer/weapon
-  counts, freeze/TB "hide for own team", teammate freeze-spell blocking, and the Clan Info tab.
+  counts, freeze/TB "hide for own team", teammate spell blocking, and the Clan Info tab.
 - **Caller list** — primary/backup callers, reorderable/deletable from a sidebar panel, one-click
   primary switching. Each caller has an enable checkbox: disabled callers stay in the list (stored
   with a leading `!` in the `callers` config text) and on the team, but are never primary/backup/
@@ -60,7 +60,7 @@ client with similar team-coordination features. Core pieces:
     friends chat *or* clan - either works). Can also be prioritised to left-click Attack
     (`prioritiseAttackForPiles()`), subordinate to the target's own priority.
 - **Freeze tracking** — detects Bind/Snare/Entangle/Ice-spell hits, shows icon + countdown, can
-  hide/block freezes against teammates. Detection uses `Player#hasSpotAnim()`, not the deprecated
+  hide freezes on teammates. Detection uses `Player#hasSpotAnim()`, not the deprecated
   `getGraphic()`, which returns only one of an actor's spot anims (a barrage landing with a TB was
   missed). **Every** player's freeze is tracked whatever the settings - `FreezeTracker#isFrozen()`
   feeds the infobox, the frozen border and the frozen target/pile colours - and the overlays ask
@@ -68,6 +68,10 @@ client with similar team-coordination features. Core pieces:
   (display only); immunity ends spell duration **+5** after the hit (`FreezeState#immunityEndTick`)
   - the first tick a refreeze lands, so it's accepted even though the old entry isn't dropped
   until that tick's `onGameTick`. Refreezes were dropped before both were fixed (2026-09-25).
+  **Protect from Magic does NOT shorten any freeze** - never did for Ancients, and the
+  [PvP Balancing update](https://oldschool.runescape.wiki/w/Update:PvP_Balancing,_LMS,_and_Elf_Graphics)
+  removed it for Bind/Snare/Entangle. (A session wrongly added PfM halving from outdated
+  knowledge; check the wiki's update pages, not memory, for current mechanics.)
 - **Teleblock tracking** — same idea as freeze tracking, but for the teleblock spell (icon +
   countdown; 5 min normally, 2.5 min if the target was praying Protect from Magic when it landed).
   Drawn one row below the freeze icon when a player has both (both overlays share an anchor).
@@ -79,7 +83,9 @@ client with similar team-coordination features. Core pieces:
 - **Infobox panel** — bottom-right HUD: your stats (HP/prayer/strength/ranged — prayer and
   strength colour green while boosted at/above a threshold), freeze/teleblock status, target's
   prayer, opponent prayers/weapons (melee/ranged/magic — melee/ranged/magic weapon IDs live in
-  `WeaponStyle`), who's attacking
+  `WeaponStyle`; the worn item ID is exact, so **every wieldable variant** - charged/uncharged,
+  cosmetic, LMS - must be listed: find them in `item_variations.json`. Bryophyta's staff was
+  missing entirely), who's attacking
   you, current wilderness location, your player index (informational — see the PID note below).
 - **Friends chat log** — sidebar panel (the "FC" tab, alongside the "Missing" list), newest-first,
   logs members joining/leaving/dying (other members' deaths from the death animation, your own as
@@ -220,7 +226,9 @@ client with similar team-coordination features. Core pieces:
   Target > Pile > Snipe > Attacker — when more than one applies to the same menu; a category left
   out of the four still goes last. Replaced the single `attackPriorityOrder` enum of orderings
   when Attackers made it 24; `PrepToolsPlugin#migrateAttackPriorityOrder()` carries an old
-  choice over once), blocks casting a freeze spell on a teammate, removes Attack on
+  choice over once), blocks casting **any** spell on a teammate (`preventFreezingTeammates` - key kept from when it
+  was freezes only, now "Block spells on teammates" in the Menu section, default on; the Lunar
+  teammate spells like Vengeance Other stay allowed; item-on-player "Use" isn't touched), removes Attack on
   teammates (`hideAttackOnTeammates`, default on - the game can offer Attack on FC members in
   the wilderness, and a fall-in stacks the team on one member; a teammate's Attack, if kept, is
   never coloured or promoted), and (opt-in) shift-click
@@ -228,7 +236,7 @@ client with similar team-coordination features. Core pieces:
   NPCs/objects/ground items but not players.
 - **Clan Info tab** (was "Clan IDs") — first a **Weapons** breakdown: three columns (melee/ranged/
   magic, with totals) of on-screen teammates (`isOwnTeamMember()`, you included) by wielded weapon,
-  using the infobox's `*_WEAPON_IDS` lists (`PrepToolsPlugin#computeClanWeapons()`; teammates with
+  using the infobox's `WeaponStyle` lists (`PrepToolsPlugin#computeClanWeapons()`; teammates with
   an unlisted weapon are just counted). Then **Player IDs**: surfacing your own and your friends chat/clan members' player ids
   (`Player#getId()`), sorted, with the current min/max flagged as click-priority risks and
   configured callers highlighted as "Name (Nickname)", and you in a third colour (blue, wins over
@@ -294,6 +302,8 @@ Overlays inject the tracker they draw from, not the plugin. Tests live in
 Everything built but not yet confirmed in game / on a real machine - move an item into the relevant
 section (or delete it) once the user confirms it:
 
+- **2026-09-26 fixes** - Bryophyta's staff (+ LMS/cosmetic weapon variants) counted as magic,
+  "Block spells on teammates" (every spell, not just freezes). Not yet seen in game.
 - **Chat hotkeys pre-filling (2026-09-25)** - Spammer/Location/Pile Spam now type into the
   chatbox with `/p `, `/f ` or `/c `; confirm the text appears and Enter sends it to the right
   channel.
@@ -329,6 +339,19 @@ section (or delete it) once the user confirms it:
 ## Backlog
 
 Agreed with the user but deliberately not built yet. Low priority unless marked otherwise:
+
+- **Freeze sometimes not shown on an obviously frozen target** (reported 2026-09-26: casting
+  Snare got "this player is already snared", no icon). Investigated, no clear cause - backlogged
+  to revisit if it keeps happening. Ruled out: Protect from Magic (doesn't shorten any freeze,
+  see Freeze tracking), clear/forget paths (only hop/logout, death, despawn), graphic IDs (Snare
+  is only 180; Burst/Blitz look swapped vs the gameval names, but core `GameTimer` maps them the
+  same way this plugin does - Jagex's names are backwards), no errors in `client.log`. Still
+  suspects, none confirmed: (1) `advance()`'s movement check dropping a real freeze; (2) a missed
+  `GraphicChanged` (mixin source isn't in this repo), e.g. a player spawning into view already
+  hit - a per-tick `hasSpotAnim` poll would catch it, but must not re-detect a lingering graphic
+  as a new freeze; (3) an unlisted impact variant (`ICE_BARRAGE_IMPACT2/3/4/_LONG/_SHORT`,
+  `ICE_BLITZ_IMPACT2/3` exist in `SpotanimID`), not Snare's case though. Next time: turn on
+  debug logging and log freeze add/drop reasons in `FreezeTracker` to see which it is.
 
 - **(Low) Clear a TB when an in-view player leaves the Wilderness** - the game ends it then (OSRS
   wiki), but the icon stays until the timer runs out. Rare in practice, so deferred on purpose

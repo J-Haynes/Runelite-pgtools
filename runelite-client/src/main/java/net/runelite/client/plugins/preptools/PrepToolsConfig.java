@@ -504,6 +504,27 @@ public interface PrepToolsConfig extends Config
 		return true;
 	}
 
+	/**
+	 * Key kept from when this blocked freeze spells only ("Prevent freezing teammates"), so a
+	 * choice made then isn't lost.
+	 */
+	@ConfigItem(
+		keyName = "preventFreezingTeammates",
+		name = "Block spells on teammates",
+		description = "<html>Removes every 'Cast (spell)' option from the menu when the<br>"
+			+ "player is your own team - a configured caller, friends chat or<br>"
+			+ "clan member - so you can't freeze, immunise, teleblock or hit a<br>"
+			+ "teammate by mis-click. Lunar spells meant for teammates<br>"
+			+ "(Vengeance Other, Heal Other, Energy Transfer, Cure Other, Stat<br>"
+			+ "Spy) are still allowed. Turn off to cast on teammates.</html>",
+		position = 7,
+		section = "menuSection"
+	)
+	default boolean preventFreezingTeammates()
+	{
+		return true;
+	}
+
 	// --- Targeted player (friends chat) section ---
 
 	@ConfigSection(
@@ -1663,19 +1684,4 @@ public interface PrepToolsConfig extends Config
 		return false;
 	}
 
-	@ConfigItem(
-		keyName = "preventFreezingTeammates",
-		name = "Prevent freezing teammates",
-		description = "<html>Removes Bind/Snare/Entangle/Ice spell casting options<br>"
-			+ "from the right-click menu when the target is your own<br>"
-			+ "team - a configured caller, friends chat or clan member - so<br>"
-			+ "a freezer can't accidentally freeze or immunise a<br>"
-			+ "teammate mid-fight.</html>",
-		position = 6,
-		section = "freezeSection"
-	)
-	default boolean preventFreezingTeammates()
-	{
-		return true;
-	}
 }
