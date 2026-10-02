@@ -1,5 +1,6 @@
 package net.runelite.client.plugins.preptools;
 
+import java.awt.Color;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.EnumMap;
@@ -48,16 +49,21 @@ class MenuHandler
 	private final PrepToolsConfig config;
 	private final TeamTracker team;
 	private final HighlightTracker highlights;
+	private final AttackRangeFilter range;
+	private final PlayerNicknameTracker nicknames;
 
 	private long lastDebugLogMillis;
 
 	@Inject
-	MenuHandler(Client client, PrepToolsConfig config, TeamTracker team, HighlightTracker highlights)
+	MenuHandler(Client client, PrepToolsConfig config, TeamTracker team, HighlightTracker highlights, AttackRangeFilter range,
+		PlayerNicknameTracker nicknames)
 	{
 		this.client = client;
 		this.config = config;
 		this.team = team;
 		this.highlights = highlights;
+		this.range = range;
+		this.nicknames = nicknames;
 	}
 
 	static String stripTags(String text)
@@ -106,6 +112,8 @@ class MenuHandler
 		}
 
 		Map<Player, HighlightStyle> styles = config.colourAttackOption() ? highlights.getStyles() : null;
+		Map<Player, String> playerNicknames = nicknames.getNicknames();
+		Map<Player, String> lookalikes = nicknames.getLookalikes();
 		boolean blockTeammateSpells = config.preventFreezingTeammates();
 		boolean hideTeammateAttack = config.hideAttackOnTeammates();
 		boolean shiftWalk = isShiftWalkActive();
@@ -141,6 +149,17 @@ class MenuHandler
 			{
 				kept.add(entry);
 				continue;
+			}
+
+			String nickname = playerNicknames.get(player);
+			if (nickname != null)
+			{
+				appendToTarget(entry, "[" + nickname + "]", config.playerNicknameColor());
+			}
+			String resembled = lookalikes.get(player);
+			if (resembled != null)
+			{
+				appendToTarget(entry, "[" + PlayerNicknameOverlay.lookalikeText(resembled) + "]", config.lookalikeNameColor());
 			}
 
 			String option = stripTags(entry.getOption());
@@ -185,6 +204,14 @@ class MenuHandler
 						removedLeftClick |= i == entries.length - 1;
 						continue;
 					}
+					kept.add(entry);
+					continue;
+				}
+
+				// Experimental: out of your combat bracket - greyed, never promoted.
+				if (range.isOutOfRange(player))
+				{
+					entry.setOption(ColorUtil.wrapWithColorTag("Attack", config.outOfRangeColor()));
 					kept.add(entry);
 					continue;
 				}
@@ -340,6 +367,20 @@ class MenuHandler
 		}
 		String[] actions = selected.getActions();
 		return actions == null || actions.length == 0 || actions[0] == null ? null : stripTags(actions[0]);
+	}
+
+	/**
+	 * Adds a coloured tag after the target's name, once - PostMenuSort can see the same entry on
+	 * several frames.
+	 */
+	private static void appendToTarget(MenuEntry entry, String tag, Color color)
+	{
+		String target = entry.getTarget();
+		if (target == null || target.contains(tag))
+		{
+			return;
+		}
+		entry.setTarget(target + " " + ColorUtil.wrapWithColorTag(tag, color));
 	}
 
 	/**

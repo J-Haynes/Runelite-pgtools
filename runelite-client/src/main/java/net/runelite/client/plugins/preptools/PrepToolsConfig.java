@@ -1562,12 +1562,338 @@ public interface PrepToolsConfig extends Config
 		return 2;
 	}
 
+	// --- Experimental section ---
+	// New features that haven't been proven in real fights yet - all default off. Once one is
+	// confirmed in game, move it into its own section (keep the key names).
+
+	@ConfigSection(
+		name = "Experimental",
+		description = "<html>Features still being tested in real fights - all off by<br>"
+			+ "default. Expect rough edges, and report what you see.</html>",
+		position = 19,
+		closedByDefault = true
+	)
+	String experimentalSection = "experimentalSection";
+
+	@ConfigItem(
+		keyName = "showFoodCounter",
+		name = "Low food detector",
+		description = "<html>Made for Clan Wars. Counts the anchovy pizza bites each<br>"
+			+ "enemy eats - from the healing on their health bar when they<br>"
+			+ "eat, 9 hp a bite, so potions (no heal) don't count and two<br>"
+			+ "bites at once count as two - and shows it over their head,<br>"
+			+ "e.g. 'Ate 14 (~7 left)', turning into 'LOW FOOD' once<br>"
+			+ "they're nearly out. '+2?' = eats seen while their health<br>"
+			+ "bar wasn't showing, so the heal couldn't be measured.<br>"
+			+ "Reset when they die (out of the round - back next round<br>"
+			+ "with full food) and for everyone when you enter the Clan<br>"
+			+ "Wars portal. Shift-right-click a player 'Reset food count'<br>"
+			+ "or use the reset hotkey to reset by hand.</html>",
+		position = 1,
+		section = "experimentalSection"
+	)
+	default boolean showFoodCounter()
+	{
+		return false;
+	}
+
+	@Range(min = 1, max = 28)
+	@ConfigItem(
+		keyName = "foodAssumedPizzas",
+		name = "Assumed pizzas",
+		description = "<html>How many anchovy pizzas an enemy is assumed to bring.<br>"
+			+ "Every 2 eats seen is one pizza gone.</html>",
+		position = 2,
+		section = "experimentalSection"
+	)
+	default int foodAssumedPizzas()
+	{
+		return 14;
+	}
+
+	@Range(min = 0, max = 28)
+	@ConfigItem(
+		keyName = "foodLowPizzas",
+		name = "Low at pizzas left",
+		description = "Flag an enemy as low on food at this many pizzas left (or fewer).",
+		position = 3,
+		section = "experimentalSection"
+	)
+	default int foodLowPizzas()
+	{
+		return 3;
+	}
+
+	@ConfigItem(
+		keyName = "foodShowOnlyLow",
+		name = "Only show low food",
+		description = "Only label enemies once they're low, not every eat count.",
+		position = 4,
+		section = "experimentalSection"
+	)
+	default boolean foodShowOnlyLow()
+	{
+		return false;
+	}
+
+	@ConfigItem(
+		keyName = "foodCountColor",
+		name = "Eat count colour",
+		description = "Colour of the eat count over an enemy's head.",
+		position = 5,
+		section = "experimentalSection"
+	)
+	default Color foodCountColor()
+	{
+		return new Color(255, 200, 80);
+	}
+
+	@ConfigItem(
+		keyName = "foodLowColor",
+		name = "Low food colour",
+		description = "Colour of 'LOW FOOD' over an enemy's head.",
+		position = 6,
+		section = "experimentalSection"
+	)
+	default Color foodLowColor()
+	{
+		return new Color(80, 255, 80);
+	}
+
+	@Range(min = 1, max = 60)
+	@ConfigItem(
+		keyName = "foodForgetMinutes",
+		name = "Forget eats after (min)",
+		description = "<html>An enemy's eat count is dropped once they haven't been<br>"
+			+ "seen for this long - they've probably left and restocked.</html>",
+		position = 7,
+		section = "experimentalSection"
+	)
+	default int foodForgetMinutes()
+	{
+		return 15;
+	}
+
+	@ConfigItem(
+		keyName = "foodResetHotkey",
+		name = "Reset food counts hotkey",
+		description = "<html>Resets every enemy's food count, e.g. at the start of a<br>"
+			+ "round if entering the portal didn't already do it.</html>",
+		position = 8,
+		section = "experimentalSection"
+	)
+	default Keybind foodResetHotkey()
+	{
+		return Keybind.NOT_SET;
+	}
+
+	@Range(min = 10, max = 99)
+	@ConfigItem(
+		keyName = "foodEnemyMaxHp",
+		name = "Enemy max HP",
+		description = "<html>The game only sends other players' health as a bar, not<br>"
+			+ "hitpoints - this is the hitpoints level it's assumed to stand<br>"
+			+ "for when working out how much they healed.</html>",
+		position = 9,
+		section = "experimentalSection"
+	)
+	default int foodEnemyMaxHp()
+	{
+		return 99;
+	}
+
+	@ConfigItem(
+		keyName = "attackRangeFilter",
+		name = "Grey out out-of-range enemies",
+		description = "<html>An enemy outside the combat bracket for the wilderness<br>"
+			+ "level (combat difference more than the shallower of your<br>"
+			+ "two wilderness levels, +15 on PvP worlds) is drawn in the<br>"
+			+ "out-of-range colour instead of their target/pile/snipe<br>"
+			+ "colour, their Attack option is greyed, and they never get<br>"
+			+ "a prioritised left-click Attack. Wilderness and PvP worlds<br>"
+			+ "only - does nothing in Clan Wars or Ferox Enclave.</html>",
+		position = 10,
+		section = "experimentalSection"
+	)
+	default boolean attackRangeFilter()
+	{
+		return false;
+	}
+
+	@ConfigItem(
+		keyName = "attackRangeBasis",
+		name = "Range from",
+		description = "<html>Your level only: greyed if YOU can't attack them.<br>"
+			+ "Anyone on your team: greyed only if nobody on your team<br>"
+			+ "on screen can - for a team spread over a few combat<br>"
+			+ "levels, where a pile some of you can't reach is still a pile.</html>",
+		position = 11,
+		section = "experimentalSection"
+	)
+	default AttackRangeBasis attackRangeBasis()
+	{
+		return AttackRangeBasis.YOU;
+	}
+
+	@Range(min = 0, max = 10)
+	@ConfigItem(
+		keyName = "attackRangeMargin",
+		name = "Range slack (levels)",
+		description = "<html>Widens the bracket by this many combat levels each way, so<br>"
+			+ "someone a step from being in range (the fight drifting a<br>"
+			+ "wilderness level deeper) isn't greyed out yet.</html>",
+		position = 12,
+		section = "experimentalSection"
+	)
+	default int attackRangeMargin()
+	{
+		return 0;
+	}
+
+	@Alpha
+	@ConfigItem(
+		keyName = "outOfRangeColor",
+		name = "Out-of-range colour",
+		description = "Highlight and Attack option colour for an out-of-range enemy.",
+		position = 13,
+		section = "experimentalSection"
+	)
+	default Color outOfRangeColor()
+	{
+		return new Color(128, 128, 128);
+	}
+
+	@ConfigItem(
+		keyName = "enablePerformanceTracker",
+		name = "Team performance tracker",
+		description = "<html>Records each teammate's fight numbers on the sidebar's<br>"
+			+ "Stats tab: time on the called target, how fast they switch<br>"
+			+ "to a new one, attacks, damage taken, eats, deaths, kills.<br>"
+			+ "Only counts what happens on your screen.</html>",
+		position = 14,
+		section = "experimentalSection"
+	)
+	default boolean enablePerformanceTracker()
+	{
+		return false;
+	}
+
+	@Range(min = 10, max = 600)
+	@ConfigItem(
+		keyName = "performanceMinTargetSeconds",
+		name = "Rate after (seconds)",
+		description = "<html>A teammate is only rated high/low once they've been on<br>"
+			+ "screen this long while a target was called.</html>",
+		position = 15,
+		section = "experimentalSection"
+	)
+	default int performanceMinTargetSeconds()
+	{
+		return 30;
+	}
+
+	@ConfigItem(
+		keyName = "showPlayerNicknames",
+		name = "Player nicknames",
+		description = "<html>Your own nicknames for any player (sidebar Names tab, or<br>"
+			+ "shift-right-click a player, 'Set nickname'), shown after<br>"
+			+ "their name in the right-click menu. A nickname follows a<br>"
+			+ "name change only for a player on your friends or ignore<br>"
+			+ "list - the game tells no one else.</html>",
+		position = 16,
+		section = "experimentalSection"
+	)
+	default boolean showPlayerNicknames()
+	{
+		return false;
+	}
+
+	@ConfigItem(
+		keyName = "useFriendNotesAsNicknames",
+		name = "Friend notes as nicknames",
+		description = "<html>Use your Friend Notes plugin notes as nicknames for<br>"
+			+ "players who don't have one here. Those notes already<br>"
+			+ "follow your friends' name changes.</html>",
+		position = 17,
+		section = "experimentalSection"
+	)
+	default boolean useFriendNotesAsNicknames()
+	{
+		return true;
+	}
+
+	@ConfigItem(
+		keyName = "showNicknamesOverHeads",
+		name = "Nicknames over heads",
+		description = "<html>Also draw nicknames (and 'NOT Nick?' lookalike warnings)<br>"
+			+ "over players' heads, not just in the menu.</html>",
+		position = 18,
+		section = "experimentalSection"
+	)
+	default boolean showNicknamesOverHeads()
+	{
+		return false;
+	}
+
+	@ConfigItem(
+		keyName = "playerNicknameColor",
+		name = "Nickname colour",
+		description = "Colour of a player's nickname in the menu and over their head.",
+		position = 19,
+		section = "experimentalSection"
+	)
+	default Color playerNicknameColor()
+	{
+		return new Color(255, 160, 255);
+	}
+
+	@ConfigItem(
+		keyName = "warnLookalikeNames",
+		name = "Warn on lookalike names",
+		description = "<html>Flags a player whose name is one letter off a nicknamed<br>"
+			+ "player's, or only differs by lookalike characters (I/l/1,<br>"
+			+ "O/0, rn/m, vv/w, spaces/-/_): 'NOT Nick?' in the menu<br>"
+			+ "(and over their head with that on) - a clan renaming to<br>"
+			+ "confuse you.</html>",
+		position = 20,
+		section = "experimentalSection"
+	)
+	default boolean warnLookalikeNames()
+	{
+		return true;
+	}
+
+	@ConfigItem(
+		keyName = "lookalikeNameColor",
+		name = "Lookalike colour",
+		description = "Colour of the 'NOT Nick?' lookalike warning.",
+		position = 21,
+		section = "experimentalSection"
+	)
+	default Color lookalikeNameColor()
+	{
+		return new Color(255, 60, 60);
+	}
+
+	// Hidden: edited only from the sidebar and the menu (see the note on the callers list).
+	// One "Name=Nickname" per line.
+	@ConfigItem(
+		keyName = "playerNicknames",
+		name = "Player nicknames",
+		description = "Name=Nickname, one per line - edited from the sidebar's Names tab.",
+		hidden = true
+	)
+	default String playerNicknames()
+	{
+		return "";
+	}
+
 	// --- Debug section ---
 
 	@ConfigSection(
 		name = "Debug",
 		description = "Diagnostic logging - only needed if something isn't working.",
-		position = 19,
+		position = 20,
 		closedByDefault = true
 	)
 	String debugSection = "debugSection";

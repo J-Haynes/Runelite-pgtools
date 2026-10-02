@@ -11,6 +11,7 @@ import net.runelite.api.MenuAction;
 import net.runelite.api.MenuEntry;
 import net.runelite.api.Player;
 import net.runelite.client.menus.TestMenuEntry;
+import net.runelite.client.util.ColorUtil;
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertNull;
 import org.junit.Before;
@@ -30,6 +31,8 @@ public class MenuHandlerTest
 	private PrepToolsConfig config;
 	private TeamTracker team;
 	private HighlightTracker highlights;
+	private AttackRangeFilter range;
+	private PlayerNicknameTracker nicknames;
 	private MenuHandler menu;
 
 	private final Player local = mock(Player.class);
@@ -47,7 +50,9 @@ public class MenuHandlerTest
 		config = mock(PrepToolsConfig.class, withSettings().defaultAnswer(CALLS_REAL_METHODS));
 		team = mock(TeamTracker.class);
 		highlights = mock(HighlightTracker.class);
-		menu = new MenuHandler(client, config, team, highlights);
+		range = mock(AttackRangeFilter.class);
+		nicknames = mock(PlayerNicknameTracker.class);
+		menu = new MenuHandler(client, config, team, highlights, range, nicknames);
 
 		when(client.getLocalPlayer()).thenReturn(local);
 		when(team.isOwnTeam(teammate)).thenReturn(true);
@@ -127,6 +132,39 @@ public class MenuHandlerTest
 		List<MenuEntry> result = run(attackPile, entry("Attack", target), walkHere());
 
 		assertEquals(attackPile, leftClick(result));
+	}
+
+	@Test
+	public void outOfRangeTargetIsNotPromoted()
+	{
+		targets.add(target);
+		when(range.isOutOfRange(target)).thenReturn(true);
+		MenuEntry walk = walkHere();
+
+		List<MenuEntry> result = run(entry("Attack", target), walk);
+
+		// Nothing promoted, nothing removed: the game's own order stands.
+		assertNull(result);
+	}
+
+	@Test
+	public void nicknameAndLookalikeAreTaggedOnceAfterTheName()
+	{
+		when(nicknames.getNicknames()).thenReturn(Collections.singletonMap(enemy, "Tank"));
+		when(nicknames.getLookalikes()).thenReturn(Collections.singletonMap(target, "Tank"));
+		MenuEntry attackEnemy = entry("Attack", enemy);
+		attackEnemy.setTarget("Zezima  (level-126)");
+		MenuEntry attackFake = entry("Attack", target);
+		attackFake.setTarget("Zezlma  (level-126)");
+
+		run(attackEnemy, attackFake);
+		// PostMenuSort can run again on the same entries next frame.
+		run(attackEnemy, attackFake);
+
+		String tank = ColorUtil.wrapWithColorTag("[Tank]", config.playerNicknameColor());
+		assertEquals("Zezima  (level-126) " + tank, attackEnemy.getTarget());
+		assertEquals("Zezlma  (level-126) " + ColorUtil.wrapWithColorTag("[NOT Tank?]", config.lookalikeNameColor()),
+			attackFake.getTarget());
 	}
 
 	@Test

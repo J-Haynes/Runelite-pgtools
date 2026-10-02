@@ -33,6 +33,9 @@ import net.runelite.api.GameState;
 import net.runelite.api.KeyCode;
 import net.runelite.api.MenuAction;
 import net.runelite.api.MenuEntry;
+import net.runelite.api.Nameable;
+import net.runelite.api.Friend;
+import net.runelite.api.Ignore;
 import net.runelite.api.Player;
 import net.runelite.api.Tile;
 import net.runelite.api.coords.WorldPoint;
@@ -44,11 +47,14 @@ import net.runelite.api.events.FriendsChatMemberLeft;
 import net.runelite.api.events.GameStateChanged;
 import net.runelite.api.events.GameTick;
 import net.runelite.api.events.GraphicChanged;
+import net.runelite.api.events.HitsplatApplied;
 import net.runelite.api.events.MenuOpened;
+import net.runelite.api.events.NameableNameChanged;
 import net.runelite.api.events.PlayerDespawned;
 import net.runelite.api.events.PostMenuSort;
 import net.runelite.api.gameval.AnimationID;
 import net.runelite.api.gameval.SpriteID;
+import net.runelite.client.callback.ClientThread;
 import net.runelite.client.chat.ChatMessageManager;
 import net.runelite.client.chat.QueuedMessage;
 import net.runelite.client.config.ConfigManager;
@@ -56,12 +62,15 @@ import net.runelite.client.eventbus.Subscribe;
 import net.runelite.client.events.ConfigChanged;
 import net.runelite.client.game.ItemManager;
 import net.runelite.client.game.SpriteManager;
+import net.runelite.client.input.KeyManager;
+import net.runelite.client.game.chatbox.ChatboxPanelManager;
 import net.runelite.client.plugins.Plugin;
 import net.runelite.client.plugins.PluginDescriptor;
 import net.runelite.client.ui.ClientToolbar;
 import net.runelite.client.ui.NavigationButton;
 import net.runelite.client.ui.overlay.OverlayManager;
 import net.runelite.client.ui.overlay.infobox.InfoBoxManager;
+import net.runelite.client.util.HotkeyListener;
 import net.runelite.client.util.Text;
 
 /**
@@ -77,6 +86,8 @@ import net.runelite.client.util.Text;
  * <li>LocationTracker - position, wilderness level/location, the location list</li>
  * <li>ChatHotkeys and ScoutReporter - the hotkeys</li>
  * <li>ConfigListEditor - edits to the caller/snipe/spam/cape lists</li>
+ * <li>Experimental: FoodTracker (enemy food eaten), AttackRangeFilter (combat bracket),
+ * TeamPerformanceTracker (the Stats tab), PlayerNicknameTracker (the Names tab)</li>
  * </ul>
  * Game state is only touched on the client thread; the sidebar only on the Swing EDT - see
  * onSwing().
@@ -91,6 +102,17 @@ public class PrepToolsPlugin extends Plugin
 {
 	private static final String ADD_CALLER = "Add caller";
 	private static final String ADD_TO_SNIPE_LIST = "Add to snipe list";
+	private static final String SET_NICKNAME = "Set nickname";
+	private static final String RESET_FOOD_COUNT = "Reset food count";
+
+	/**
+	 * Core's Friend Notes plugin keeps each note at friendNotes.note_{@code <name>}, and moves it
+	 * when the friends list reports a name change.
+	 */
+	private static final String FRIEND_NOTES_GROUP = "friendNotes";
+	private static final String FRIEND_NOTES_KEY_PREFIX = "note_";
+	private static final int FRIEND_NOTE_NICKNAME_MAX_LENGTH = 20;
+	private static final int PERFORMANCE_PUSH_INTERVAL_TICKS = 5;
 
 	/**
 	 * Human death animations, for the FC log. Not exhaustive, but covers almost every PvP death.
@@ -101,7 +123,16 @@ public class PrepToolsPlugin extends Plugin
 	private Client client;
 
 	@Inject
+	private ClientThread clientThread;
+
+	@Inject
 	private ClientToolbar clientToolbar;
+
+	@Inject
+	private ChatboxPanelManager chatboxPanelManager;
+
+	@Inject
+	private KeyManager keyManager;
 
 	@Inject
 	private SpriteManager spriteManager;
@@ -155,6 +186,12 @@ public class PrepToolsPlugin extends Plugin
 	private ScreenBorderFlashOverlay screenBorderFlashOverlay;
 
 	@Inject
+	private FoodOverlay foodOverlay;
+
+	@Inject
+	private PlayerNicknameOverlay playerNicknameOverlay;
+
+	@Inject
 	private TeamTracker team;
 
 	@Inject
@@ -181,7 +218,38 @@ public class PrepToolsPlugin extends Plugin
 	@Inject
 	private ConfigListEditor lists;
 
+	@Inject
+	private FoodTracker food;
+
+	@Inject
+	private AttackRangeFilter range;
+
+	@Inject
+	private TeamPerformanceTracker performance;
+
+	@Inject
+	private PlayerNicknameTracker nicknames;
+
 	private PrepToolsPanel panel;
+
+	private final HotkeyListener foodResetListener = new HotkeyListener(() -> config.foodResetHotkey())
+	{
+		@Override
+		public void hotkeyPressed()
+		{
+			clientThread.invoke(() ->
+			{
+				if (config.showFoodCounter())
+				{
+					food.clear();
+					chatMessageManager.queue(QueuedMessage.builder()
+						.type(ChatMessageType.CONSOLE)
+						.value("PvP Tools: food counts reset.")
+						.build());
+				}
+			});
+		}
+	};
 	private NavigationButton navButton;
 
 	/**
@@ -214,7 +282,8 @@ public class PrepToolsPlugin extends Plugin
 	{
 		for (Class<?> feature : new Class<?>[]{TeamTracker.class, HighlightTracker.class, MenuHandler.class,
 			FreezeTracker.class, FightInfoTracker.class, AttackAlert.class, LocationTracker.class, ChatHotkeys.class,
-			ScoutReporter.class, ConfigListEditor.class})
+			ScoutReporter.class, ConfigListEditor.class, FoodTracker.class, AttackRangeFilter.class,
+			TeamPerformanceTracker.class, PlayerNicknameTracker.class})
 		{
 			binder.bind(feature).in(Singleton.class);
 		}
@@ -244,8 +313,11 @@ public class PrepToolsPlugin extends Plugin
 		overlayManager.add(wildernessLocationDebugOverlay);
 		overlayManager.add(screenBorderFlashOverlay);
 		overlayManager.add(multiLinesOverlay);
+		overlayManager.add(foodOverlay);
+		overlayManager.add(playerNicknameOverlay);
 		multiLinesOverlay.load();
 		hotkeys.start();
+		keyManager.registerKeyListener(foodResetListener);
 
 		panel = new PrepToolsPanel(this, lists, spriteManager, itemManager);
 		navButton = NavigationButton.builder()
@@ -272,8 +344,11 @@ public class PrepToolsPlugin extends Plugin
 		overlayManager.remove(wildernessLocationDebugOverlay);
 		overlayManager.remove(screenBorderFlashOverlay);
 		overlayManager.remove(multiLinesOverlay);
+		overlayManager.remove(foodOverlay);
+		overlayManager.remove(playerNicknameOverlay);
 		multiLinesOverlay.clear();
 		hotkeys.stop();
+		keyManager.unregisterKeyListener(foodResetListener);
 		removeMemberCountInfoBoxes();
 		clientToolbar.removeNavigation(navButton);
 		clearState();
@@ -287,6 +362,10 @@ public class PrepToolsPlugin extends Plugin
 		fightInfo.clear();
 		attackAlert.clear();
 		locations.clear();
+		food.clear();
+		range.clear();
+		performance.reset();
+		nicknames.clear();
 		teamCapeCounts = Collections.emptyMap();
 		friendsChatLog.clear();
 	}
@@ -296,20 +375,33 @@ public class PrepToolsPlugin extends Plugin
 	{
 		// Team first - every other feature reads it.
 		team.refresh();
-		// Freezes before highlights - a frozen target/pile has its own colour.
+		nicknames.onGameTick();
+		// Freezes and attack range before highlights - both change a target/pile's colour.
 		freezes.onGameTick();
+		range.onGameTick();
 		highlights.onGameTick();
+		performance.onGameTick(highlights.getPrimaryCaller(), highlights.getTargets());
+		food.onGameTick();
 		fightInfo.onGameTick();
 		attackAlert.onGameTick();
 		locations.onGameTick();
 		updateTeamCapeCounts();
 		updateMemberCountInfoBoxes();
 		pushTickToPanel();
+		if (client.getTickCount() % PERFORMANCE_PUSH_INTERVAL_TICKS == 0)
+		{
+			pushPerformance();
+		}
 	}
 
 	@Subscribe
 	public void onConfigChanged(ConfigChanged event)
 	{
+		if (FRIEND_NOTES_GROUP.equals(event.getGroup()))
+		{
+			loadPlayerNicknames();
+			return;
+		}
 		if (!PrepToolsConfig.GROUP.equals(event.getGroup()))
 		{
 			return;
@@ -323,8 +415,13 @@ public class PrepToolsPlugin extends Plugin
 			case "spamMessages":
 			case "selectedSpamMessage":
 			case "spamRandom":
+			case "playerNicknames":
+			case "useFriendNotesAsNicknames":
 				reloadConfigLists();
 				rebuildPanelLists();
+				break;
+			case "enablePerformanceTracker":
+				pushPerformance();
 				break;
 			default:
 				break;
@@ -349,6 +446,10 @@ public class PrepToolsPlugin extends Plugin
 			freezes.clear();
 			fightInfo.clear();
 			attackAlert.clear();
+			range.clear();
+			performance.clearPlayers();
+			food.clearPlayers();
+			nicknames.clear();
 			teamCapeCounts = Collections.emptyMap();
 		}
 	}
@@ -417,6 +518,22 @@ public class PrepToolsPlugin extends Plugin
 					.setType(MenuAction.RUNELITE)
 					.onClick(e -> lists.addToSnipeList(name));
 			}
+			if (config.showFoodCounter() && food.hasCount(player))
+			{
+				client.createMenuEntry(idx)
+					.setOption(RESET_FOOD_COUNT)
+					.setTarget(entry.getTarget())
+					.setType(MenuAction.RUNELITE)
+					.onClick(e -> food.reset(player));
+			}
+			if (config.showPlayerNicknames())
+			{
+				client.createMenuEntry(idx)
+					.setOption(SET_NICKNAME)
+					.setTarget(entry.getTarget())
+					.setType(MenuAction.RUNELITE)
+					.onClick(e -> promptNickname(name));
+			}
 		}
 
 		if (!config.showWildernessLocationOverlay())
@@ -473,20 +590,31 @@ public class PrepToolsPlugin extends Plugin
 	}
 
 	/**
-	 * A death animation: ends freezes/TB, and logs an FC member's death (only visible on screen).
-	 * Your own death is logged from onActorDeath instead.
+	 * Eats (FoodTracker), attacks (TeamPerformanceTracker), and deaths: a death ends freezes/TB
+	 * and FoodTracker's hp reading, and logs an FC member's death (only visible on screen). Your own
+	 * death is logged from onActorDeath instead.
 	 */
 	@Subscribe
 	public void onAnimationChanged(AnimationChanged event)
 	{
 		Actor actor = event.getActor();
-		if (!(actor instanceof Player) || !PLAYER_DEATH_ANIMATION_IDS.contains(actor.getAnimation()))
+		if (!(actor instanceof Player))
 		{
 			return;
 		}
 
 		Player player = (Player) actor;
+		food.onAnimationChanged(player);
+		performance.onAnimationChanged(player);
+		if (!PLAYER_DEATH_ANIMATION_IDS.contains(actor.getAnimation()))
+		{
+			return;
+		}
+
 		freezes.forget(player);
+		// In Clan Wars a dead player is out; next round they're back with full food.
+		food.reset(player);
+		performance.onDeath(player);
 		String standard = team.standardName(player);
 		if (player != client.getLocalPlayer() && standard != null && team.getFriendsChatNames().contains(standard))
 		{
@@ -498,6 +626,29 @@ public class PrepToolsPlugin extends Plugin
 	public void onPlayerDespawned(PlayerDespawned event)
 	{
 		freezes.forget(event.getPlayer());
+		performance.forget(event.getPlayer());
+		food.forget(event.getPlayer());
+	}
+
+	@Subscribe
+	public void onHitsplatApplied(HitsplatApplied event)
+	{
+		performance.onHitsplatApplied(event.getActor(), event.getHitsplat());
+		food.onHitsplatApplied(event.getActor(), event.getHitsplat());
+	}
+
+	/**
+	 * A friends/ignore list player changed their name - the only name change the game tells us
+	 * about. Their nickname moves to the new name.
+	 */
+	@Subscribe
+	public void onNameableNameChanged(NameableNameChanged event)
+	{
+		Nameable nameable = event.getNameable();
+		if ((nameable instanceof Friend || nameable instanceof Ignore) && nameable.getPrevName() != null)
+		{
+			lists.renamePlayerNickname(Text.toJagexName(nameable.getPrevName()), Text.toJagexName(nameable.getName()));
+		}
 	}
 
 	@Subscribe
@@ -505,12 +656,27 @@ public class PrepToolsPlugin extends Plugin
 	{
 		if (event.getActor() instanceof Player)
 		{
-			freezes.forget((Player) event.getActor());
+			Player player = (Player) event.getActor();
+			freezes.forget(player);
+			food.reset(player);
+			performance.onDeath(player);
 		}
 		if (event.getActor() == client.getLocalPlayer())
 		{
 			logFriendsChatActivity("You", "died");
 		}
+	}
+
+	/**
+	 * Chatbox prompt for a player's nickname, pre-filled with the current one - empty removes it.
+	 */
+	private void promptNickname(String name)
+	{
+		String current = lists.getPlayerNickname(name);
+		chatboxPanelManager.openTextInput("Nickname for " + Text.removeTags(name) + " (empty to remove)")
+			.value(current != null ? current : "")
+			.onDone((String nickname) -> lists.setPlayerNickname(name, nickname))
+			.build();
 	}
 
 	// ============================================================================================
@@ -635,6 +801,49 @@ public class PrepToolsPlugin extends Plugin
 		highlights.setCallers(callers);
 		highlights.setSnipeNames(ConfigLists.parseNameList(config.snipeList()));
 		teamCapeNames = ConfigLists.parseTeamCapeNames(config.teamCapeNames());
+		loadPlayerNicknames();
+	}
+
+	/**
+	 * The Names tab's nicknames, over Friend Notes' notes (if used) for anyone without one.
+	 */
+	private void loadPlayerNicknames()
+	{
+		Map<String, String> merged = new LinkedHashMap<>();
+		if (config.useFriendNotesAsNicknames())
+		{
+			String prefix = FRIEND_NOTES_GROUP + "." + FRIEND_NOTES_KEY_PREFIX;
+			for (String key : configManager.getConfigurationKeys(prefix))
+			{
+				String name = key.substring(prefix.length());
+				String note = configManager.getConfiguration(FRIEND_NOTES_GROUP, FRIEND_NOTES_KEY_PREFIX + name);
+				String nickname = friendNoteNickname(note);
+				if (nickname != null)
+				{
+					merged.put(name, nickname);
+				}
+			}
+		}
+		// Put after the notes, so the Names tab wins for the same (standardized) name.
+		merged.putAll(ConfigLists.parsePlayerNicknames(config.playerNicknames()));
+		nicknames.setNicknames(merged);
+	}
+
+	/**
+	 * A note's first line, cut short - a note can be a paragraph, a nickname tag can't.
+	 */
+	static String friendNoteNickname(String note)
+	{
+		if (note == null)
+		{
+			return null;
+		}
+		String line = note.split("\\R", 2)[0].trim();
+		if (line.isEmpty())
+		{
+			return null;
+		}
+		return line.length() > FRIEND_NOTE_NICKNAME_MAX_LENGTH ? line.substring(0, FRIEND_NOTE_NICKNAME_MAX_LENGTH).trim() + ".." : line;
 	}
 
 	/**
@@ -661,8 +870,10 @@ public class PrepToolsPlugin extends Plugin
 		List<String> spam = ConfigLists.parseSpamMessages(config.spamMessages());
 		String selectedSpam = config.selectedSpamMessage();
 		boolean spamRandom = config.spamRandom();
+		Map<String, String> playerNicknames = ConfigLists.parsePlayerNicknames(config.playerNicknames());
 		onSwing(() ->
 		{
+			panel.rebuildPlayerNicknames(playerNicknames);
 			panel.rebuild(callers);
 			panel.rebuildSnipeList(snipes);
 			panel.rebuildTeamCapeNames(capeNames);
@@ -702,6 +913,28 @@ public class PrepToolsPlugin extends Plugin
 			panel.updateClanWeapons(clanWeapons);
 		});
 		pushLocationMapper();
+	}
+
+	/**
+	 * The Stats tab - every few ticks rather than every tick, it's a whole table.
+	 */
+	private void pushPerformance()
+	{
+		boolean enabled = config.enablePerformanceTracker();
+		List<PerformanceRow> rows = performance.snapshot();
+		onSwing(() -> panel.updatePerformance(rows, enabled));
+	}
+
+	/**
+	 * The Stats tab's Reset button (EDT).
+	 */
+	void resetPerformance()
+	{
+		clientThread.invoke(() ->
+		{
+			performance.reset();
+			pushPerformance();
+		});
 	}
 
 	private void pushLocationMapper()

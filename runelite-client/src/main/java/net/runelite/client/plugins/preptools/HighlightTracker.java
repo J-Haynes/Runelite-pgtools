@@ -33,6 +33,7 @@ class HighlightTracker
 	private final PrepToolsConfig config;
 	private final TeamTracker team;
 	private final FreezeTracker freezes;
+	private final AttackRangeFilter range;
 
 	/**
 	 * Enabled callers from config, in list order - see setCallers().
@@ -94,12 +95,13 @@ class HighlightTracker
 	private Map<Player, HighlightStyle> cachedStyles = Collections.emptyMap();
 
 	@Inject
-	HighlightTracker(Client client, PrepToolsConfig config, TeamTracker team, FreezeTracker freezes)
+	HighlightTracker(Client client, PrepToolsConfig config, TeamTracker team, FreezeTracker freezes, AttackRangeFilter range)
 	{
 		this.client = client;
 		this.config = config;
 		this.team = team;
 		this.freezes = freezes;
+		this.range = range;
 	}
 
 	/**
@@ -398,7 +400,9 @@ class HighlightTracker
 	/**
 	 * Highlight priority when a player is in more than one category, lowest to highest: backup
 	 * caller, attacker, snipe, pile, primary caller, target - later puts win. A frozen pile or
-	 * target gets its frozen colour (FreezeTracker has already moved on to this tick).
+	 * target gets its frozen colour (FreezeTracker has already moved on to this tick), and an
+	 * out-of-range snipe/pile/target the out-of-range colour over all of that (AttackRangeFilter
+	 * has also moved on).
 	 */
 	private void rebuildStyles()
 	{
@@ -415,6 +419,22 @@ class HighlightTracker
 			styles.put(primaryCaller, base.withColor(config.callerColor()));
 		}
 		putAll(styles, targets, base.withColor(config.targetColor()), base.withColor(config.frozenTargetColor()));
+
+		// Experimental: a target/pile/snipe you can't attack is greyed out, whatever it was.
+		if (range.isEnabled())
+		{
+			HighlightStyle outOfRange = base.withColor(config.outOfRangeColor());
+			for (Set<Player> players : List.of(snipedPlayers, piledPlayers, targets))
+			{
+				for (Player player : players)
+				{
+					if (range.isOutOfRange(player))
+					{
+						styles.put(player, outOfRange);
+					}
+				}
+			}
+		}
 
 		cachedStyles = styles;
 	}

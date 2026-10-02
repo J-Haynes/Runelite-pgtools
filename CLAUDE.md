@@ -246,16 +246,76 @@ client with similar team-coordination features. Core pieces:
   enemy's own menu on your team's pile is built exclusively from your team's ids, so enemy ids don't
   factor into who on your side is exposed.
 
+- **Experimental** (config section of that name, position 19, everything **default off**) - built
+  2026-10-02, not yet proven in a fight. Once one is confirmed, give it its own section (keep keys).
+  - *Low food detector* (`FoodTracker`, `FoodOverlay`) - **for Clan Wars, not the wilderness.**
+    Counting eat animations (829) does NOT work, as the user pointed out: potions play the same
+    animation, and several anchovy pizza bites can go down in one. So the animation is only a cue
+    (a window of `EAT_WINDOW_TICKS`); what's counted is the **heal on the health bar** in that
+    window - hp now - hp last tick + hitsplat damage in between, 9 hp a bite (wiki), at least
+    `MIN_HEAL` (rounding noise). A heal without an eat (blood spells) is ignored; an eat with no
+    health bar showing is "unmeasured" (`+N?`). Other players' health is a 0-30 ratio, max hp
+    assumed (`foodEnemyMaxHp`, 99) - +-3 hp per reading, enough for 9 vs 18. **Reset on death**
+    (user: in Clan Wars a dead player is out of the round and returns next round with full
+    food - a session briefly kept counts through deaths from the wiki's "keep your items", which
+    was wrong), for everyone on entering an instance (the portal - everyone enters with full
+    food), and by hand: shift-right-click "Reset food count", `foodResetHotkey` (unbound).
+    Forgotten after `foodForgetMinutes` unseen. "Low" is in pizzas: assumed pizzas minus bites/2, a half pizza counting as one left.
+    Enemies only, text one line below a highlighted name.
+  - *Attackable-range filtering* (`AttackRange` pure, `AttackRangeFilter` per tick) - an enemy
+    whose combat differs by more than `min(your wildy level, theirs)` (+15 on PvP worlds, wiki) is
+    greyed (`outOfRangeColor`, overrides target/pile/snipe colour, not attackers) and its Attack is
+    greyed and never promoted. Your level uses the `IN_WILDERNESS` varbit; others only have
+    coordinates. Does nothing unless you're in the wilderness or on a PvP world - in Clan Wars or
+    Ferox it would grey everyone. Team levels differ (e.g. 55-60): `attackRangeBasis` YOU (default, exact for
+    your clicks) or TEAM (greyed only if no on-screen teammate can reach them), plus
+    `attackRangeMargin` slack.
+  - *Team performance tracker* (`TeamPerformanceTracker`, `PerformanceRow`, sidebar **Stats**
+    tab) - per teammate by name, until Reset: on-target share while the primary caller has a
+    target, ticks to switch to a new target (however long - **no time limit / "missed" count**:
+    the user called a 5-tick limit "ridiculously quick"; a target re-called first just isn't
+    measured), attack
+    animations (minus eat/block/death) total and on target, damage taken, eats, deaths, kills
+    involved (on the enemy within 10 ticks of its death). Rated HIGH/LOW at +-15 points from the
+    team median on-target share (3+ rateable non-callers). **Teammates' damage dealt is not
+    visible** - a hitsplat has no source - only yours (`isMine()`). Copy = TSV for a spreadsheet.
+  - *Player nicknames* (`PlayerNicknameTracker`, `PlayerNicknameOverlay`, `NameLookalike`,
+    sidebar **Names** tab, shift-right-click "Set nickname" via `ChatboxPanelManager`) -
+    TeamSpeak-style names for anyone, as `[Nick]` after the name in the menu; over their head only
+    with `showNicknamesOverHeads` (**default off**, asked for).
+    Hidden config `playerNicknames`, `Name=Nickname` per line. **There's no account id for other
+    players** - `Nameable` is just `getName()`/`getPrevName()`. Core's Friend Notes plugin (what
+    the user used for nicknames that survived name changes) stores notes by name and moves them on
+    `NameableNameChanged`; nicknames do the same, and Friend Notes' notes (config group
+    `friendNotes`, keys `note_<name>`, first line, 20 chars) count as nicknames too
+    (`useFriendNotesAsNicknames`, default on; the Names tab wins).
+    **Checked in the injected client's bytecode (2026-10-02):** a friend entry holds only name,
+    previous name, three ints (world, rank, and probably the order it was added) and two
+    flags - no account id. The friends-list packet carries name + one previous name per friend,
+    and RuneLite fires `NameableNameChanged` on *every* list update, not only on a rename. So
+    renames A to B to C while you're offline arrive as "C, previously B": a note keyed on A isn't
+    moved. It isn't deleted either - it stays in config under `note_A`. What the server sends as
+    the previous name is server-side and unconfirmed. (To read the injected client: unzip
+    `~/.gradle/caches/**/injected-client-*.jar`, `grep -rla <api class name>`, then `javap -c -p`.) Against renames meant to confuse:
+    a name one edit off a nicknamed name, or equal after folding I/l/1, O/0, rn/m, vv/w and
+    space/-/_, shows `NOT Nick?` (cached per name).
+- **Decided: no "mirror window without PvP Tools overlays"** (asked 2026-10-02). Overlays are
+  drawn into the same frame buffer as the game, interleaved with its layers (`Hooks#drawScene`/
+  `drawAboveOverheads`/`drawInterface`/`draw`), and with GPU on that buffer is composited over
+  the scene in OpenGL - a frame without our overlays means rendering everything twice. A capture
+  of the finished frame (`DrawManager`) always includes them. Offered instead: a hotkey that
+  hides all PvP Tools overlays while recording.
+
 Config file (`PrepToolsConfig.java`) is the fastest way to see the full feature surface — it's kept
 well-commented and organized by section, sections ordered/all collapsed-by-default to match the
 sidebar's own tab order. The sidebar (`PrepToolsPanel.java`) is a `MaterialTabGroup` in a fixed
-3-column grid (Callers/Snipe/Spam, Clan Info/FC/Capes, Location - 3/3/1; 4 columns was tried and
+3-column grid (Callers/Snipe/Spam, Clan Info/FC/Capes, Location/Stats/Names - 3/3/3; 4 columns was tried and
 cut every label off at sidebar width), icon+label
 centred in each cell. Every tab's icon is a **real in-game image**, not a bundled file (the plugin's
 only resources are two data files - `multi_lines.json` and `wilderness_locations.json` in
 `runelite-client/src/main/resources/net/runelite/client/plugins/preptools/` - no image assets; the
 installer icons in `runelite-client/jpackage/` are packaging-only) - a UI sprite via
-`SpriteManager#getSpriteAsync()` (`PrepToolsPanel#loadTabIcon()`) for six of them, but Capes uses an actual team cape **item** icon via `ItemManager`
+`SpriteManager#getSpriteAsync()` (`PrepToolsPanel#loadTabIcon()`) for eight of them, but Capes uses an actual team cape **item** icon via `ItemManager`
 (`#loadTabItemIcon()`, `TeamCapeOverlay.teamCapeItemId(30)`) since the generic equipment-slot sprite
 tried first rendered as a blank placeholder, not a real cape. Every section follows the same
 three-tier visual style, spaced apart with explicit `Box.createVerticalStrut(TIER_GAP)` calls
@@ -278,8 +338,9 @@ reloading them on `ConfigChanged`, and pushing data to the sidebar. Each feature
 | `AttackAlert` | attacked/frozen sound + `ScreenBorderFlashOverlay` colour |
 | `LocationTracker` | position, wilderness level/location, Mapper corners/preview, `WildernessLocationStore` |
 | `ChatHotkeys`, `ScoutReporter` | Pile Spam, Spammer, Location Spam; Scout webhook |
-| `ConfigListEditor` | every edit to the hidden list config (callers/snipe/spam/capes) - sidebar + menu |
-| `CallerEntry`, `ConfigLists`, `ScoutReport`, `WeaponStyle`, `AttackCategory#resolve()` | pure parsing/formatting - unit tested |
+| `ConfigListEditor` | every edit to the hidden list config (callers/snipe/spam/capes/nicknames) - sidebar + menu |
+| `FoodTracker`, `AttackRangeFilter`, `TeamPerformanceTracker`, `PlayerNicknameTracker` | Experimental: food eaten, combat bracket (before `HighlightTracker` each tick), Stats tab, nicknames |
+| `CallerEntry`, `ConfigLists`, `ScoutReport`, `WeaponStyle`, `AttackCategory#resolve()`, `AttackRange`, `PerformanceRow#rate()`, `NameLookalike`, `FoodTracker#biteCount()` | pure logic - unit tested |
 
 Overlays inject the tracker they draw from, not the plugin. Tests live in
 `runelite-client/src/test/java/net/runelite/client/plugins/preptools/` - pure logic, plus
@@ -302,6 +363,15 @@ Overlays inject the tracker they draw from, not the plugin. Tests live in
 Everything built but not yet confirmed in game / on a real machine - move an item into the relevant
 section (or delete it) once the user confirms it:
 
+- **The Experimental section (2026-10-02)** - none of it seen in game. Check: does an enemy's
+  health bar update when they eat (the food detector depends on it), and does the heal land
+  within 2 ticks of the eat animation? Is a pizza combo one heal or two? Is the Clan Wars arena an
+  instance (the portal reset depends on `WorldView#isInstance()`)? Is the
+  shallower-wilderness-level rule right (wiki only says "your level +- wilderness level")? On a PvP
+  world the filter adds 15 to coordinate levels and knows nothing of PvP-world safe zones (banks
+  etc.) - does that grey/ungrey the right people? Are attack animations counted without false positives (blocks not in
+  `BLOCK_ANIMATION_IDS`, spec/teleport animations)? Is the hitsplat on another player
+  `DAMAGE_OTHER` and on you `DAMAGE_ME` (damage taken counts `isMine() || isOthers()`)?
 - **2026-09-26 fixes** - Bryophyta's staff (+ LMS/cosmetic weapon variants) counted as magic,
   "Block spells on teammates" (every spell, not just freezes). Not yet seen in game.
 - **Chat hotkeys pre-filling (2026-09-25)** - Spammer/Location/Pile Spam now type into the
@@ -353,6 +423,11 @@ Agreed with the user but deliberately not built yet. Low priority unless marked 
   `ICE_BLITZ_IMPACT2/3` exist in `SpotanimID`), not Snare's case though. Next time: turn on
   debug logging and log freeze add/drop reasons in `FreezeTracker` to see which it is.
 
+- **Nicknames/Friend Notes that survive any number of renames** (discussed 2026-10-02, "leave it
+  for now"): save the friends list at logout; at the next login, pair friends who vanished with new
+  names you didn't add (they're renames, however many), and move notes/nicknames - automatic when
+  one-to-one, a sidebar to pair by hand otherwise. Adds/removes made on another client in between
+  muddy it. See the Player nicknames entry for why the game's own previous name isn't enough.
 - **(Low) Clear a TB when an in-view player leaves the Wilderness** - the game ends it then (OSRS
   wiki), but the icon stays until the timer runs out. Rare in practice, so deferred on purpose
   (2026-09-25). If built: a per-tick position check on each teleblocked player
@@ -602,7 +677,7 @@ These cost real debugging time to find. Don't rediscover them the hard way:
   *focus-lost* with whatever text it loaded when opened, and never refreshes on outside changes. So
   settings open -> edit list in sidebar -> back to settings -> focus leaves the field = stale text
   written straight over the sidebar's edits ("switching between the sidebar and settings can destroy
-  the caller list"). `callers`, `snipeList`, `teamCapeNames`, `spamMessages`, `selectedSpamMessage`
+  the caller list"). `callers`, `snipeList`, `teamCapeNames`, `spamMessages`, `selectedSpamMessage`, `playerNicknames`
   are all hidden for this reason; the sidebar is their only editor.
 - **Never put `/` in a `@PluginDescriptor` `name`.** `PluginManagerTest` writes one `<name>.dot`
   file per plugin, so a slash becomes a missing subdirectory and CI (`ci/build.sh` -> `:buildAll`)

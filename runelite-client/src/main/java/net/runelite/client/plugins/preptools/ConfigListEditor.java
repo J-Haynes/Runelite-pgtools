@@ -11,8 +11,8 @@ import net.runelite.client.config.ConfigManager;
 import net.runelite.client.util.Text;
 
 /**
- * Edits the hidden list-valued config (callers, snipe list, spam messages, team cape names) for
- * the sidebar and the shift-right-click menu options. Every change is written straight to config;
+ * Edits the hidden list-valued config (callers, snipe list, spam messages, team cape names,
+ * player nicknames) for the sidebar and the shift-right-click menu options. Every change is written straight to config;
  * PrepToolsPlugin#onConfigChanged then reloads the trackers and rebuilds the sidebar, so config
  * stays the single source of truth. Safe from any thread.
  */
@@ -322,6 +322,57 @@ class ConfigListEditor
 		configManager.setConfiguration(PrepToolsConfig.GROUP, "snipeList",
 			existing == null || existing.trim().isEmpty() ? name : existing.trim() + "\n" + name);
 		return true;
+	}
+
+	// --- Player nicknames ---
+
+	String getPlayerNickname(String playerName)
+	{
+		return nicknames().entrySet().stream()
+			.filter(e -> Text.standardize(e.getKey()).equals(Text.standardize(playerName)))
+			.map(Map.Entry::getValue)
+			.findFirst().orElse(null);
+	}
+
+	/**
+	 * Sets (or with an empty nickname, removes) a player's nickname. Nicknames can't span lines.
+	 */
+	void setPlayerNickname(String playerName, String rawNickname)
+	{
+		String name = playerName == null ? "" : Text.removeTags(playerName).replace('\u00A0', ' ').trim();
+		if (name.isEmpty() || name.contains("="))
+		{
+			return;
+		}
+		String nickname = rawNickname == null ? "" : rawNickname.replaceAll("[\\r\\n]", " ").trim();
+
+		Map<String, String> all = nicknames();
+		all.keySet().removeIf(n -> Text.standardize(n).equals(Text.standardize(name)));
+		if (!nickname.isEmpty())
+		{
+			all.put(name, nickname);
+		}
+		configManager.setConfiguration(PrepToolsConfig.GROUP, "playerNicknames", ConfigLists.serializePlayerNicknames(all));
+	}
+
+	/**
+	 * A nicknamed friend/ignore-list player changed their name: the nickname moves with them.
+	 */
+	void renamePlayerNickname(String oldName, String newName)
+	{
+		String nickname = getPlayerNickname(oldName);
+		if (nickname == null || newName == null)
+		{
+			return;
+		}
+		setPlayerNickname(oldName, null);
+		setPlayerNickname(newName, nickname);
+		printConsole(oldName + " (" + nickname + ") is now called " + newName + " - nickname moved.");
+	}
+
+	private Map<String, String> nicknames()
+	{
+		return ConfigLists.parsePlayerNicknames(config.playerNicknames());
 	}
 
 	private void printConsole(String message)

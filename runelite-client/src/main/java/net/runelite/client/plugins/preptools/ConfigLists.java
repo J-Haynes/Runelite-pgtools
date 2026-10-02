@@ -121,4 +121,47 @@ final class ConfigLists
 		}
 		return sb.toString();
 	}
+
+	/**
+	 * Player nicknames, "Name=Nickname" per line, in file order. OSRS names can't contain '=', a
+	 * nickname can. Lines without both halves are skipped; a name listed twice keeps the last.
+	 */
+	static Map<String, String> parsePlayerNicknames(String raw)
+	{
+		Map<String, String> nicknames = new LinkedHashMap<>();
+		if (raw == null)
+		{
+			return nicknames;
+		}
+
+		for (String line : raw.split("\n"))
+		{
+			int equals = line.indexOf('=');
+			if (equals < 0)
+			{
+				continue;
+			}
+			String name = line.substring(0, equals).trim();
+			String nickname = line.substring(equals + 1).trim();
+			if (!name.isEmpty() && !nickname.isEmpty())
+			{
+				nicknames.put(name, nickname);
+			}
+		}
+		return nicknames;
+	}
+
+	static String serializePlayerNicknames(Map<String, String> nicknames)
+	{
+		StringBuilder sb = new StringBuilder();
+		for (Map.Entry<String, String> entry : nicknames.entrySet())
+		{
+			if (sb.length() > 0)
+			{
+				sb.append('\n');
+			}
+			sb.append(entry.getKey()).append('=').append(entry.getValue());
+		}
+		return sb.toString();
+	}
 }

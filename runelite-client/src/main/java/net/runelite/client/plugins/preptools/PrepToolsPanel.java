@@ -145,6 +145,17 @@ public class PrepToolsPanel extends PluginPanel
 	private boolean clanIdsInitialised;
 	private ClanWeaponSummary lastClanWeapons;
 
+	// --- Names (player nicknames) ---
+	private final JPanel playerNicknamesPanel = new JPanel();
+	private final JTextField nicknamePlayerField = new JTextField();
+	private final JTextField nicknameField = new JTextField();
+
+	// --- Stats (team performance) ---
+	private final JPanel performanceListPanel = new JPanel();
+	private JButton copyPerformanceButton;
+	private List<PerformanceRow> lastPerformanceRows;
+	private Boolean lastPerformanceEnabled;
+
 	// --- Friends chat log ---
 	private JTextArea friendsChatLogArea;
 	private JButton copyFriendsChatLogButton;
@@ -198,11 +209,13 @@ public class PrepToolsPanel extends PluginPanel
 		MaterialTab fcLogTab = new MaterialTab("FC", tabGroup, wrapTabContent(buildFriendsChatLogSection()));
 		MaterialTab capesTab = new MaterialTab("Capes", tabGroup, wrapTabContent(buildTeamCapeNamesSection()));
 		MaterialTab locationTab = new MaterialTab("Location", tabGroup, wrapTabContent(buildLocationMapperSection()));
+		MaterialTab statsTab = new MaterialTab("Stats", tabGroup, wrapTabContent(buildPerformanceSection()));
+		MaterialTab namesTab = new MaterialTab("Names", tabGroup, wrapTabContent(buildPlayerNicknamesSection()));
 
 		// Centre icon+text within each tab's own grid cell (not just the icon relative to the text -
 		// see loadTabIcon()/loadTabItemIcon() for that part) - applied up front, before the icon even
 		// loads, so nothing shifts once it does.
-		for (MaterialTab tab : new MaterialTab[] {callersTab, snipeTab, spamTab, clanIdsTab, fcLogTab, capesTab, locationTab})
+		for (MaterialTab tab : new MaterialTab[] {callersTab, snipeTab, spamTab, clanIdsTab, fcLogTab, capesTab, locationTab, statsTab, namesTab})
 		{
 			tab.setHorizontalAlignment(SwingConstants.CENTER);
 			tab.setVerticalAlignment(SwingConstants.CENTER);
@@ -222,8 +235,10 @@ public class PrepToolsPanel extends PluginPanel
 		loadTabIcon(fcLogTab, SpriteID.TAB_FRIENDS_CHAT);
 		loadTabItemIcon(capesTab, TeamCapeOverlay.teamCapeItemId(30));
 		loadTabIcon(locationTab, SpriteID.MINIMAP_ORB_WORLD_MAP_PLANET);
+		loadTabIcon(statsTab, SpriteID.TAB_COMBAT);
+		loadTabIcon(namesTab, SpriteID.TAB_IGNORES);
 
-		// 3 columns, as many rows as needed (3/3/1 for seven tabs). Tried 4 columns when the Spam tab
+		// 3 columns, as many rows as needed (3/3/3 for nine tabs). Tried 4 columns when the Spam tab
 		// made it seven - at sidebar width that cut every label off ("Loc...", "Cla..."), so wider
 		// cells with an uneven last row it is.
 		tabGroup.setLayout(new GridLayout(0, 3, 4, 4));
@@ -235,6 +250,8 @@ public class PrepToolsPanel extends PluginPanel
 		tabGroup.addTab(fcLogTab);
 		tabGroup.addTab(capesTab);
 		tabGroup.addTab(locationTab);
+		tabGroup.addTab(statsTab);
+		tabGroup.addTab(namesTab);
 		tabGroup.select(callersTab);
 
 		display.setBackground(ColorScheme.DARK_GRAY_COLOR);
@@ -1303,7 +1320,7 @@ public class PrepToolsPanel extends PluginPanel
 	 * A bold sub-heading with a small button (e.g. Copy) on the right - same look as the FC tab's
 	 * "Log" header.
 	 */
-	private JPanel createSubHeader(String text, JButton button)
+	private JPanel createSubHeader(String text, Component button)
 	{
 		JLabel label = new JLabel(text);
 		label.setForeground(Color.WHITE);
@@ -1481,6 +1498,160 @@ public class PrepToolsPanel extends PluginPanel
 		rowPanel.add(nameLabel, BorderLayout.CENTER);
 		rowPanel.add(idLabel, BorderLayout.EAST);
 		return rowPanel;
+	}
+
+	// ============================================================================================
+	// Stats tab (experimental) - TeamPerformanceTracker's per-teammate numbers.
+	// ============================================================================================
+
+	private static final Color PERFORMANCE_HIGH_COLOR = new Color(100, 210, 100);
+	private static final Color PERFORMANCE_LOW_COLOR = new Color(230, 90, 80);
+
+	private JPanel buildPerformanceSection()
+	{
+		JPanel section = new JPanel();
+		section.setLayout(new BoxLayout(section, BoxLayout.Y_AXIS));
+		section.setBackground(ColorScheme.DARK_GRAY_COLOR);
+		section.setAlignmentX(LEFT_ALIGNMENT);
+		section.setMaximumSize(new Dimension(PluginPanel.PANEL_WIDTH, Integer.MAX_VALUE));
+
+		JLabel title = createSectionTitle("Team Performance", 0);
+		JTextArea description = createDescriptionArea(
+			"Experimental - turn on \"Team performance tracker\" in the Experimental settings. "
+				+ "On target: share of the time the primary caller had a target that they were on it - "
+				+ "rated green/red against the team's median once they've had enough called time. "
+				+ "Switch: average ticks to reach a newly called target. "
+				+ "Attacks: total / on the called target. Only what happens on your screen counts, and "
+				+ "only your own damage dealt can be seen.");
+
+		JButton resetButton = createSmallButton("Reset", "Clear every number and start a new session");
+		resetButton.addActionListener(e -> plugin.resetPerformance());
+		copyPerformanceButton = createSmallButton("Copy", "Copy the table to clipboard, tab-separated (pastes into a spreadsheet)");
+		copyPerformanceButton.setEnabled(false);
+		copyPerformanceButton.addActionListener(e -> copyPerformanceToClipboard());
+		JPanel buttons = new JPanel(new GridLayout(1, 2, 4, 0));
+		buttons.setBackground(ColorScheme.DARK_GRAY_COLOR);
+		buttons.add(resetButton);
+		buttons.add(copyPerformanceButton);
+
+		performanceListPanel.setLayout(new GridLayout(0, 1, 0, 4));
+		performanceListPanel.setBackground(ColorScheme.DARK_GRAY_COLOR);
+		performanceListPanel.setAlignmentX(LEFT_ALIGNMENT);
+		performanceListPanel.setMaximumSize(new Dimension(PluginPanel.PANEL_WIDTH, Integer.MAX_VALUE));
+
+		section.add(title);
+		section.add(Box.createVerticalStrut(TIER_GAP));
+		section.add(description);
+		section.add(Box.createVerticalStrut(TIER_GAP));
+		section.add(createSubHeader("Teammates", buttons));
+		section.add(Box.createVerticalStrut(TIER_GAP));
+		section.add(performanceListPanel);
+		updatePerformance(Collections.emptyList(), false);
+		return section;
+	}
+
+	/**
+	 * Rebuilds the Stats list - only when the rows changed.
+	 */
+	void updatePerformance(List<PerformanceRow> rows, boolean enabled)
+	{
+		if (rows.equals(lastPerformanceRows) && Boolean.valueOf(enabled).equals(lastPerformanceEnabled))
+		{
+			return;
+		}
+		lastPerformanceRows = new ArrayList<>(rows);
+		lastPerformanceEnabled = enabled;
+		copyPerformanceButton.setEnabled(!rows.isEmpty());
+		performanceListPanel.removeAll();
+
+		if (rows.isEmpty())
+		{
+			JLabel empty = new JLabel(enabled ? "(no teammates seen yet)" : "(tracker is off - Experimental settings)");
+			empty.setForeground(ColorScheme.LIGHT_GRAY_COLOR);
+			empty.setFont(FontManager.getRunescapeSmallFont());
+			performanceListPanel.add(empty);
+		}
+		for (PerformanceRow row : rows)
+		{
+			performanceListPanel.add(buildPerformanceRow(row));
+		}
+
+		revalidate();
+		repaint();
+	}
+
+	private JPanel buildPerformanceRow(PerformanceRow row)
+	{
+		Color ratingColor = row.rating == PerformanceRow.Rating.HIGH ? PERFORMANCE_HIGH_COLOR
+			: row.rating == PerformanceRow.Rating.LOW ? PERFORMANCE_LOW_COLOR : null;
+
+		JPanel rowPanel = new JPanel();
+		rowPanel.setLayout(new BoxLayout(rowPanel, BoxLayout.Y_AXIS));
+		rowPanel.setBackground(ColorScheme.DARKER_GRAY_COLOR);
+		rowPanel.setBorder(BorderFactory.createCompoundBorder(
+			BorderFactory.createMatteBorder(0, 2, 0, 0, ratingColor != null ? ratingColor : ColorScheme.MEDIUM_GRAY_COLOR),
+			new EmptyBorder(3, 5, 3, 3)));
+
+		JLabel nameLabel = new JLabel(row.isYou ? row.name + " (you)" : row.isCaller ? row.name + " (caller)" : row.name);
+		nameLabel.setFont(FontManager.getRunescapeBoldFont());
+		nameLabel.setForeground(row.isYou ? YOU_HIGHLIGHT_COLOR : row.isCaller ? CALLER_HIGHLIGHT_COLOR : Color.WHITE);
+		int share = row.onTargetPercent();
+		JLabel shareLabel = new JLabel(share < 0 ? "-" : share + "% on target");
+		shareLabel.setFont(FontManager.getRunescapeSmallFont());
+		shareLabel.setForeground(ratingColor != null ? ratingColor : ColorScheme.LIGHT_GRAY_COLOR);
+		JPanel top = new JPanel(new BorderLayout(4, 0));
+		top.setOpaque(false);
+		top.add(nameLabel, BorderLayout.CENTER);
+		top.add(shareLabel, BorderLayout.EAST);
+		top.setAlignmentX(LEFT_ALIGNMENT);
+		rowPanel.add(top);
+
+		double switchTicks = row.averageSwitchTicks();
+		rowPanel.add(createPerformanceDetail("Switch " + (switchTicks < 0 ? "-" : String.format("%.1ft", switchTicks))
+			+ " · Attacks " + row.attacks + "/" + row.attacksOnTarget));
+		rowPanel.add(createPerformanceDetail("Taken " + row.damageTaken
+			+ (row.damageDealt >= 0 ? " · Dealt " + row.damageDealt : "")
+			+ " · Eats " + row.eats + " · Kills " + row.killsInvolved + " · Deaths " + row.deaths));
+		return rowPanel;
+	}
+
+	private static JLabel createPerformanceDetail(String text)
+	{
+		JLabel label = new JLabel(text);
+		label.setFont(FontManager.getRunescapeSmallFont());
+		label.setForeground(ColorScheme.LIGHT_GRAY_COLOR);
+		label.setToolTipText(text);
+		label.setAlignmentX(LEFT_ALIGNMENT);
+		return label;
+	}
+
+	private void copyPerformanceToClipboard()
+	{
+		List<PerformanceRow> rows = lastPerformanceRows;
+		if (rows == null || rows.isEmpty())
+		{
+			return;
+		}
+
+		StringBuilder sb = new StringBuilder("Name\tRating\tOn target %\tAvg switch (ticks)\tAttacks"
+			+ "\tAttacks on target\tDamage taken\tDamage dealt\tEats\tKills involved\tDeaths\tTicks seen\n");
+		for (PerformanceRow row : rows)
+		{
+			double switchTicks = row.averageSwitchTicks();
+			sb.append(row.name).append('\t')
+				.append(row.isCaller ? "caller" : row.rating.name().toLowerCase()).append('\t')
+				.append(row.onTargetPercent() < 0 ? "" : row.onTargetPercent()).append('\t')
+				.append(switchTicks < 0 ? "" : String.format("%.1f", switchTicks)).append('\t')
+				.append(row.attacks).append('\t')
+				.append(row.attacksOnTarget).append('\t')
+				.append(row.damageTaken).append('\t')
+				.append(row.damageDealt < 0 ? "" : row.damageDealt).append('\t')
+				.append(row.eats).append('\t')
+				.append(row.killsInvolved).append('\t')
+				.append(row.deaths).append('\t')
+				.append(row.ticksSeen).append('\n');
+		}
+		Toolkit.getDefaultToolkit().getSystemClipboard().setContents(new StringSelection(sb.toString().trim()), null);
 	}
 
 	// ============================================================================================
@@ -1710,6 +1881,132 @@ public class PrepToolsPanel extends PluginPanel
 			row.add(label, BorderLayout.CENTER);
 			row.add(deleteButton, BorderLayout.EAST);
 			teamCapeNamesPanel.add(row);
+		}
+
+		revalidate();
+		repaint();
+	}
+
+	// ============================================================================================
+	// Names tab (experimental) - your own nicknames for players (PlayerNicknameTracker).
+	// ============================================================================================
+
+	private JPanel buildPlayerNicknamesSection()
+	{
+		JPanel section = new JPanel();
+		section.setLayout(new BoxLayout(section, BoxLayout.Y_AXIS));
+		section.setBackground(ColorScheme.DARK_GRAY_COLOR);
+		section.setAlignmentX(LEFT_ALIGNMENT);
+		section.setMaximumSize(new Dimension(PluginPanel.PANEL_WIDTH, Integer.MAX_VALUE));
+
+		JLabel title = createSectionTitle("Player Nicknames", 0);
+		JTextArea instructions = createDescriptionArea(
+			"Experimental - turn on \"Player nicknames\" in the Experimental settings. Your own name "
+				+ "for any player, shown over their head and in their right-click menu. Shift-right-click "
+				+ "a player, Set nickname, or type their name and nickname below.");
+		JTextArea renameHelp = createDescriptionArea(
+			"Name changes: the game only tells you when someone on your friends or ignore list "
+				+ "changes name - add a player there and their nickname follows them. Anyone else "
+				+ "keeps the nickname on the old name. Your Friend Notes notes also count as "
+				+ "nicknames (setting in Experimental) - they follow name changes the same way. "
+				+ "A name one letter off a nicknamed player's, or using lookalike letters "
+				+ "(I/l/1, O/0, rn/m), shows \"NOT Nick?\".");
+
+		nicknamePlayerField.setToolTipText("Player's in-game name");
+		nicknamePlayerField.setFont(FontManager.getRunescapeSmallFont());
+		nicknameField.setToolTipText("Nickname");
+		nicknameField.setFont(FontManager.getRunescapeSmallFont());
+		nicknameField.addActionListener(e -> savePlayerNicknameFromFields());
+		JButton saveButton = createSmallButton("Save", "Save this player's nickname (an empty nickname removes it)");
+		saveButton.addActionListener(e -> savePlayerNicknameFromFields());
+
+		JPanel fields = new JPanel(new GridLayout(1, 2, 4, 0));
+		fields.setBackground(ColorScheme.DARK_GRAY_COLOR);
+		fields.add(nicknamePlayerField);
+		fields.add(nicknameField);
+		JPanel entryPanel = new JPanel(new BorderLayout(4, 0));
+		entryPanel.setAlignmentX(LEFT_ALIGNMENT);
+		entryPanel.setMaximumSize(new Dimension(PluginPanel.PANEL_WIDTH, Integer.MAX_VALUE));
+		entryPanel.add(fields, BorderLayout.CENTER);
+		entryPanel.add(saveButton, BorderLayout.EAST);
+		styleInputRow(entryPanel);
+
+		playerNicknamesPanel.setLayout(new GridLayout(0, 1, 0, 4));
+		playerNicknamesPanel.setBackground(ColorScheme.DARK_GRAY_COLOR);
+		playerNicknamesPanel.setAlignmentX(LEFT_ALIGNMENT);
+		playerNicknamesPanel.setMaximumSize(new Dimension(PluginPanel.PANEL_WIDTH, Integer.MAX_VALUE));
+
+		section.add(title);
+		section.add(Box.createVerticalStrut(TIER_GAP));
+		section.add(instructions);
+		section.add(Box.createVerticalStrut(TIER_GAP));
+		section.add(renameHelp);
+		section.add(Box.createVerticalStrut(TIER_GAP));
+		section.add(entryPanel);
+		section.add(Box.createVerticalStrut(TIER_GAP));
+		section.add(playerNicknamesPanel);
+		return section;
+	}
+
+	private void savePlayerNicknameFromFields()
+	{
+		String name = nicknamePlayerField.getText();
+		if (name == null || name.trim().isEmpty())
+		{
+			return;
+		}
+		lists.setPlayerNickname(name.trim(), nicknameField.getText());
+		nicknamePlayerField.setText("");
+		nicknameField.setText("");
+	}
+
+	/**
+	 * Rebuilds the nickname list, sorted by nickname. Clicking ✎ loads a row into the fields above.
+	 */
+	void rebuildPlayerNicknames(Map<String, String> nicknames)
+	{
+		playerNicknamesPanel.removeAll();
+
+		List<Map.Entry<String, String>> sorted = new ArrayList<>(nicknames.entrySet());
+		sorted.sort(Map.Entry.comparingByValue(String.CASE_INSENSITIVE_ORDER));
+		for (Map.Entry<String, String> entry : sorted)
+		{
+			String name = entry.getKey();
+			JPanel row = new JPanel(new BorderLayout(6, 0));
+			row.setBackground(ColorScheme.DARK_GRAY_COLOR);
+			row.setBorder(BorderFactory.createEmptyBorder(1, 2, 1, 2));
+
+			JLabel label = new JLabel(entry.getValue() + "  -  " + name);
+			label.setForeground(Color.WHITE);
+			label.setFont(FontManager.getRunescapeSmallFont());
+			label.setToolTipText(name + " is \"" + entry.getValue() + "\"");
+
+			JButton editButton = createSmallButton("✎", "Edit this nickname");
+			editButton.addActionListener(e ->
+			{
+				nicknamePlayerField.setText(name);
+				nicknameField.setText(entry.getValue());
+				nicknameField.requestFocusInWindow();
+			});
+			JButton deleteButton = createSmallButton("✕", "Remove this nickname");
+			deleteButton.setForeground(new Color(220, 80, 80));
+			deleteButton.addActionListener(e -> lists.setPlayerNickname(name, null));
+			JPanel buttons = new JPanel(new GridLayout(1, 2, 2, 0));
+			buttons.setBackground(ColorScheme.DARK_GRAY_COLOR);
+			buttons.add(editButton);
+			buttons.add(deleteButton);
+
+			row.add(label, BorderLayout.CENTER);
+			row.add(buttons, BorderLayout.EAST);
+			playerNicknamesPanel.add(row);
+		}
+
+		if (sorted.isEmpty())
+		{
+			JLabel empty = new JLabel("(no nicknames yet)");
+			empty.setForeground(ColorScheme.LIGHT_GRAY_COLOR);
+			empty.setFont(FontManager.getRunescapeSmallFont());
+			playerNicknamesPanel.add(empty);
 		}
 
 		revalidate();
