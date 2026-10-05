@@ -33,20 +33,31 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
+
+      # Only for setup-gradle's cache cleanup at the end of the job: it runs the runner's own
+      # Gradle (9.x), which needs Java 17+, so with JAVA_HOME on 11 it failed ("Cache cleanup
+      # failed" warning). The last step below switches JAVA_HOME to this one for it.
+      - name: Set up JDK 17 (cache cleanup)
+        id: jdk17
+        uses: actions/setup-java@v6
+        with:
+          distribution: temurin
+          java-version: 17
 
       # Matches CI.yml - JDK 11 is what actually builds/compiles the client on every OS. jpackage
       # itself needs a JDK 14+; the Gradle toolchain wired up in settings.gradle.kts auto-downloads
-      # a JDK 17 for just that step, same as it does on a local machine - no second setup-java
-      # step needed here.
+      # a JDK 17 for just that step, same as it does on a local machine. Set up last, so it's the
+      # JAVA_HOME the build uses.
       - name: Set up JDK 11
-        uses: actions/setup-java@v4
+        uses: actions/setup-java@v6
         with:
           distribution: temurin
           java-version: 11
 
+      # v5, not v6: v6 changed the action's license terms (blog.gradle.org/github-actions-for-gradle-v6).
       - name: Setup Gradle
-        uses: gradle/actions/setup-gradle@v4
+        uses: gradle/actions/setup-gradle@v5
         with:
           gradle-version: wrapper
 
@@ -87,13 +98,18 @@ jobs:
           sudo apt-get install -y --simulate "./$deb"
 
       - name: Upload build artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: runelite-pvp-tools-${{ matrix.os }}
           path: ${{ matrix.artifact-glob }}
 
       - name: Publish to release
         if: startsWith(github.ref, 'refs/tags/')
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@v3
         with:
           files: ${{ matrix.artifact-glob }}
+
+      # Must stay the last step: setup-gradle's cache cleanup runs after it, in the post-job phase.
+      - name: Use JDK 17 for Gradle cache cleanup
+        shell: bash
+        run: echo "JAVA_HOME=${{ steps.jdk17.outputs.path }}" >> "$GITHUB_ENV"
