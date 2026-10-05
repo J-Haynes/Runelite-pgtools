@@ -55,6 +55,15 @@ jobs:
           distribution: temurin
           java-version: 11
 
+      # setup-java v6 adds problem matchers that turn every compiler warning in the build log into
+      # a run annotation - dozens from upstream RuneLite's code. They're still in the log.
+      - name: Keep compiler warnings out of the run annotations
+        shell: bash
+        run: |
+          echo "::remove-matcher owner=java::"
+          echo "::remove-matcher owner=javac::"
+          echo "::remove-matcher owner=maven-javac::"
+
       # v5, not v6: v6 changed the action's license terms (blog.gradle.org/github-actions-for-gradle-v6).
       - name: Setup Gradle
         uses: gradle/actions/setup-gradle@v5
