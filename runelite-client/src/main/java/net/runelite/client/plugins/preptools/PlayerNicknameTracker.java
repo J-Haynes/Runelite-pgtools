@@ -10,13 +10,13 @@ import net.runelite.api.Player;
 import net.runelite.client.util.Text;
 
 /**
- * Experimental: your own nicknames for players (the sidebar's Names tab), TeamSpeak-style, and
- * warnings for names made to look like a nicknamed player's (NameLookalike).
+ * Experimental: your own nicknames for players (the sidebar's Names tab), TeamSpeak-style.
  *
  * There is no account id for other players in the game client - a name is all there is. The one
  * thing that follows an account through a name change is your friends/ignore list, so a nicknamed
- * player on either list has their nickname moved to the new name (PrepToolsPlugin's
- * NameableNameChanged handler, as core's Friend Notes plugin does for notes).
+ * player on either list has their nickname moved to the new name: by the previous name the game
+ * reports (PrepToolsPlugin's NameableNameChanged handler, as core's Friend Notes plugin does), and
+ * by comparing the lists between logins for renames that report doesn't cover (FriendRenameTracker).
  *
  * Resolved once per tick for on-screen players; client thread, except setNicknames().
  */
@@ -31,21 +31,8 @@ class PlayerNicknameTracker
 	 */
 	private volatile Map<String, String> nicknamesByStandardName = Collections.emptyMap();
 
-	/**
-	 * Standardized name to the nickname of the player they look like (or "" for nobody) - names
-	 * don't change while on screen, so each is only checked once per nickname list.
-	 */
-	private final Map<String, String> lookalikeCache = new HashMap<>();
-	private Map<String, String> lookalikeCacheFor = Collections.emptyMap();
-
 	@Getter
 	private Map<Player, String> nicknames = Collections.emptyMap();
-
-	/**
-	 * On-screen players whose name looks like a nicknamed player's, to that player's nickname.
-	 */
-	@Getter
-	private Map<Player, String> lookalikes = Collections.emptyMap();
 
 	@Inject
 	PlayerNicknameTracker(Client client, PrepToolsConfig config, TeamTracker team)
@@ -65,24 +52,25 @@ class PlayerNicknameTracker
 		nicknamesByStandardName = standard;
 	}
 
+	/**
+	 * Any player's nickname by name, whether or not they're on screen - for the friends list, chat
+	 * and the hover tooltip.
+	 */
+	String nicknameFor(String name)
+	{
+		return name == null ? null : nicknamesByStandardName.get(Text.standardize(name));
+	}
+
 	void onGameTick()
 	{
 		Map<String, String> all = nicknamesByStandardName;
 		if (!config.showPlayerNicknames() || all.isEmpty())
 		{
 			nicknames = Collections.emptyMap();
-			lookalikes = Collections.emptyMap();
 			return;
 		}
-		if (all != lookalikeCacheFor)
-		{
-			lookalikeCache.clear();
-			lookalikeCacheFor = all;
-		}
 
-		boolean warn = config.warnLookalikeNames();
 		Map<Player, String> found = new HashMap<>();
-		Map<Player, String> fakes = new HashMap<>();
 		for (Player player : client.getPlayers())
 		{
 			String name = team.standardName(player);
@@ -95,37 +83,12 @@ class PlayerNicknameTracker
 			{
 				found.put(player, nickname);
 			}
-			else if (warn)
-			{
-				String resembled = lookalikeCache.computeIfAbsent(name, n -> findLookalike(n, all));
-				if (!resembled.isEmpty())
-				{
-					fakes.put(player, resembled);
-				}
-			}
 		}
 		nicknames = found;
-		lookalikes = fakes;
 	}
 
 	void clear()
 	{
 		nicknames = Collections.emptyMap();
-		lookalikes = Collections.emptyMap();
-	}
-
-	/**
-	 * The nickname of the first nicknamed player this name looks like, or "".
-	 */
-	private static String findLookalike(String name, Map<String, String> nicknames)
-	{
-		for (Map.Entry<String, String> entry : nicknames.entrySet())
-		{
-			if (NameLookalike.isLookalike(name, entry.getKey()))
-			{
-				return entry.getValue();
-			}
-		}
-		return "";
 	}
 }

@@ -15,8 +15,7 @@ import net.runelite.client.ui.overlay.OverlayUtil;
 
 /**
  * Experimental, off by default even with nicknames on (showNicknamesOverHeads): a player's
- * nickname over their head, one line above where CallerNameOverlay puts a highlighted name - or
- * "NOT Nick?" for a lookalike name (PlayerNicknameTracker).
+ * nickname over their head, one line above where CallerNameOverlay puts a highlighted name.
  */
 public class PlayerNicknameOverlay extends Overlay
 {
@@ -46,16 +45,7 @@ public class PlayerNicknameOverlay extends Overlay
 		{
 			draw(graphics, entry.getKey(), entry.getValue(), config.playerNicknameColor(), lineHeight);
 		}
-		for (Map.Entry<Player, String> entry : nicknames.getLookalikes().entrySet())
-		{
-			draw(graphics, entry.getKey(), lookalikeText(entry.getValue()), config.lookalikeNameColor(), lineHeight);
-		}
 		return null;
-	}
-
-	static String lookalikeText(String nickname)
-	{
-		return "NOT " + nickname + "?";
 	}
 
 	private static void draw(Graphics2D graphics, Player player, String text, Color color, int lineHeight)

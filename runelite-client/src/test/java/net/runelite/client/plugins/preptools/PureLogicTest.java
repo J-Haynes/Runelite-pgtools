@@ -1,10 +1,14 @@
 package net.runelite.client.plugins.preptools;
 
 import java.util.Arrays;
+import java.util.Collections;
+import java.util.HashMap;
 import java.util.EnumMap;
 import java.util.List;
 import java.util.Map;
+import net.runelite.api.MenuAction;
 import net.runelite.api.coords.WorldPoint;
+import net.runelite.client.menus.TestMenuEntry;
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertNull;
@@ -128,7 +132,7 @@ public class PureLogicTest
 
 	private static PerformanceRow perf(String name, boolean caller, int targetTicks, int onTarget)
 	{
-		return new PerformanceRow(name, false, caller, targetTicks, targetTicks, onTarget, 0, 0, 0, 0, 0, -1, 0, 0, 0,
+		return new PerformanceRow(name, false, caller, targetTicks, targetTicks, onTarget, 0, 0, 0, 0, 0, -1, 0, 0, 0, 0,
 			PerformanceRow.Rating.UNRATED);
 	}
 
@@ -157,38 +161,26 @@ public class PureLogicTest
 	}
 
 	@Test
-	public void bitesAreCountedFromHealing()
+	public void healingIsRoundedToBitesOnlyAtTheEnd()
 	{
-		assertEquals(1, FoodTracker.biteCount(50, 59, 0));
-		assertEquals(2, FoodTracker.biteCount(50, 68, 0));
-		// Health bar rounding: +-3 hp either way still reads the right number of bites.
-		assertEquals(1, FoodTracker.biteCount(50, 56.7, 0));
-		assertEquals(2, FoodTracker.biteCount(50, 64.7, 0));
-		// Damage the same tick hides the heal unless it's added back.
-		assertEquals(1, FoodTracker.biteCount(50, 39, 20));
-		// Noise, a potion, or no health bar.
-		assertEquals(0, FoodTracker.biteCount(50, 53.3, 0));
-		assertEquals(0, FoodTracker.biteCount(Double.NaN, 70, 0));
-		assertEquals(Double.NaN, FoodTracker.estimateHp(-1, 30, 99), 0);
-		assertEquals(49.5, FoodTracker.estimateHp(15, 30, 99), 0.001);
+		assertEquals(1, FoodTracker.biteCount(9));
+		assertEquals(2, FoodTracker.biteCount(18));
+		assertEquals(2, FoodTracker.biteCount(14));
+		assertEquals(0, FoodTracker.biteCount(4));
+		// Rounding noise can leave the sum just under zero.
+		assertEquals(0, FoodTracker.biteCount(-3));
+		assertEquals(Double.NaN, FoodTracker.barFraction(-1, 30), 0);
+		assertEquals(0.5, FoodTracker.barFraction(15, 30), 0);
 	}
 
 	@Test
-	public void lookalikeNames()
+	public void maxHpIsMeasuredOnceThereIsHalfABarOfHits()
 	{
-		// Lookalike characters and separators.
-		assertTrue(NameLookalike.isLookalike("Il Zezima", "1l_Zezima"));
-		assertTrue(NameLookalike.isLookalike("Modern", "Modem"));
-		assertTrue(NameLookalike.isLookalike("B0ss", "Boss"));
-		// One letter off.
-		assertTrue(NameLookalike.isLookalike("Zezima", "Zezimaa"));
-		assertTrue(NameLookalike.isLookalike("Zezima", "Zezlma"));
-		// The same name (case, non-breaking space) isn't a lookalike.
-		assertFalse(NameLookalike.isLookalike("Big Bob", "big\u00A0bob"));
-		// Short names and real differences.
-		assertFalse(NameLookalike.isLookalike("Bob", "Rob"));
-		assertFalse(NameLookalike.isLookalike("Zezima", "Woox"));
-		assertFalse(NameLookalike.isLookalike("Zezima", "Zezxyz"));
+		assertNull(FoodTracker.measuredMaxHp(30, 0.4));
+		assertEquals(Integer.valueOf(70), FoodTracker.measuredMaxHp(35, 0.5));
+		// Clamped to real hitpoints levels.
+		assertEquals(Integer.valueOf(99), FoodTracker.measuredMaxHp(200, 1.0));
+		assertEquals(Integer.valueOf(10), FoodTracker.measuredMaxHp(2, 1.0));
 	}
 
 	@Test
@@ -198,6 +190,70 @@ public class PureLogicTest
 		assertEquals("Their main is Zezima..", PrepToolsPlugin.friendNoteNickname("Their main is Zezima and alt is Bob"));
 		assertNull(PrepToolsPlugin.friendNoteNickname("   "));
 		assertNull(PrepToolsPlugin.friendNoteNickname(null));
+	}
+
+	@Test
+	public void renamesArePairedWhenSure()
+	{
+		// Renamed twice while you were away: the game's previous name ("Middle") isn't one you
+		// ever saw, but one left and one arrived.
+		RenameMatch twice = RenameMatch.match(Arrays.asList("Old Name", "Stays"), Arrays.asList("Stays", "Newest"),
+			Collections.singletonMap("Newest", "Middle"));
+		assertEquals(Collections.singletonMap("Old Name", "Newest"), twice.renames);
+
+		// Two left, two arrived: the game's previous name settles one, which leaves one each.
+		Map<String, String> previous = new HashMap<>();
+		previous.put("Bee2", "Bee");
+		RenameMatch two = RenameMatch.match(Arrays.asList("Ay", "Bee", "Stays"), Arrays.asList("Stays", "Bee2", "Ay2"), previous);
+		assertEquals("Bee2", two.renames.get("Bee"));
+		assertEquals("Ay2", two.renames.get("Ay"));
+
+		// Two each with nothing to go on: left for you to pair.
+		RenameMatch unsure = RenameMatch.match(Arrays.asList("Ay", "Bee"), Arrays.asList("Cee", "Dee"), Collections.emptyMap());
+		assertTrue(unsure.renames.isEmpty());
+		assertEquals(Arrays.asList("Ay", "Bee"), unsure.unmatchedLeft);
+		assertEquals(Arrays.asList("Cee", "Dee"), unsure.unmatchedArrived);
+
+		// Names compare standardized (case, non-breaking space): nobody renamed.
+		assertTrue(RenameMatch.match(Arrays.asList("big bob"), Arrays.asList("Big\u00A0Bob"), Collections.emptyMap()).renames.isEmpty());
+	}
+
+	@Test
+	public void hoveredNameFromAWidgetOrAPlayer()
+	{
+		TestMenuEntry friend = new TestMenuEntry();
+		friend.setType(MenuAction.CC_OP);
+		friend.setParam1(net.runelite.api.gameval.InterfaceID.FRIENDS << 16 | 11);
+		friend.setTarget("<col=ff9040>Big\u00A0Bob</col>");
+		assertEquals("Big Bob", NicknameTooltipOverlay.hoveredName(friend));
+
+		// Some other interface's entry isn't a player name.
+		friend.setParam1(net.runelite.api.gameval.InterfaceID.INVENTORY << 16);
+		assertNull(NicknameTooltipOverlay.hoveredName(friend));
+	}
+
+	@Test
+	public void easyDeathNeedsEveryPieceOfEvidence()
+	{
+		assertTrue(TeamPerformanceTracker.isEasyDeath(2, 20, 0, false, 3, 10, 1));
+		assertFalse(TeamPerformanceTracker.isEasyDeath(4, 20, 0, false, 3, 10, 1));
+		assertFalse(TeamPerformanceTracker.isEasyDeath(2, 9, 0, false, 3, 10, 1));
+		assertFalse(TeamPerformanceTracker.isEasyDeath(2, 20, 2, false, 3, 10, 1));
+		assertFalse(TeamPerformanceTracker.isEasyDeath(2, 20, 0, true, 3, 10, 1));
+		// Nobody seen on them: no evidence at all.
+		assertFalse(TeamPerformanceTracker.isEasyDeath(0, 20, 0, false, 3, 10, 1));
+	}
+
+	@Test
+	public void fightLogLines()
+	{
+		FightLogEntry kill = new FightLogEntry(0, false, "Zezima", true, "Bob", 58, Arrays.asList("Mate", "Me"), 0, 0,
+			false, false, false);
+		assertEquals("Called by Bob · 0:34 to kill · on pile (2): Mate, Me", PrepToolsPanel.fightLogDetail(kill));
+		FightLogEntry death = new FightLogEntry(0, true, "Mate", false, null, 25, Arrays.asList("A", "B"), 0, 40,
+			true, false, true);
+		assertEquals("2 on them (A, B) · 15s under attack · ate 0 pizzas · 40 dmg in last 10s · frozen",
+			PrepToolsPanel.fightLogDetail(death));
 	}
 
 	@Test

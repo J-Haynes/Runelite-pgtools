@@ -148,23 +148,18 @@ public class MenuHandlerTest
 	}
 
 	@Test
-	public void nicknameAndLookalikeAreTaggedOnceAfterTheName()
+	public void nicknameIsTaggedOnceAfterTheName()
 	{
 		when(nicknames.getNicknames()).thenReturn(Collections.singletonMap(enemy, "Tank"));
-		when(nicknames.getLookalikes()).thenReturn(Collections.singletonMap(target, "Tank"));
 		MenuEntry attackEnemy = entry("Attack", enemy);
 		attackEnemy.setTarget("Zezima  (level-126)");
-		MenuEntry attackFake = entry("Attack", target);
-		attackFake.setTarget("Zezlma  (level-126)");
 
-		run(attackEnemy, attackFake);
+		run(attackEnemy);
 		// PostMenuSort can run again on the same entries next frame.
-		run(attackEnemy, attackFake);
+		run(attackEnemy);
 
-		String tank = ColorUtil.wrapWithColorTag("[Tank]", config.playerNicknameColor());
-		assertEquals("Zezima  (level-126) " + tank, attackEnemy.getTarget());
-		assertEquals("Zezlma  (level-126) " + ColorUtil.wrapWithColorTag("[NOT Tank?]", config.lookalikeNameColor()),
-			attackFake.getTarget());
+		assertEquals("Zezima  (level-126) " + ColorUtil.wrapWithColorTag("[Tank]", config.playerNicknameColor()),
+			attackEnemy.getTarget());
 	}
 
 	@Test

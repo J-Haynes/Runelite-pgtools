@@ -14,9 +14,11 @@ import java.awt.event.ComponentAdapter;
 import java.awt.event.ComponentEvent;
 import java.awt.event.KeyAdapter;
 import java.awt.event.KeyEvent;
+import java.text.SimpleDateFormat;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.Comparator;
+import java.util.Date;
 import java.util.Deque;
 import java.util.HashMap;
 import java.util.List;
@@ -29,6 +31,7 @@ import javax.swing.BoxLayout;
 import javax.swing.ButtonGroup;
 import javax.swing.Icon;
 import javax.swing.JCheckBox;
+import javax.swing.JComboBox;
 import javax.swing.ImageIcon;
 import javax.swing.JButton;
 import javax.swing.JLabel;
@@ -149,12 +152,24 @@ public class PrepToolsPanel extends PluginPanel
 	private final JPanel playerNicknamesPanel = new JPanel();
 	private final JTextField nicknamePlayerField = new JTextField();
 	private final JTextField nicknameField = new JTextField();
+	private final JPanel pendingRenamesPanel = new JPanel();
 
 	// --- Stats (team performance) ---
 	private final JPanel performanceListPanel = new JPanel();
 	private JButton copyPerformanceButton;
 	private List<PerformanceRow> lastPerformanceRows;
 	private Boolean lastPerformanceEnabled;
+	private final JComboBox<String> performanceRoundBox = new JComboBox<>();
+	private List<PerformanceRound> lastPerformanceRounds = Collections.emptyList();
+	/**
+	 * The round picked in the dropdown by its start time, or null to follow the newest.
+	 */
+	private Long selectedRoundStart;
+	private boolean updatingRoundBox;
+	private boolean performanceEnabled;
+	private final JPanel fightLogPanel = new JPanel();
+	private JButton copyFightLogButton;
+	private PerformanceRound shownFightLogRound;
 
 	// --- Friends chat log ---
 	private JTextArea friendsChatLogArea;
@@ -1521,10 +1536,27 @@ public class PrepToolsPanel extends PluginPanel
 				+ "On target: share of the time the primary caller had a target that they were on it - "
 				+ "rated green/red against the team's median once they've had enough called time. "
 				+ "Switch: average ticks to reach a newly called target. "
-				+ "Attacks: total / on the called target. Only what happens on your screen counts, and "
-				+ "only your own damage dealt can be seen.");
+				+ "Only called targets that died count - a caller chipping at people first doesn't. "
+				+ "Attacks: total / on the called target. On pile: enemies who died while they were on "
+				+ "them. Each trip through the Clan Wars portal starts a new round - pick earlier ones "
+				+ "below. Only what happens on your screen counts, and only your own damage dealt can be seen.");
 
-		JButton resetButton = createSmallButton("Reset", "Clear every number and start a new session");
+		performanceRoundBox.setFont(FontManager.getRunescapeSmallFont());
+		performanceRoundBox.setAlignmentX(LEFT_ALIGNMENT);
+		performanceRoundBox.setMaximumSize(new Dimension(PluginPanel.PANEL_WIDTH, 26));
+		performanceRoundBox.addActionListener(e ->
+		{
+			if (updatingRoundBox)
+			{
+				return;
+			}
+			int index = performanceRoundBox.getSelectedIndex();
+			int newest = lastPerformanceRounds.size() - 1;
+			selectedRoundStart = index < 0 || index == newest ? null : lastPerformanceRounds.get(index).startMillis;
+			showSelectedRound();
+		});
+
+		JButton resetButton = createSmallButton("Reset", "Clear every round and start a new one");
 		resetButton.addActionListener(e -> plugin.resetPerformance());
 		copyPerformanceButton = createSmallButton("Copy", "Copy the table to clipboard, tab-separated (pastes into a spreadsheet)");
 		copyPerformanceButton.setEnabled(false);
@@ -1544,16 +1576,192 @@ public class PrepToolsPanel extends PluginPanel
 		section.add(description);
 		section.add(Box.createVerticalStrut(TIER_GAP));
 		section.add(createSubHeader("Teammates", buttons));
+		section.add(Box.createVerticalStrut(4));
+		section.add(performanceRoundBox);
 		section.add(Box.createVerticalStrut(TIER_GAP));
 		section.add(performanceListPanel);
+
+		copyFightLogButton = createSmallButton("Copy", "Copy this round's fight log to clipboard");
+		copyFightLogButton.setEnabled(false);
+		copyFightLogButton.addActionListener(e -> copyFightLogToClipboard());
+		fightLogPanel.setLayout(new BoxLayout(fightLogPanel, BoxLayout.Y_AXIS));
+		fightLogPanel.setBackground(ColorScheme.DARK_GRAY_COLOR);
+		fightLogPanel.setAlignmentX(LEFT_ALIGNMENT);
+		fightLogPanel.setMaximumSize(new Dimension(PluginPanel.PANEL_WIDTH, Integer.MAX_VALUE));
+		section.add(Box.createVerticalStrut(TIER_GAP * 2));
+		section.add(createSubHeader("Fight log", copyFightLogButton));
+		section.add(Box.createVerticalStrut(4));
+		section.add(createDescriptionArea(
+			"Every death this round. Kills: who was on the pile, and for called targets who called "
+				+ "them and how long they took. Our deaths: how many were on them, how long they were "
+				+ "under attack and how many pizzas they ate. EASY DEATH only when the evidence is "
+				+ "clear - few attackers, plenty of time to eat, barely ate, and seen the whole time "
+				+ "(limits in the Experimental settings)."));
+		section.add(Box.createVerticalStrut(TIER_GAP));
+		section.add(fightLogPanel);
 		updatePerformance(Collections.emptyList(), false);
 		return section;
 	}
 
 	/**
+	 * New numbers from the tracker: refreshes the round dropdown (newest first in time order, the
+	 * newest labelled "now") and shows the picked round.
+	 */
+	void updatePerformance(List<PerformanceRound> rounds, boolean enabled)
+	{
+		lastPerformanceRounds = rounds;
+		performanceEnabled = enabled;
+
+		SimpleDateFormat format = new SimpleDateFormat("HH:mm:ss");
+		updatingRoundBox = true;
+		performanceRoundBox.removeAllItems();
+		int selected = rounds.size() - 1;
+		for (int i = 0; i < rounds.size(); i++)
+		{
+			PerformanceRound round = rounds.get(i);
+			String label = "Round from " + format.format(new Date(round.startMillis)) + (i == rounds.size() - 1 ? " (now)" : "");
+			performanceRoundBox.addItem(label);
+			if (selectedRoundStart != null && round.startMillis == selectedRoundStart)
+			{
+				selected = i;
+			}
+		}
+		if (selected >= 0)
+		{
+			performanceRoundBox.setSelectedIndex(selected);
+		}
+		updatingRoundBox = false;
+		performanceRoundBox.setVisible(rounds.size() > 1);
+		showSelectedRound();
+	}
+
+	private void showSelectedRound()
+	{
+		int index = performanceRoundBox.getSelectedIndex();
+		PerformanceRound round = index >= 0 && index < lastPerformanceRounds.size() ? lastPerformanceRounds.get(index) : null;
+		showPerformanceRows(round != null ? round.rows : Collections.emptyList(), performanceEnabled);
+		showFightLog(round);
+	}
+
+	private static final Color FIGHT_LOG_KILL_COLOR = new Color(100, 210, 100);
+
+	/**
+	 * Rebuilds the fight log - only when the round shown or its log changed.
+	 */
+	private void showFightLog(PerformanceRound round)
+	{
+		if (round != null && shownFightLogRound != null && round.startMillis == shownFightLogRound.startMillis
+			&& round.log.equals(shownFightLogRound.log))
+		{
+			return;
+		}
+		shownFightLogRound = round;
+		fightLogPanel.removeAll();
+		copyFightLogButton.setEnabled(round != null && !round.log.isEmpty());
+
+		if (round == null || round.log.isEmpty())
+		{
+			JLabel empty = new JLabel("(no deaths yet this round)");
+			empty.setForeground(ColorScheme.LIGHT_GRAY_COLOR);
+			empty.setFont(FontManager.getRunescapeSmallFont());
+			fightLogPanel.add(empty);
+		}
+		else
+		{
+			// Newest first - the end of the round is what you look at mid-war.
+			for (int i = round.log.size() - 1; i >= 0; i--)
+			{
+				fightLogPanel.add(buildFightLogEntry(round.log.get(i), round.startMillis));
+				fightLogPanel.add(Box.createVerticalStrut(4));
+			}
+		}
+		revalidate();
+		repaint();
+	}
+
+	private JPanel buildFightLogEntry(FightLogEntry entry, long roundStartMillis)
+	{
+		Color color = entry.easy ? PERFORMANCE_LOW_COLOR : entry.teammate ? Color.WHITE : FIGHT_LOG_KILL_COLOR;
+		JPanel panel = new JPanel();
+		panel.setLayout(new BoxLayout(panel, BoxLayout.Y_AXIS));
+		panel.setBackground(ColorScheme.DARKER_GRAY_COLOR);
+		panel.setAlignmentX(LEFT_ALIGNMENT);
+		panel.setMaximumSize(new Dimension(PluginPanel.PANEL_WIDTH, Integer.MAX_VALUE));
+		panel.setBorder(BorderFactory.createCompoundBorder(
+			BorderFactory.createMatteBorder(0, 2, 0, 0, entry.easy ? PERFORMANCE_LOW_COLOR : entry.teammate
+				? ColorScheme.MEDIUM_GRAY_COLOR : FIGHT_LOG_KILL_COLOR),
+			new EmptyBorder(3, 5, 3, 3)));
+
+		JLabel title = new JLabel(fightLogTitle(entry, roundStartMillis));
+		title.setFont(FontManager.getRunescapeBoldFont());
+		title.setForeground(color);
+		title.setAlignmentX(LEFT_ALIGNMENT);
+		JTextArea detail = createWidthClampedTextArea(fightLogDetail(entry));
+		detail.setForeground(ColorScheme.LIGHT_GRAY_COLOR);
+		panel.add(title);
+		panel.add(detail);
+		return panel;
+	}
+
+	private static String fightLogTitle(FightLogEntry entry, long roundStartMillis)
+	{
+		String time = formatDuration((entry.timeMillis - roundStartMillis) / 1000);
+		if (entry.teammate)
+		{
+			return time + "  " + entry.name + " died" + (entry.easy ? " - EASY DEATH" : "");
+		}
+		return time + "  " + (entry.called ? "Killed " + entry.name : entry.name + " died");
+	}
+
+	static String fightLogDetail(FightLogEntry entry)
+	{
+		if (entry.teammate)
+		{
+			if (entry.names.isEmpty())
+			{
+				return "Nobody seen on them" + (entry.partlyOffScreen ? " (partly off screen)" : "");
+			}
+			return entry.names.size() + " on them (" + String.join(", ", entry.names) + ")"
+				+ (entry.durationTicks >= 0 ? " · " + entry.durationTicks * 6 / 10 + "s under attack" : "")
+				+ " · ate " + entry.pizzasEaten + (entry.pizzasEaten == 1 ? " pizza" : " pizzas")
+				+ " · " + entry.recentDamage + " dmg in last 10s"
+				+ (entry.frozen ? " · frozen" : "")
+				+ (entry.partlyOffScreen ? " · partly off screen" : "");
+		}
+		String pile = entry.names.isEmpty() ? "nobody on the pile"
+			: "on pile (" + entry.names.size() + "): " + String.join(", ", entry.names);
+		if (!entry.called)
+		{
+			return "Not called · " + pile;
+		}
+		return (entry.caller != null ? "Called by " + entry.caller + " · " : "")
+			+ formatDuration(entry.durationTicks * 6L / 10) + " to kill · " + pile;
+	}
+
+	private static String formatDuration(long seconds)
+	{
+		return String.format("%d:%02d", seconds / 60, seconds % 60);
+	}
+
+	private void copyFightLogToClipboard()
+	{
+		PerformanceRound round = shownFightLogRound;
+		if (round == null || round.log.isEmpty())
+		{
+			return;
+		}
+		StringBuilder sb = new StringBuilder();
+		for (FightLogEntry entry : round.log)
+		{
+			sb.append(fightLogTitle(entry, round.startMillis)).append(" - ").append(fightLogDetail(entry)).append('\n');
+		}
+		Toolkit.getDefaultToolkit().getSystemClipboard().setContents(new StringSelection(sb.toString().trim()), null);
+	}
+
+	/**
 	 * Rebuilds the Stats list - only when the rows changed.
 	 */
-	void updatePerformance(List<PerformanceRow> rows, boolean enabled)
+	private void showPerformanceRows(List<PerformanceRow> rows, boolean enabled)
 	{
 		if (rows.equals(lastPerformanceRows) && Boolean.valueOf(enabled).equals(lastPerformanceEnabled))
 		{
@@ -1611,7 +1819,8 @@ public class PrepToolsPanel extends PluginPanel
 			+ " · Attacks " + row.attacks + "/" + row.attacksOnTarget));
 		rowPanel.add(createPerformanceDetail("Taken " + row.damageTaken
 			+ (row.damageDealt >= 0 ? " · Dealt " + row.damageDealt : "")
-			+ " · Eats " + row.eats + " · Kills " + row.killsInvolved + " · Deaths " + row.deaths));
+			+ " · Eats " + row.eats + " · On pile " + row.onPile + " · Deaths " + row.deaths
+			+ (row.easyDeaths > 0 ? " (" + row.easyDeaths + " easy)" : "")));
 		return rowPanel;
 	}
 
@@ -1634,7 +1843,7 @@ public class PrepToolsPanel extends PluginPanel
 		}
 
 		StringBuilder sb = new StringBuilder("Name\tRating\tOn target %\tAvg switch (ticks)\tAttacks"
-			+ "\tAttacks on target\tDamage taken\tDamage dealt\tEats\tKills involved\tDeaths\tTicks seen\n");
+			+ "\tAttacks on target\tDamage taken\tDamage dealt\tEats\tOn pile\tDeaths\tEasy deaths\tTicks seen\n");
 		for (PerformanceRow row : rows)
 		{
 			double switchTicks = row.averageSwitchTicks();
@@ -1647,8 +1856,9 @@ public class PrepToolsPanel extends PluginPanel
 				.append(row.damageTaken).append('\t')
 				.append(row.damageDealt < 0 ? "" : row.damageDealt).append('\t')
 				.append(row.eats).append('\t')
-				.append(row.killsInvolved).append('\t')
+				.append(row.onPile).append('\t')
 				.append(row.deaths).append('\t')
+				.append(row.easyDeaths).append('\t')
 				.append(row.ticksSeen).append('\n');
 		}
 		Toolkit.getDefaultToolkit().getSystemClipboard().setContents(new StringSelection(sb.toString().trim()), null);
@@ -1901,16 +2111,16 @@ public class PrepToolsPanel extends PluginPanel
 
 		JLabel title = createSectionTitle("Player Nicknames", 0);
 		JTextArea instructions = createDescriptionArea(
-			"Experimental - turn on \"Player nicknames\" in the Experimental settings. Your own name "
-				+ "for any player, shown over their head and in their right-click menu. Shift-right-click "
-				+ "a player, Set nickname, or type their name and nickname below.");
+			"Your own name for any player, shown after their name in the right-click menu and when you "
+				+ "hover them (over their head too, if turned on in the Nicknames settings). \"Set nickname\": "
+				+ "shift-right-click a player in game, right-click a name in the friends list, friends chat, "
+				+ "clan list or chatbox - or type their name and nickname below.");
 		JTextArea renameHelp = createDescriptionArea(
-			"Name changes: the game only tells you when someone on your friends or ignore list "
-				+ "changes name - add a player there and their nickname follows them. Anyone else "
+			"Name changes: only your friends and ignore lists follow an account through a rename - "
+				+ "add a player to one and their nickname follows them, even after several renames "
+				+ "while you were logged out (the lists are compared between logins). Anyone else "
 				+ "keeps the nickname on the old name. Your Friend Notes notes also count as "
-				+ "nicknames (setting in Experimental) - they follow name changes the same way. "
-				+ "A name one letter off a nicknamed player's, or using lookalike letters "
-				+ "(I/l/1, O/0, rn/m), shows \"NOT Nick?\".");
+				+ "nicknames, and move with them.");
 
 		nicknamePlayerField.setToolTipText("Player's in-game name");
 		nicknamePlayerField.setFont(FontManager.getRunescapeSmallFont());
@@ -1931,6 +2141,12 @@ public class PrepToolsPanel extends PluginPanel
 		entryPanel.add(saveButton, BorderLayout.EAST);
 		styleInputRow(entryPanel);
 
+		pendingRenamesPanel.setLayout(new BoxLayout(pendingRenamesPanel, BoxLayout.Y_AXIS));
+		pendingRenamesPanel.setBackground(ColorScheme.DARK_GRAY_COLOR);
+		pendingRenamesPanel.setAlignmentX(LEFT_ALIGNMENT);
+		pendingRenamesPanel.setMaximumSize(new Dimension(PluginPanel.PANEL_WIDTH, Integer.MAX_VALUE));
+		pendingRenamesPanel.setVisible(false);
+
 		playerNicknamesPanel.setLayout(new GridLayout(0, 1, 0, 4));
 		playerNicknamesPanel.setBackground(ColorScheme.DARK_GRAY_COLOR);
 		playerNicknamesPanel.setAlignmentX(LEFT_ALIGNMENT);
@@ -1942,10 +2158,66 @@ public class PrepToolsPanel extends PluginPanel
 		section.add(Box.createVerticalStrut(TIER_GAP));
 		section.add(renameHelp);
 		section.add(Box.createVerticalStrut(TIER_GAP));
+		section.add(pendingRenamesPanel);
 		section.add(entryPanel);
 		section.add(Box.createVerticalStrut(TIER_GAP));
 		section.add(playerNicknamesPanel);
 		return section;
+	}
+
+	/**
+	 * Nicknamed players who left your friends/ignore list since the last login without a sure
+	 * match - pick their new name, or dismiss.
+	 */
+	void updatePendingRenames(List<FriendRenameTracker.PendingRename> pending)
+	{
+		pendingRenamesPanel.removeAll();
+		pendingRenamesPanel.setVisible(!pending.isEmpty());
+		if (!pending.isEmpty())
+		{
+			pendingRenamesPanel.add(createSubHeader("Possible renames", new JLabel()));
+			pendingRenamesPanel.add(Box.createVerticalStrut(4));
+			pendingRenamesPanel.add(createDescriptionArea(
+				"These nicknamed players left your list since you last logged in, and new names "
+					+ "arrived. Pick who they are now, or ✕ if they were just removed."));
+			pendingRenamesPanel.add(Box.createVerticalStrut(4));
+		}
+		for (FriendRenameTracker.PendingRename rename : pending)
+		{
+			JLabel label = new JLabel(rename.nickname + " (was " + rename.oldName + ")");
+			label.setForeground(Color.WHITE);
+			label.setFont(FontManager.getRunescapeSmallFont());
+			label.setAlignmentX(LEFT_ALIGNMENT);
+
+			JComboBox<String> candidates = new JComboBox<>(rename.candidates.toArray(new String[0]));
+			candidates.setFont(FontManager.getRunescapeSmallFont());
+			JButton moveButton = createSmallButton("Move", "Move the nickname to this name");
+			moveButton.addActionListener(e -> plugin.resolvePendingRename(rename.oldName, (String) candidates.getSelectedItem()));
+			JButton dismissButton = createSmallButton("✕", "Not a rename - keep the nickname on the old name");
+			dismissButton.setForeground(new Color(220, 80, 80));
+			dismissButton.addActionListener(e -> plugin.dismissPendingRename(rename.oldName));
+			JPanel buttons = new JPanel(new GridLayout(1, 2, 2, 0));
+			buttons.setBackground(ColorScheme.DARK_GRAY_COLOR);
+			buttons.add(moveButton);
+			buttons.add(dismissButton);
+
+			JPanel row = new JPanel(new BorderLayout(4, 0));
+			row.setBackground(ColorScheme.DARK_GRAY_COLOR);
+			row.setAlignmentX(LEFT_ALIGNMENT);
+			row.setMaximumSize(new Dimension(PluginPanel.PANEL_WIDTH, Integer.MAX_VALUE));
+			row.add(candidates, BorderLayout.CENTER);
+			row.add(buttons, BorderLayout.EAST);
+			styleInputRow(row);
+
+			pendingRenamesPanel.add(label);
+			pendingRenamesPanel.add(row);
+		}
+		if (!pending.isEmpty())
+		{
+			pendingRenamesPanel.add(Box.createVerticalStrut(TIER_GAP));
+		}
+		revalidate();
+		repaint();
 	}
 
 	private void savePlayerNicknameFromFields()

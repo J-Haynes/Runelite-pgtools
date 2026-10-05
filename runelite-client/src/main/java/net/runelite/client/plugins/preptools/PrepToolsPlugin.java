@@ -38,6 +38,7 @@ import net.runelite.api.Friend;
 import net.runelite.api.Ignore;
 import net.runelite.api.Player;
 import net.runelite.api.Tile;
+import net.runelite.api.WorldView;
 import net.runelite.api.coords.WorldPoint;
 import net.runelite.api.events.ActorDeath;
 import net.runelite.api.events.AnimationChanged;
@@ -48,11 +49,14 @@ import net.runelite.api.events.GameStateChanged;
 import net.runelite.api.events.GameTick;
 import net.runelite.api.events.GraphicChanged;
 import net.runelite.api.events.HitsplatApplied;
+import net.runelite.api.events.MenuEntryAdded;
 import net.runelite.api.events.MenuOpened;
 import net.runelite.api.events.NameableNameChanged;
 import net.runelite.api.events.PlayerDespawned;
 import net.runelite.api.events.PostMenuSort;
 import net.runelite.api.gameval.AnimationID;
+import net.runelite.api.gameval.InterfaceID;
+import net.runelite.api.widgets.WidgetUtil;
 import net.runelite.api.gameval.SpriteID;
 import net.runelite.client.callback.ClientThread;
 import net.runelite.client.chat.ChatMessageManager;
@@ -105,12 +109,8 @@ public class PrepToolsPlugin extends Plugin
 	private static final String SET_NICKNAME = "Set nickname";
 	private static final String RESET_FOOD_COUNT = "Reset food count";
 
-	/**
-	 * Core's Friend Notes plugin keeps each note at friendNotes.note_{@code <name>}, and moves it
-	 * when the friends list reports a name change.
-	 */
-	private static final String FRIEND_NOTES_GROUP = "friendNotes";
-	private static final String FRIEND_NOTES_KEY_PREFIX = "note_";
+	private static final String FRIEND_NOTES_GROUP = ConfigListEditor.FRIEND_NOTES_GROUP;
+	private static final String FRIEND_NOTES_KEY_PREFIX = ConfigListEditor.FRIEND_NOTES_KEY_PREFIX;
 	private static final int FRIEND_NOTE_NICKNAME_MAX_LENGTH = 20;
 	private static final int PERFORMANCE_PUSH_INTERVAL_TICKS = 5;
 
@@ -192,6 +192,15 @@ public class PrepToolsPlugin extends Plugin
 	private PlayerNicknameOverlay playerNicknameOverlay;
 
 	@Inject
+	private NicknameTooltipOverlay nicknameTooltipOverlay;
+
+	@Inject
+	private OthersOverlay othersOverlay;
+
+	@Inject
+	private WorldNumberOverlay worldNumberOverlay;
+
+	@Inject
 	private TeamTracker team;
 
 	@Inject
@@ -229,6 +238,9 @@ public class PrepToolsPlugin extends Plugin
 
 	@Inject
 	private PlayerNicknameTracker nicknames;
+
+	@Inject
+	private FriendRenameTracker renames;
 
 	private PrepToolsPanel panel;
 
@@ -269,6 +281,8 @@ public class PrepToolsPlugin extends Plugin
 	 */
 	private final Deque<FriendsChatLogEntry> friendsChatLog = new ArrayDeque<>();
 
+	private boolean wasInInstance;
+
 	private MemberCountInfoBox friendsChatCountInfoBox;
 	private MemberCountInfoBox clanCountInfoBox;
 
@@ -283,7 +297,7 @@ public class PrepToolsPlugin extends Plugin
 		for (Class<?> feature : new Class<?>[]{TeamTracker.class, HighlightTracker.class, MenuHandler.class,
 			FreezeTracker.class, FightInfoTracker.class, AttackAlert.class, LocationTracker.class, ChatHotkeys.class,
 			ScoutReporter.class, ConfigListEditor.class, FoodTracker.class, AttackRangeFilter.class,
-			TeamPerformanceTracker.class, PlayerNicknameTracker.class})
+			TeamPerformanceTracker.class, PlayerNicknameTracker.class, FriendRenameTracker.class})
 		{
 			binder.bind(feature).in(Singleton.class);
 		}
@@ -315,6 +329,9 @@ public class PrepToolsPlugin extends Plugin
 		overlayManager.add(multiLinesOverlay);
 		overlayManager.add(foodOverlay);
 		overlayManager.add(playerNicknameOverlay);
+		overlayManager.add(nicknameTooltipOverlay);
+		overlayManager.add(othersOverlay);
+		overlayManager.add(worldNumberOverlay);
 		multiLinesOverlay.load();
 		hotkeys.start();
 		keyManager.registerKeyListener(foodResetListener);
@@ -346,6 +363,9 @@ public class PrepToolsPlugin extends Plugin
 		overlayManager.remove(multiLinesOverlay);
 		overlayManager.remove(foodOverlay);
 		overlayManager.remove(playerNicknameOverlay);
+		overlayManager.remove(nicknameTooltipOverlay);
+		overlayManager.remove(othersOverlay);
+		overlayManager.remove(worldNumberOverlay);
 		multiLinesOverlay.clear();
 		hotkeys.stop();
 		keyManager.unregisterKeyListener(foodResetListener);
@@ -373,6 +393,18 @@ public class PrepToolsPlugin extends Plugin
 	@Subscribe
 	public void onGameTick(GameTick event)
 	{
+		// Through the Clan Wars portal (into an instance): a new round - full food for everyone,
+		// fresh team stats.
+		WorldView worldView = client.getTopLevelWorldView();
+		boolean inInstance = worldView != null && worldView.isInstance();
+		if (inInstance && !wasInInstance)
+		{
+			food.startRound();
+			performance.startRound();
+			pushPerformance();
+		}
+		wasInInstance = inInstance;
+
 		// Team first - every other feature reads it.
 		team.refresh();
 		nicknames.onGameTick();
@@ -388,6 +420,10 @@ public class PrepToolsPlugin extends Plugin
 		updateTeamCapeCounts();
 		updateMemberCountInfoBoxes();
 		pushTickToPanel();
+		if (renames.onGameTick())
+		{
+			pushPendingRenames();
+		}
 		if (client.getTickCount() % PERFORMANCE_PUSH_INTERVAL_TICKS == 0)
 		{
 			pushPerformance();
@@ -450,8 +486,49 @@ public class PrepToolsPlugin extends Plugin
 			performance.clearPlayers();
 			food.clearPlayers();
 			nicknames.clear();
+			renames.onSessionChanged();
 			teamCapeCounts = Collections.emptyMap();
 		}
+	}
+
+	/**
+	 * "Set nickname" on a player's name in the friends/ignore list, friends chat, clan list, chatbox
+	 * and private chat - one entry per name, keyed on an option each of those lists always has
+	 * (the same choice core's Hiscore plugin makes for its Lookup option).
+	 */
+	@Subscribe
+	public void onMenuEntryAdded(MenuEntryAdded event)
+	{
+		if (!config.showPlayerNicknames()
+			|| (event.getType() != MenuAction.CC_OP.getId() && event.getType() != MenuAction.CC_OP_LOW_PRIORITY.getId()))
+		{
+			return;
+		}
+
+		String option = event.getOption();
+		int componentId = event.getActionParam1();
+		int groupId = WidgetUtil.componentToInterface(componentId);
+		boolean nameEntry = groupId == InterfaceID.FRIENDS && option.equals("Delete")
+			|| groupId == InterfaceID.IGNORE && option.equals("Delete")
+			|| groupId == InterfaceID.CHATCHANNEL_CURRENT && (option.equals("Add ignore") || option.equals("Remove friend"))
+			|| (componentId == InterfaceID.ClansSidepanel.PLAYERLIST || componentId == InterfaceID.ClansGuestSidepanel.PLAYERLIST)
+				&& (option.equals("Add ignore") || option.equals("Remove friend"))
+			|| (groupId == InterfaceID.CHATBOX || groupId == InterfaceID.PM_CHAT) && (option.equals("Add ignore") || option.equals("Message"));
+		if (!nameEntry)
+		{
+			return;
+		}
+
+		String name = Text.toJagexName(Text.removeTags(event.getTarget()));
+		if (name.isEmpty())
+		{
+			return;
+		}
+		client.createMenuEntry(-2)
+			.setOption(SET_NICKNAME)
+			.setTarget(event.getTarget())
+			.setType(MenuAction.RUNELITE)
+			.onClick(e -> promptNickname(name));
 	}
 
 	@Subscribe
@@ -915,14 +992,41 @@ public class PrepToolsPlugin extends Plugin
 		pushLocationMapper();
 	}
 
+	private void pushPendingRenames()
+	{
+		List<FriendRenameTracker.PendingRename> pending = renames.getPending();
+		onSwing(() -> panel.updatePendingRenames(pending));
+	}
+
+	/**
+	 * The Names tab paired a possibly-renamed player with a new name (EDT).
+	 */
+	void resolvePendingRename(String oldName, String newName)
+	{
+		clientThread.invoke(() ->
+		{
+			renames.resolve(oldName, newName);
+			pushPendingRenames();
+		});
+	}
+
+	void dismissPendingRename(String oldName)
+	{
+		clientThread.invoke(() ->
+		{
+			renames.dismiss(oldName);
+			pushPendingRenames();
+		});
+	}
+
 	/**
 	 * The Stats tab - every few ticks rather than every tick, it's a whole table.
 	 */
 	private void pushPerformance()
 	{
 		boolean enabled = config.enablePerformanceTracker();
-		List<PerformanceRow> rows = performance.snapshot();
-		onSwing(() -> panel.updatePerformance(rows, enabled));
+		List<PerformanceRound> rounds = performance.snapshot();
+		onSwing(() -> panel.updatePerformance(rounds, enabled));
 	}
 
 	/**

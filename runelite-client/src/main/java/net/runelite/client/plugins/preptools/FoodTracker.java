@@ -4,78 +4,134 @@ import java.util.HashMap;
 import java.util.Map;
 import java.util.Set;
 import javax.inject.Inject;
+import lombok.extern.slf4j.Slf4j;
 import net.runelite.api.Actor;
 import net.runelite.api.Client;
 import net.runelite.api.Hitsplat;
+import net.runelite.api.HitsplatID;
 import net.runelite.api.Player;
-import net.runelite.api.WorldView;
 import net.runelite.api.gameval.AnimationID;
 
 /**
  * Experimental: estimates how much food each enemy has eaten, to spot who's running low. Built for
  * Clan Wars, where fights are fed with anchovy pizza (OSRS wiki: 2 bites of 9 hp a pizza).
  *
- * The eat animation alone can't count food: potions play the same animation, and several pizza
- * bites can go down in one animation. So it's only the cue - what's counted is the healing seen on
- * the player's health bar in the ticks around it: hp now, minus hp last tick, plus the damage
- * hitsplatted on them in between. Every 9 hp healed is a bite. An eat with no heal (a potion, or
- * eating at full hp) counts nothing; an eat while their health bar isn't showing can't be
- * measured and is counted separately as "unmeasured". Healing without an eat animation (blood
- * spells) is ignored.
+ * Food is measured as healing, not counted from animations: potions play the same eat animation,
+ * and several pizza bites can go down in one. Healing is what the health bar can't explain by the
+ * damage they took: (hp after - hp before) + damage hitsplatted in between.
  *
- * The health bar is 30 steps (3.3 hp at 99 hp), so a single measurement is +-3 hp - plenty to tell
- * one bite (9) from two (18). Max hp isn't sent for other players; it's assumed (foodEnemyMaxHp).
+ * <b>Segments, not ticks.</b> Readings are taken between changes of the health bar (or hits), not
+ * every tick: the bar may only show a heal with their next hit, so a heal has to be matched to the
+ * eat across however long that takes. A segment counts as eating if they were eating in it (or the
+ * tick before it began - the animation and the bar update can land a tick apart), so blood spells
+ * and other heals without eating are left out. "Eating" is the eat animation starting
+ * (AnimationChanged) OR still playing at a tick: pizza bites go down 1-2 ticks apart (wiki: first
+ * bite 1 tick, second 2), so a chain of bites can be one long animation with no new event - the
+ * second version only used the event, and lost the rest of every chain.
  *
- * Reset when a player dies - in Clan Wars a dead player is out of the round, and comes back next
- * round through the portal with a full inventory. Everything resets when you enter an instance
- * (the Clan Wars portal - everyone enters with full food), and by hand: shift-right-click a player
- * "Reset food count", or the foodResetHotkey for everyone. Otherwise kept by name until the
- * player hasn't been seen for foodForgetMinutes. Client thread only.
+ * <b>Summed, then rounded once.</b> Each counted segment's heal is added as-is, small or negative,
+ * and only the total is turned into bites (9 hp each). Health bar rounding (30 steps, 3.3 hp at
+ * 99) evens out over many readings instead of losing every heal that rounds below a threshold -
+ * the first version did that, and counted under half of what was eaten.
+ *
+ * <b>Max hp is measured</b>, not just assumed: the server only sends the bar, but in segments
+ * without eating the damage taken and the fraction of the bar lost give max hp. Until half a bar
+ * of hits has been seen, foodEnemyMaxHp is assumed.
+ *
+ * <b>Heals cut short at full hp.</b> A bite eaten near full hp heals less than 9 - the food's
+ * gone, but the bar can't show it (eating a pizza when only 9 down wastes most of its second bite;
+ * in testing this lost a fifth of all bites). An eating segment in which their hp could have
+ * reached max (start + healed) counts at least BITES_PER_EAT_ANIMATION bites per eat animation
+ * started in it - but only within CAPPED_BITE_TICKS of a real heal, so a potion drunk at full hp
+ * isn't taken for food. CONFIRMED in game (2026-10-02): eating plays ONE animation per pizza and
+ * none for the second bite, so each animation stands for a whole pizza.
+ *
+ * Can't see: heals while out of view. A brew counts as about two bites, and a potion drunk in the
+ * same capped segment as food as one. Reset on death (a dead player is out of the Clan Wars round
+ * and comes back with full food), at the start of each round (entering the Clan Wars portal -
+ * startRound()), and by hand. No forgetting over time: in Clan Wars nobody restocks. Client thread
+ * only.
  */
+@Slf4j
 class FoodTracker
 {
 	static final Set<Integer> EAT_ANIMATION_IDS = Set.of(AnimationID.HUMAN_EAT, AnimationID.HUMAN_EAT_WITHSOUND);
 
+	/**
+	 * Hitsplats that take hitpoints - everything that isn't a heal or a drain of something else.
+	 */
+	private static final Set<Integer> NON_DAMAGE_TYPES = Set.of(HitsplatID.HEAL, HitsplatID.PRAYER_DRAIN,
+		HitsplatID.SANITY_DRAIN, HitsplatID.SANITY_RESTORE, HitsplatID.CYAN_UP, HitsplatID.CYAN_DOWN,
+		HitsplatID.CORRUPTION, HitsplatID.DOOM, HitsplatID.DISEASE, HitsplatID.DISEASE_BLOCKED);
+
 	static final int HP_PER_BITE = 9;
 
 	/**
-	 * Less healing than this is health bar rounding noise, not food.
+	 * Bites one eat animation stands for: a whole anchovy pizza - the half has no animation of its own.
 	 */
-	static final int MIN_HEAL = 5;
+	static final int BITES_PER_EAT_ANIMATION = 2;
 
 	/**
-	 * The heal can land on the eat's own tick or shortly after - count heals until this many ticks
-	 * after the animation.
+	 * A bite cut short at full hp only counts this close (ticks) to a heal that showed.
 	 */
-	static final int EAT_WINDOW_TICKS = 2;
+	static final int CAPPED_BITE_TICKS = 3;
 
-	private static final int TICKS_PER_MINUTE = 100;
+	/**
+	 * Fraction of a full health bar of hits needed before the measured max hp is used.
+	 */
+	static final double MIN_CALIBRATION_FRACTION = 0.5;
 
 	private final Client client;
 	private final PrepToolsConfig config;
 	private final TeamTracker team;
 
+	/**
+	 * Food eaten, by standardized name.
+	 */
 	private final Map<String, Record> records = new HashMap<>();
 
 	/**
-	 * Every on-screen enemy's estimated hp last tick (NaN while their health bar isn't showing),
-	 * and the damage hitsplatted on them since.
+	 * The health bar reading in progress for each enemy on screen.
 	 */
-	private final Map<Player, Double> lastHp = new HashMap<>();
-	private final Map<Player, Integer> damageSinceLastTick = new HashMap<>();
+	private final Map<Player, Segment> segments = new HashMap<>();
 
-	private boolean wasInInstance;
+	/**
+	 * Measured max hp by standardized name - kept through deaths and resets, it doesn't change.
+	 */
+	private final Map<String, Calibration> calibrations = new HashMap<>();
 
 	private static final class Record
 	{
-		int bites;
-		int unmeasuredEats;
-		int lastSeenTick;
 		/**
-		 * Last tick of the current eat's window, or -1 with no eat in progress.
+		 * Over eating segments: health bar fraction gained (signed), and damage taken.
 		 */
-		int eatWindowEnd = -1;
-		boolean eatMeasured;
+		double healFraction;
+		int healDamage;
+		/**
+		 * Bites the bar couldn't show - see the class doc on full hp.
+		 */
+		int cappedBites;
+		int eatAnimations;
+		// Far enough back that "tick - lastHealTick" can't overflow into "recent".
+		int lastHealTick = Integer.MIN_VALUE / 2;
+	}
+
+	private static final class Segment
+	{
+		double lastFraction = Double.NaN;
+		int startTick;
+		int damage;
+		int lastEatTick = Integer.MIN_VALUE;
+		/**
+		 * Eat animations started (events) in this segment.
+		 */
+		int eatStarts;
+	}
+
+	private static final class Calibration
+	{
+		int damage;
+		double fraction;
 	}
 
 	@Inject
@@ -98,22 +154,19 @@ class FoodTracker
 			return;
 		}
 
-		int tick = client.getTickCount();
 		Record record = records.computeIfAbsent(name, n -> new Record());
-		record.lastSeenTick = tick;
-		if (record.eatWindowEnd < tick)
-		{
-			record.eatMeasured = false;
-		}
-		record.eatWindowEnd = tick + EAT_WINDOW_TICKS;
+		record.eatAnimations++;
+		Segment segment = segments.computeIfAbsent(player, p -> new Segment());
+		segment.lastEatTick = client.getTickCount();
+		segment.eatStarts++;
 	}
 
 	void onHitsplatApplied(Actor actor, Hitsplat hitsplat)
 	{
 		if (config.showFoodCounter() && actor instanceof Player && hitsplat.getAmount() > 0
-			&& (hitsplat.isMine() || hitsplat.isOthers()))
+			&& !NON_DAMAGE_TYPES.contains(hitsplat.getHitsplatType()))
 		{
-			damageSinceLastTick.merge((Player) actor, hitsplat.getAmount(), Integer::sum);
+			segments.computeIfAbsent((Player) actor, p -> new Segment()).damage += hitsplat.getAmount();
 		}
 	}
 
@@ -125,70 +178,113 @@ class FoodTracker
 			return;
 		}
 
-		// Through the Clan Wars portal: everyone starts the round with full food.
-		WorldView worldView = client.getTopLevelWorldView();
-		boolean inInstance = worldView != null && worldView.isInstance();
-		if (inInstance && !wasInInstance)
-		{
-			clear();
-		}
-		wasInInstance = inInstance;
-
 		int tick = client.getTickCount();
-		int maxHp = Math.max(1, config.foodEnemyMaxHp());
-		Map<Player, Double> hpNow = new HashMap<>();
 		for (Player player : client.getPlayers())
 		{
 			if (player == null || team.isOwnTeam(player))
 			{
 				continue;
 			}
-			double hp = estimateHp(player.getHealthRatio(), player.getHealthScale(), maxHp);
-			hpNow.put(player, hp);
-
-			Record record = records.get(team.standardName(player));
-			if (record == null)
+			String name = team.standardName(player);
+			if (name == null)
 			{
 				continue;
 			}
-			record.lastSeenTick = tick;
-			if (record.eatWindowEnd < 0)
+			Record record = records.get(name);
+			if (EAT_ANIMATION_IDS.contains(player.getAnimation()))
 			{
-				continue;
-			}
-
-			Double previous = lastHp.get(player);
-			int bites = biteCount(previous != null ? previous : Double.NaN, hp, damageSinceLastTick.getOrDefault(player, 0));
-			if (bites > 0)
-			{
-				record.bites += bites;
-				record.eatMeasured = true;
-			}
-			if (tick >= record.eatWindowEnd)
-			{
-				// A health bar seen through the whole window with no heal was a potion (or eating at
-				// full hp) - nothing to count. No health bar at all: food may have gone, unknown.
-				if (!record.eatMeasured && (previous == null || previous.isNaN() || Double.isNaN(hp)))
+				// Still eating - a chain of bites needn't start a new animation each time.
+				segments.computeIfAbsent(player, p -> new Segment()).lastEatTick = tick;
+				if (record == null)
 				{
-					record.unmeasuredEats++;
+					record = new Record();
+					records.put(name, record);
 				}
-				record.eatWindowEnd = -1;
 			}
+			read(player, name, record, tick);
+		}
+	}
+
+	/**
+	 * A new Clan Wars round (you went through the portal): everyone has full food again.
+	 */
+	void startRound()
+	{
+		records.clear();
+	}
+
+	/**
+	 * Ends the player's segment if their health bar changed or they were hit, and books it: to
+	 * food if they ate in it, to max hp calibration if they didn't.
+	 */
+	private void read(Player player, String name, Record record, int tick)
+	{
+		double fraction = barFraction(player.getHealthRatio(), player.getHealthScale());
+		Segment segment = segments.computeIfAbsent(player, p -> new Segment());
+		if (Double.isNaN(fraction))
+		{
+			// No bar showing: the segment (and any damage in it) carries on until there is one.
+			return;
+		}
+		if (Double.isNaN(segment.lastFraction))
+		{
+			segment.lastFraction = fraction;
+			segment.startTick = tick;
+			segment.damage = 0;
+			return;
+		}
+		if (fraction == segment.lastFraction && segment.damage == 0)
+		{
+			return;
 		}
 
-		lastHp.clear();
-		lastHp.putAll(hpNow);
-		damageSinceLastTick.clear();
+		double gained = fraction - segment.lastFraction;
+		boolean ate = segment.lastEatTick >= segment.startTick - 1;
+		if (ate && record != null)
+		{
+			record.healFraction += gained;
+			record.healDamage += segment.damage;
+			int maxHp = maxHp(name);
+			double healed = gained * maxHp + segment.damage;
+			if (healed >= HP_PER_BITE / 2.0)
+			{
+				record.lastHealTick = tick;
+			}
+			// Their hp could have reached max in this segment: some bite may have been cut short.
+			boolean full = segment.lastFraction * maxHp + Math.max(0, healed) >= maxHp - HP_PER_BITE / 2.0;
+			int capped = full && tick - record.lastHealTick <= CAPPED_BITE_TICKS
+				? Math.max(0, segment.eatStarts * BITES_PER_EAT_ANIMATION - biteCount(healed)) : 0;
+			record.cappedBites += capped;
+			if (config.debugLogging())
+			{
+				log.info("PvP Tools food: {} bar {} to {} (+{} dmg, {} eat anims{}) - {} hp healed so far, {} bites (max hp {})",
+					name, segment.lastFraction, fraction, segment.damage, segment.eatStarts,
+					capped > 0 ? ", " + capped + " cut short at full hp" : "", Math.round(healedHp(record, name)),
+					bites(record, name), maxHp(name));
+			}
+		}
+		else if (!ate && record != null && config.debugLogging() && gained * maxHp(name) + segment.damage >= HP_PER_BITE / 2.0)
+		{
+			log.info("PvP Tools food: {} healed {} hp with no eating seen (bar {} to {}, +{} dmg) - not counted",
+				name, Math.round(gained * maxHp(name) + segment.damage), segment.lastFraction, fraction, segment.damage);
+		}
+		else if (!ate && segment.damage > 0 && gained < 0)
+		{
+			Calibration calibration = calibrations.computeIfAbsent(name, n -> new Calibration());
+			calibration.damage += segment.damage;
+			calibration.fraction -= gained;
+		}
 
-		int forgetTicks = Math.max(1, config.foodForgetMinutes()) * TICKS_PER_MINUTE;
-		records.values().removeIf(r -> tick - r.lastSeenTick > forgetTicks);
+		segment.lastFraction = fraction;
+		segment.startTick = tick;
+		segment.damage = 0;
+		segment.eatStarts = 0;
 	}
 
 	void clear()
 	{
 		records.clear();
-		lastHp.clear();
-		damageSinceLastTick.clear();
+		segments.clear();
 	}
 
 	/**
@@ -196,21 +292,19 @@ class FoodTracker
 	 */
 	void clearPlayers()
 	{
-		lastHp.clear();
-		damageSinceLastTick.clear();
+		segments.clear();
 	}
 
 	/**
-	 * Left view: only their hp reading goes - the count is kept by name.
+	 * Left view: their reading starts over when they're back.
 	 */
 	void forget(Player player)
 	{
-		lastHp.remove(player);
-		damageSinceLastTick.remove(player);
+		segments.remove(player);
 	}
 
 	/**
-	 * Died, or reset by hand: back to an unknown, full inventory.
+	 * Died, or reset by hand: back to an unknown, full inventory. Max hp is kept.
 	 */
 	void reset(Player player)
 	{
@@ -229,14 +323,9 @@ class FoodTracker
 
 	int getBites(Player player)
 	{
-		Record record = records.get(team.standardName(player));
-		return record != null ? record.bites : 0;
-	}
-
-	int getUnmeasuredEats(Player player)
-	{
-		Record record = records.get(team.standardName(player));
-		return record != null ? record.unmeasuredEats : 0;
+		String name = team.standardName(player);
+		Record record = records.get(name);
+		return record != null ? bites(record, name) : 0;
 	}
 
 	boolean isLowOnFood(Player player)
@@ -244,34 +333,60 @@ class FoodTracker
 		return isLow(getBites(player), config.foodAssumedPizzas(), config.foodLowPizzas());
 	}
 
-	/**
-	 * Midpoint of the hp range a health bar ratio stands for, or NaN with no health bar.
-	 */
-	static double estimateHp(int ratio, int scale, int maxHp)
+	private int bites(Record record, String name)
 	{
-		if (ratio < 0 || scale <= 0)
-		{
-			return Double.NaN;
-		}
-		return (double) ratio * maxHp / scale;
+		return biteCount(healedHp(record, name)) + record.cappedBites;
+	}
+
+	private double healedHp(Record record, String name)
+	{
+		return record.healFraction * maxHp(name) + record.healDamage;
 	}
 
 	/**
-	 * Bites eaten between two hp readings with damage taken in between: every HP_PER_BITE healed,
-	 * at least one once the heal clears MIN_HEAL. 0 if either reading is missing.
+	 * The measured max hp once there's enough to go on, else the configured guess.
 	 */
-	static int biteCount(double hpBefore, double hpAfter, int damage)
+	int maxHp(String name)
 	{
-		if (Double.isNaN(hpBefore) || Double.isNaN(hpAfter))
+		Calibration calibration = calibrations.get(name);
+		if (calibration != null)
 		{
-			return 0;
+			Integer measured = measuredMaxHp(calibration.damage, calibration.fraction);
+			if (measured != null)
+			{
+				return measured;
+			}
 		}
-		double healed = hpAfter - hpBefore + damage;
-		if (healed < MIN_HEAL)
+		return Math.max(1, config.foodEnemyMaxHp());
+	}
+
+	/**
+	 * Max hp from damage taken and the fraction of the bar it took, or null with under
+	 * MIN_CALIBRATION_FRACTION of a bar to go on. Clamped to real hitpoints levels.
+	 */
+	static Integer measuredMaxHp(int damage, double fraction)
+	{
+		if (fraction < MIN_CALIBRATION_FRACTION)
 		{
-			return 0;
+			return null;
 		}
-		return Math.max(1, (int) Math.round(healed / HP_PER_BITE));
+		return (int) Math.max(10, Math.min(99, Math.round(damage / fraction)));
+	}
+
+	/**
+	 * The health bar as a fraction of full, or NaN with no bar showing.
+	 */
+	static double barFraction(int ratio, int scale)
+	{
+		return ratio < 0 || scale <= 0 ? Double.NaN : (double) ratio / scale;
+	}
+
+	/**
+	 * Whole bites in this much healing, never negative.
+	 */
+	static int biteCount(double healedHp)
+	{
+		return (int) Math.max(0, Math.round(healedHp / HP_PER_BITE));
 	}
 
 	/**

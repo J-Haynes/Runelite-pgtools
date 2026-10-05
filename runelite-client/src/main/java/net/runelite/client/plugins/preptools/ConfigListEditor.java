@@ -23,6 +23,12 @@ class ConfigListEditor
 	 */
 	static final int SPAM_MESSAGE_MAX_LENGTH = 80;
 
+	/**
+	 * Core's Friend Notes plugin keeps each note at friendNotes.note_{@code <name>}.
+	 */
+	static final String FRIEND_NOTES_GROUP = "friendNotes";
+	static final String FRIEND_NOTES_KEY_PREFIX = "note_";
+
 	private final PrepToolsConfig config;
 	private final ConfigManager configManager;
 	private final ChatMessageManager chatMessageManager;
@@ -361,13 +367,47 @@ class ConfigListEditor
 	void renamePlayerNickname(String oldName, String newName)
 	{
 		String nickname = getPlayerNickname(oldName);
-		if (nickname == null || newName == null)
+		if (movePlayerNickname(oldName, newName))
 		{
-			return;
+			printConsole(oldName + " (" + nickname + ") is now called " + newName + " - nickname moved.");
 		}
-		setPlayerNickname(oldName, null);
-		setPlayerNickname(newName, nickname);
-		printConsole(oldName + " (" + nickname + ") is now called " + newName + " - nickname moved.");
+	}
+
+	/**
+	 * Moves a Names-tab nickname to a new name, unless the new name already has one. True if moved.
+	 */
+	boolean movePlayerNickname(String oldName, String newName)
+	{
+		String nickname = getPlayerNickname(oldName);
+		String name = newName == null ? "" : Text.toJagexName(newName);
+		if (nickname == null || name.isEmpty() || getPlayerNickname(name) != null)
+		{
+			return false;
+		}
+		// One write: the old entry out, the new one in.
+		Map<String, String> all = nicknames();
+		all.keySet().removeIf(n -> Text.standardize(n).equals(Text.standardize(oldName)));
+		all.put(name, nickname);
+		configManager.setConfiguration(PrepToolsConfig.GROUP, "playerNicknames", ConfigLists.serializePlayerNicknames(all));
+		return true;
+	}
+
+	/**
+	 * Moves a core Friend Notes note to a new name, unless the new name already has one - the same
+	 * rule Friend Notes uses for the renames it can see itself. True if moved.
+	 */
+	boolean moveFriendNote(String oldName, String newName)
+	{
+		String oldKey = FRIEND_NOTES_KEY_PREFIX + Text.toJagexName(oldName);
+		String newKey = FRIEND_NOTES_KEY_PREFIX + Text.toJagexName(newName);
+		String note = configManager.getConfiguration(FRIEND_NOTES_GROUP, oldKey);
+		if (note == null || configManager.getConfiguration(FRIEND_NOTES_GROUP, newKey) != null)
+		{
+			return false;
+		}
+		configManager.setConfiguration(FRIEND_NOTES_GROUP, newKey, note);
+		configManager.unsetConfiguration(FRIEND_NOTES_GROUP, oldKey);
+		return true;
 	}
 
 	private Map<String, String> nicknames()

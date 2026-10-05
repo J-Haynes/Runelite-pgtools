@@ -6,13 +6,14 @@ import java.util.EnumSet;
 import java.util.Set;
 import java.util.List;
 import net.runelite.api.Client;
+import net.runelite.api.Friend;
+import net.runelite.api.FriendContainer;
 import net.runelite.api.GraphicID;
 import net.runelite.api.Hitsplat;
 import net.runelite.api.HitsplatID;
 import net.runelite.api.Player;
 import net.runelite.api.Varbits;
 import net.runelite.api.WorldType;
-import net.runelite.api.WorldView;
 import net.runelite.api.gameval.AnimationID;
 import net.runelite.api.coords.WorldPoint;
 import net.runelite.api.gameval.SpotanimID;
@@ -23,9 +24,15 @@ import static org.junit.Assert.assertSame;
 import static org.junit.Assert.assertTrue;
 import org.junit.Before;
 import org.junit.Test;
+import net.runelite.client.chat.ChatMessageManager;
+import net.runelite.client.config.ConfigManager;
+import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyInt;
+import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.CALLS_REAL_METHODS;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 import static org.mockito.Mockito.withSettings;
 
@@ -59,6 +66,21 @@ public class TrackerTest
 		when(client.getTickCount()).thenAnswer(i -> tick);
 		setPlayers(local, mate, enemyA, enemyB);
 		team.refresh();
+	}
+
+	/**
+	 * The shipped map's Ferox Enclave box (wilderness levels 13-16).
+	 */
+	private static final WildernessLocation FEROX = new WildernessLocation(AttackRangeFilter.SAFE_ZONE_NAME, 3123, 3617, 3160, 3643, 0);
+	private List<WildernessLocation> locationList = Collections.singletonList(FEROX);
+
+	private AttackRangeFilter range()
+	{
+		LocationTracker locations = mock(LocationTracker.class);
+		WildernessLocationStore store = mock(WildernessLocationStore.class);
+		when(locations.getStore()).thenReturn(store);
+		when(store.getLocations()).thenAnswer(i -> locationList);
+		return new AttackRangeFilter(client, config, team, locations);
 	}
 
 	private static Player player(String name, boolean friendsChat)
@@ -125,6 +147,22 @@ public class TrackerTest
 		tick = 20;
 		freezes.onGraphicChanged(enemyA);
 		assertSame(first, freezes.getFreezeStates().get(enemyA));
+	}
+
+	@Test
+	public void aSnareLandingWithASplashOnTheSameTickStillFreezes()
+	{
+		// You splash, a teammate's snare catches, same tick. The game keeps one graphic per slot
+		// (the second replaces the first) but reports each as it's set - either order freezes.
+		for (boolean splashFirst : new boolean[]{false, true})
+		{
+			FreezeTracker freezes = new FreezeTracker(client, config, team);
+			spotAnims(enemyA, splashFirst ? GraphicID.SPLASH : GraphicID.SNARE);
+			freezes.onGraphicChanged(enemyA);
+			spotAnims(enemyA, splashFirst ? GraphicID.SNARE : GraphicID.SPLASH);
+			freezes.onGraphicChanged(enemyA);
+			assertTrue("splash first: " + splashFirst, freezes.isFrozen(enemyA));
+		}
 	}
 
 	@Test
@@ -244,7 +282,7 @@ public class TrackerTest
 		when(config.enableTargetedPlayerDetection()).thenReturn(true);
 		when(config.targetedPlayerThreshold()).thenReturn(2);
 		FreezeTracker freezes = new FreezeTracker(client, config, team);
-		HighlightTracker highlights = new HighlightTracker(client, config, team, freezes, new AttackRangeFilter(client, config, team));
+		HighlightTracker highlights = new HighlightTracker(client, config, team, freezes, range());
 		when(local.getInteracting()).thenReturn(enemyA);
 		when(mate.getInteracting()).thenReturn(enemyA);
 
@@ -268,7 +306,7 @@ public class TrackerTest
 	{
 		when(config.enableTargetedPlayerDetection()).thenReturn(true);
 		when(config.targetedPlayerThreshold()).thenReturn(2);
-		HighlightTracker highlights = new HighlightTracker(client, config, team, new FreezeTracker(client, config, team), new AttackRangeFilter(client, config, team));
+		HighlightTracker highlights = new HighlightTracker(client, config, team, new FreezeTracker(client, config, team), range());
 
 		when(local.getInteracting()).thenReturn(enemyA);
 		when(mate.getInteracting()).thenReturn(enemyA);
@@ -287,7 +325,7 @@ public class TrackerTest
 	@Test
 	public void callerFollowingATeammateHasNoTarget()
 	{
-		HighlightTracker highlights = new HighlightTracker(client, config, team, new FreezeTracker(client, config, team), new AttackRangeFilter(client, config, team));
+		HighlightTracker highlights = new HighlightTracker(client, config, team, new FreezeTracker(client, config, team), range());
 		highlights.setCallers(Collections.singletonList(new CallerEntry("Mate", "M", true)));
 		team.setConfiguredCallers(Collections.singleton("mate"));
 		team.refresh();
@@ -308,7 +346,7 @@ public class TrackerTest
 	{
 		when(config.highlightAttackers()).thenReturn(true);
 		when(config.maxAttackers()).thenReturn(1);
-		HighlightTracker highlights = new HighlightTracker(client, config, team, new FreezeTracker(client, config, team), new AttackRangeFilter(client, config, team));
+		HighlightTracker highlights = new HighlightTracker(client, config, team, new FreezeTracker(client, config, team), range());
 
 		when(enemyB.getInteracting()).thenReturn(local);
 		highlights.onGameTick();
@@ -336,7 +374,7 @@ public class TrackerTest
 		when(enemyA.getCombatLevel()).thenReturn(70);
 		when(enemyB.getCombatLevel()).thenReturn(64);
 
-		AttackRangeFilter range = new AttackRangeFilter(client, config, team);
+		AttackRangeFilter range = range();
 		HighlightTracker highlights = new HighlightTracker(client, config, team, new FreezeTracker(client, config, team), range);
 		highlights.setSnipeNames(Arrays.asList("Enemy A", "Enemy B"));
 
@@ -368,9 +406,69 @@ public class TrackerTest
 		when(local.getCombatLevel()).thenReturn(60);
 		when(enemyA.getCombatLevel()).thenReturn(126);
 
-		AttackRangeFilter range = new AttackRangeFilter(client, config, team);
+		AttackRangeFilter range = range();
 		range.onGameTick();
 		assertFalse(range.isOutOfRange(enemyA));
+	}
+
+	private void wilderness()
+	{
+		when(client.getWorldType()).thenReturn(EnumSet.noneOf(WorldType.class));
+		when(client.getVarbitValue(Varbits.IN_WILDERNESS)).thenReturn(1);
+	}
+
+	@Test
+	public void inFeroxYouCountFromTheGroundAndNobodyInsideCanBeAttacked()
+	{
+		when(config.attackRangeFilter()).thenReturn(true);
+		wilderness();
+		// The game says you're not in the wilderness in Ferox...
+		when(client.getVarbitValue(Varbits.IN_WILDERNESS)).thenReturn(0);
+		// ...but you're standing at level 14.
+		when(local.getWorldLocation()).thenReturn(new WorldPoint(3140, 3630, 0));
+		when(local.getCombatLevel()).thenReturn(60);
+		// Just north of Ferox, level 18: 10 levels apart, within 14.
+		when(enemyA.getWorldLocation()).thenReturn(new WorldPoint(3140, 3660, 0));
+		when(enemyA.getCombatLevel()).thenReturn(70);
+		// Inside Ferox with you, same level - still safe.
+		when(enemyB.getWorldLocation()).thenReturn(new WorldPoint(3130, 3625, 0));
+		when(enemyB.getCombatLevel()).thenReturn(60);
+
+		AttackRangeFilter range = range();
+		range.onGameTick();
+		assertTrue(range.bracketApplies());
+		assertFalse(range.isOutOfRange(enemyA));
+		assertTrue(range.isOutOfRange(enemyB));
+
+		// Without the Location Mapper's Ferox box there's no telling - no bracket.
+		locationList = Collections.emptyList();
+		range.onGameTick();
+		assertFalse(range.bracketApplies());
+		assertFalse(range.isOutOfRange(enemyB));
+	}
+
+	@Test
+	public void highlightOthersInRangeUsesItsOwnBuffer()
+	{
+		when(config.highlightOthers()).thenReturn(true);
+		when(config.othersOnlyInRange()).thenReturn(true);
+		wilderness();
+		// Level 11 wilderness everywhere (y=3600).
+		when(local.getCombatLevel()).thenReturn(60);
+		when(enemyA.getCombatLevel()).thenReturn(71);
+		when(enemyB.getCombatLevel()).thenReturn(73);
+
+		AttackRangeFilter range = range();
+		range.onGameTick();
+		assertEquals(Collections.singleton(enemyA), range.getOthersInRange());
+		// Teammates are never "others".
+		assertFalse(range.getOthersInRange().contains(mate));
+
+		when(config.othersRangeBuffer()).thenReturn(2);
+		range.onGameTick();
+		assertEquals(2, range.getOthersInRange().size());
+		// The greying filter is separate and stays off.
+		assertFalse(range.isOutOfRange(enemyB));
 	}
 
 	private static void animate(Player player, int animation)
@@ -389,8 +487,13 @@ public class TrackerTest
 
 	private Hitsplat damage(int amount)
 	{
+		return hitsplat(HitsplatID.DAMAGE_OTHER, amount);
+	}
+
+	private static Hitsplat hitsplat(int type, int amount)
+	{
 		Hitsplat hit = mock(Hitsplat.class, withSettings().defaultAnswer(CALLS_REAL_METHODS));
-		when(hit.getHitsplatType()).thenReturn(HitsplatID.DAMAGE_OTHER);
+		when(hit.getHitsplatType()).thenReturn(type);
 		when(hit.getAmount()).thenReturn(amount);
 		return hit;
 	}
@@ -401,68 +504,176 @@ public class TrackerTest
 		return new FoodTracker(client, config, team);
 	}
 
-	@Test
-	public void foodIsCountedFromTheHealNotTheAnimation()
+	/**
+	 * Enemy A in a fight, as pizzas are really eaten: hit every 4 ticks for 0-20 by you; whenever
+	 * they're down at least eatBelow hp they eat a whole pizza - first bite, then the second a tick
+	 * later (wiki: 1 then 2 tick delay) - healing up to max (so bites near full hp are cut short).
+	 * The eat animation keeps playing through the chain; AnimationChanged fires for every bite, or
+	 * (eventPerBite false, the worst case) only the first bite of each pizza. Their health bar - 30 steps of their real max hp - updates every
+	 * tick, or only when hit (the worst case for a heal). Returns the bites they really ate.
+	 */
+	private int fight(FoodTracker food, int maxHp, int eatBelow, boolean eventPerBite, boolean barOnlyOnHits, int ticks,
+		long seed)
 	{
-		FoodTracker food = food();
-		hp(enemyA, 50);
+		java.util.Random random = new java.util.Random(seed);
+		int[] hp = {maxHp};
+		int[] ratio = {30};
+		int[] animation = {-1};
+		when(enemyA.getHealthScale()).thenReturn(30);
+		when(enemyA.getHealthRatio()).thenAnswer(i -> ratio[0]);
+		when(enemyA.getAnimation()).thenAnswer(i -> animation[0]);
 		food.onGameTick();
 
-		// One animation, two pizza bites: +18.
-		tick = 1;
-		animate(enemyA, AnimationID.HUMAN_EAT);
-		food.onAnimationChanged(enemyA);
-		hp(enemyA, 68);
-		food.onGameTick();
-		assertEquals(2, food.getBites(enemyA));
-
-		// A potion: same animation, no heal - nothing.
-		tick = 5;
-		food.onAnimationChanged(enemyA);
-		for (tick = 5; tick <= 8; tick++)
+		int bites = 0;
+		int nextBiteTick = -1;
+		int animationEnd = -1;
+		for (int t = 1; t <= ticks; t++)
 		{
+			tick++;
+			boolean hit = t % 4 == 0;
+			if (nextBiteTick < 0 && maxHp - hp[0] >= eatBelow)
+			{
+				// Start a pizza: first bite now, second next tick.
+				nextBiteTick = t;
+				animation[0] = AnimationID.HUMAN_EAT;
+				food.onAnimationChanged(enemyA);
+			}
+			if (t == nextBiteTick || t == nextBiteTick + 1)
+			{
+				if (eventPerBite && t != nextBiteTick)
+				{
+					food.onAnimationChanged(enemyA);
+				}
+				hp[0] = Math.min(maxHp, hp[0] + FoodTracker.HP_PER_BITE);
+				bites++;
+				animationEnd = t + 3;
+				nextBiteTick = t == nextBiteTick + 1 ? -1 : nextBiteTick;
+			}
+			if (t >= animationEnd)
+			{
+				animation[0] = -1;
+			}
+			if (hit)
+			{
+				// Never kills - a death resets the count.
+				int damage = Math.min(random.nextInt(21), hp[0] - 1);
+				hp[0] -= damage;
+				food.onHitsplatApplied(enemyA, damage(damage));
+			}
+			if (hit || !barOnlyOnHits)
+			{
+				ratio[0] = Math.max(1, (int) Math.ceil(hp[0] * 30.0 / maxHp));
+			}
 			food.onGameTick();
 		}
-		assertEquals(2, food.getBites(enemyA));
-		assertEquals(0, food.getUnmeasuredEats(enemyA));
-
-		// One bite while taking a 20 hit the same tick: 68 - 20 + 9 = 57.
-		tick = 10;
-		food.onAnimationChanged(enemyA);
-		food.onHitsplatApplied(enemyA, damage(20));
-		hp(enemyA, 57);
-		food.onGameTick();
-		assertEquals(3, food.getBites(enemyA));
+		return bites;
 	}
 
 	@Test
-	public void healingWithoutAnEatIsNotFood()
+	public void aFullInventoryEatenUnderAttackIsCountedClosely()
 	{
-		// e.g. a blood barrage.
+		// The in-game tests that undercounted: 23-25 pizzas eaten while being hit constantly. Eating a
+		// pizza only 9 down wastes most of its second bite at full hp. The game plays one animation
+		// per pizza and none for the second bite (confirmed in game, 2026-10-02).
+		for (int eatBelow : new int[]{18, 9})
+		{
+			for (boolean barOnlyOnHits : new boolean[]{false, true})
+			{
+				for (long seed = 1; seed <= 5; seed++)
+				{
+					tick = 0;
+					FoodTracker food = food();
+					int eaten = fight(food, 99, eatBelow, false, barOnlyOnHits, 260, seed);
+					assertTrue("ate " + eaten + ", counted " + food.getBites(enemyA) + " (eat " + eatBelow
+							+ " below max, bar only on hits: " + barOnlyOnHits + ")",
+						Math.abs(food.getBites(enemyA) - eaten) <= Math.max(3, eaten / 10));
+				}
+			}
+		}
+	}
+
+	@Test
+	public void anEnemysMaxHpIsMeasuredFromTheirHits()
+	{
+		// A 70 hp account, and you've left the setting at 99: unmeasured, every heal reads as 41% too
+		// much. Hits alone first (no food), then a fight.
+		FoodTracker food = food();
+		int[] ratio = {30};
+		when(enemyA.getHealthScale()).thenReturn(30);
+		when(enemyA.getHealthRatio()).thenAnswer(i -> ratio[0]);
+		food.onGameTick();
+		int hpLeft = 70;
+		for (int i = 0; i < 6; i++)
+		{
+			tick++;
+			hpLeft -= 8;
+			food.onHitsplatApplied(enemyA, damage(8));
+			ratio[0] = (int) Math.ceil(hpLeft * 30.0 / 70);
+			food.onGameTick();
+		}
+		assertEquals(70, food.maxHp("enemy a"), 3);
+
+		food.reset(enemyA);
+		int eaten = fight(food, 70, 18, false, false, 200, 7);
+		assertTrue("ate " + eaten + ", counted " + food.getBites(enemyA), Math.abs(food.getBites(enemyA) - eaten) <= 3);
+	}
+
+	@Test
+	public void healingWithoutAnEatIsNotFoodAndAPotionIsNotFood()
+	{
 		FoodTracker food = food();
 		hp(enemyA, 40);
 		food.onGameTick();
+
+		// e.g. a blood barrage.
 		tick = 1;
 		hp(enemyA, 70);
 		food.onGameTick();
 		assertEquals(0, food.getBites(enemyA));
-	}
 
-	@Test
-	public void anEatWithNoHealthBarIsUnmeasured()
-	{
-		FoodTracker food = food();
-		when(enemyA.getHealthRatio()).thenReturn(-1);
-		food.onGameTick();
-		tick = 1;
+		// A potion: the eat animation, no heal.
+		tick = 2;
 		animate(enemyA, AnimationID.HUMAN_EAT);
 		food.onAnimationChanged(enemyA);
-		for (tick = 1; tick <= 4; tick++)
+		for (tick = 2; tick < 10; tick++)
 		{
 			food.onGameTick();
 		}
 		assertEquals(0, food.getBites(enemyA));
-		assertEquals(1, food.getUnmeasuredEats(enemyA));
+	}
+
+	@Test
+	public void aPotionAtFullHpIsNotABite()
+	{
+		// A combat potion sipped at full hp: the eat animation, a full bar, no food anywhere near.
+		FoodTracker food = food();
+		hp(enemyA, 99);
+		food.onGameTick();
+		tick = 1;
+		animate(enemyA, AnimationID.HUMAN_EAT);
+		food.onAnimationChanged(enemyA);
+		food.onGameTick();
+		tick = 4;
+		food.onHitsplatApplied(enemyA, damage(10));
+		hp(enemyA, 89);
+		food.onGameTick();
+		assertEquals(0, food.getBites(enemyA));
+	}
+
+	@Test
+	public void poisonDamageIsAddedBackToo()
+	{
+		// One bite while venom ticks 6 the same tick: the bar only shows +3.
+		FoodTracker food = food();
+		hp(enemyA, 50);
+		food.onGameTick();
+		tick = 1;
+		animate(enemyA, AnimationID.HUMAN_EAT);
+		food.onAnimationChanged(enemyA);
+		food.onHitsplatApplied(enemyA, hitsplat(HitsplatID.VENOM, 6));
+		hp(enemyA, 53);
+		food.onGameTick();
+		assertEquals(1, food.getBites(enemyA));
 	}
 
 	/**
@@ -493,41 +704,24 @@ public class TrackerTest
 	}
 
 	@Test
-	public void enteringAnInstanceResetsEveryone()
+	public void aNewRoundResetsEveryone()
 	{
-		WorldView worldView = mock(WorldView.class);
-		when(client.getTopLevelWorldView()).thenReturn(worldView);
+		// Through the Clan Wars portal: everyone has full food again.
 		FoodTracker food = foodWithOneBite();
-
-		// Already in an instance: nothing happens on later ticks.
-		tick = 2;
-		food.onGameTick();
-		assertEquals(1, food.getBites(enemyA));
-
-		// Through the Clan Wars portal.
-		when(worldView.isInstance()).thenReturn(true);
-		tick = 3;
-		food.onGameTick();
+		food.startRound();
 		assertEquals(0, food.getBites(enemyA));
 	}
 
 	@Test
-	public void foodCountsSurviveLeavingViewAndAreForgottenWhenNotSeen()
+	public void foodCountsSurviveLeavingViewAndAreNeverForgotten()
 	{
-		when(config.foodForgetMinutes()).thenReturn(1);
+		// Nobody restocks in Clan Wars.
 		FoodTracker food = foodWithOneBite();
-
 		food.forget(enemyA);
-		assertEquals(1, food.getBites(enemyA));
-
-		tick = 150;
-		food.onGameTick();
-		assertEquals(1, food.getBites(enemyA));
-
 		setPlayers(local, mate, enemyB);
-		tick = 251;
+		tick = 100_000;
 		food.onGameTick();
-		assertEquals(0, food.getBites(enemyA));
+		assertEquals(1, food.getBites(enemyA));
 	}
 
 	@Test
@@ -547,7 +741,7 @@ public class TrackerTest
 	private TeamPerformanceTracker performance()
 	{
 		when(config.enablePerformanceTracker()).thenReturn(true);
-		return new TeamPerformanceTracker(client, config, team);
+		return new TeamPerformanceTracker(client, config, team, new FreezeTracker(client, config, team));
 	}
 
 	private static PerformanceRow row(List<PerformanceRow> rows, String name)
@@ -574,7 +768,11 @@ public class TrackerTest
 		tick = 3;
 		performance.onGameTick(null, targets);
 
-		List<PerformanceRow> rows = performance.snapshot();
+		// Nothing counts until the target dies.
+		assertEquals(0, row(performance.currentRows(), "Me").targetTicks);
+		performance.onDeath(enemyA);
+
+		List<PerformanceRow> rows = performance.currentRows();
 		PerformanceRow me = row(rows, "Me");
 		PerformanceRow mateRow = row(rows, "Mate");
 		assertEquals(4, me.targetTicks);
@@ -596,13 +794,14 @@ public class TrackerTest
 		performance.onGameTick(null, Collections.singleton(enemyA));
 		tick = 20;
 		performance.onGameTick(null, Collections.singleton(enemyB));
-		assertEquals(0, row(performance.snapshot(), "Mate").switches);
+		assertEquals(0, row(performance.currentRows(), "Mate").switches);
 
-		// Mate takes 30 ticks to get onto enemyB - slow, but counted.
+		// Mate takes 30 ticks to get onto enemyB - slow, but counted once B dies.
 		tick = 50;
 		when(mate.getInteracting()).thenReturn(enemyB);
 		performance.onGameTick(null, Collections.singleton(enemyB));
-		assertEquals(30.0, row(performance.snapshot(), "Mate").averageSwitchTicks(), 0.001);
+		performance.onDeath(enemyB);
+		assertEquals(30.0, row(performance.currentRows(), "Mate").averageSwitchTicks(), 0.001);
 	}
 
 	@Test
@@ -637,15 +836,261 @@ public class TrackerTest
 		performance.onDeath(enemyA);
 		performance.onDeath(enemyA);
 
-		PerformanceRow mateRow = row(performance.snapshot(), "Mate");
+		PerformanceRow mateRow = row(performance.currentRows(), "Mate");
 		assertEquals(1, mateRow.attacks);
 		assertEquals(1, mateRow.attacksOnTarget);
 		assertEquals(1, mateRow.eats);
 		assertEquals(25, mateRow.damageTaken);
-		assertEquals(1, mateRow.killsInvolved);
+		assertEquals(1, mateRow.onPile);
 		assertEquals(-1, mateRow.damageDealt);
-		assertEquals(30, row(performance.snapshot(), "Me").damageDealt);
+		assertEquals(30, row(performance.currentRows(), "Me").damageDealt);
 		// You weren't on enemyA.
-		assertEquals(0, row(performance.snapshot(), "Me").killsInvolved);
+		assertEquals(0, row(performance.currentRows(), "Me").onPile);
+	}
+
+	private static Friend friend(String name)
+	{
+		Friend friend = mock(Friend.class);
+		when(friend.getName()).thenReturn(name);
+		return friend;
+	}
+
+	@Test
+	public void aFriendRenamedTwiceWhileAwayKeepsTheirNickname()
+	{
+		when(config.showPlayerNicknames()).thenReturn(true);
+		when(config.playerNicknames()).thenReturn("Old Name=Tank");
+		ConfigManager configManager = mock(ConfigManager.class);
+		when(configManager.getRSProfileKey()).thenReturn("rsprofile.test");
+		// Saved last session.
+		when(configManager.getRSProfileConfiguration(PrepToolsConfig.GROUP, "friendsListSnapshot")).thenReturn("Old Name\nStays");
+
+		// Now: renamed Old Name to Middle to Newest - the game only says "previously Middle".
+		Friend newest = friend("Newest");
+		when(newest.getPrevName()).thenReturn("Middle");
+		FriendContainer friends = mock(FriendContainer.class);
+		when(friends.getCount()).thenReturn(2);
+		Friend[] members = {friend("Stays"), newest};
+		when(friends.getMembers()).thenReturn(members);
+		when(client.getFriendContainer()).thenReturn(friends);
+
+		ConfigListEditor lists = new ConfigListEditor(config, configManager, mock(ChatMessageManager.class),
+			mock(HighlightTracker.class));
+		PlayerNicknameTracker nicknames = new PlayerNicknameTracker(client, config, team);
+		nicknames.setNicknames(Collections.singletonMap("Old Name", "Tank"));
+		FriendRenameTracker renames = new FriendRenameTracker(client, config, configManager, lists, nicknames,
+			mock(ChatMessageManager.class));
+
+		// Nothing until the list has been in for a while after login.
+		for (int i = 0; i < 9; i++)
+		{
+			renames.onGameTick();
+		}
+		verify(configManager, never()).setConfiguration(PrepToolsConfig.GROUP, "playerNicknames", "Newest=Tank");
+
+		renames.onGameTick();
+		verify(configManager).setConfiguration(PrepToolsConfig.GROUP, "playerNicknames", "Newest=Tank");
+		verify(configManager).setRSProfileConfiguration(PrepToolsConfig.GROUP, "friendsListSnapshot", "Stays\nNewest");
+		assertTrue(renames.getPending().isEmpty());
+	}
+
+	@Test
+	public void anUnclearRenameIsOfferedAndAnUnloadedListNeverOverwritesTheSavedOne()
+	{
+		when(config.showPlayerNicknames()).thenReturn(true);
+		ConfigManager configManager = mock(ConfigManager.class);
+		when(configManager.getRSProfileKey()).thenReturn("rsprofile.test");
+		when(configManager.getRSProfileConfiguration(PrepToolsConfig.GROUP, "friendsListSnapshot")).thenReturn("Ay\nBee");
+		FriendContainer friends = mock(FriendContainer.class);
+		when(client.getFriendContainer()).thenReturn(friends);
+		when(friends.getMembers()).thenReturn(new Friend[0]);
+
+		PlayerNicknameTracker nicknames = new PlayerNicknameTracker(client, config, team);
+		nicknames.setNicknames(Collections.singletonMap("Ay", "Tank"));
+		FriendRenameTracker renames = new FriendRenameTracker(client, config, configManager,
+			mock(ConfigListEditor.class), nicknames, mock(ChatMessageManager.class));
+
+		// The list never loaded: nothing compared, nothing saved.
+		for (int i = 0; i < 20; i++)
+		{
+			renames.onGameTick();
+		}
+		verify(configManager, never()).setRSProfileConfiguration(anyString(), anyString(), any());
+
+		// Next login it arrives with two new names - which one is Tank's is your call.
+		renames.onSessionChanged();
+		when(friends.getCount()).thenReturn(2);
+		Friend[] arrived = {friend("Cee"), friend("Dee")};
+		when(friends.getMembers()).thenReturn(arrived);
+		for (int i = 0; i < 10; i++)
+		{
+			renames.onGameTick();
+		}
+		assertEquals(1, renames.getPending().size());
+		assertEquals("Tank", renames.getPending().get(0).nickname);
+		assertEquals(Arrays.asList("Cee", "Dee"), renames.getPending().get(0).candidates);
+	}
+
+	@Test
+	public void eachRoundHasItsOwnNumbers()
+	{
+		TeamPerformanceTracker performance = performance();
+		performance.onGameTick(null, Collections.emptySet());
+		assertEquals(1, row(performance.currentRows(), "Mate").ticksSeen);
+
+		// Through the portal.
+		performance.startRound();
+		tick = 1;
+		performance.onGameTick(null, Collections.emptySet());
+		performance.onGameTick(null, Collections.emptySet());
+
+		List<PerformanceRound> rounds = performance.snapshot();
+		assertEquals(2, rounds.size());
+		assertEquals(1, row(rounds.get(0).rows, "Mate").ticksSeen);
+		assertEquals(2, row(rounds.get(1).rows, "Mate").ticksSeen);
+
+		// An empty round isn't kept: going through again before anything happened just restarts it.
+		performance.startRound();
+		performance.startRound();
+		assertEquals(3, performance.snapshot().size());
+		assertTrue(performance.currentRows().isEmpty());
+
+		performance.reset();
+		assertEquals(1, performance.snapshot().size());
+	}
+
+	@Test
+	public void onPileCountsWhoeverWasOnTheEnemyRecently()
+	{
+		TeamPerformanceTracker performance = performance();
+
+		// Mate attacked enemy A (an attack animation), then dropped them a few ticks before they died.
+		when(mate.getInteracting()).thenReturn(enemyA);
+		animate(mate, 1658);
+		performance.onAnimationChanged(mate);
+		when(mate.getInteracting()).thenReturn(null);
+		for (tick = 1; tick <= TeamPerformanceTracker.PILE_CREDIT_TICKS - 2; tick++)
+		{
+			performance.onGameTick(null, Collections.emptySet());
+		}
+		performance.onDeath(enemyA);
+		assertEquals(1, row(performance.currentRows(), "Mate").onPile);
+
+		// Too long ago doesn't count.
+		when(local.getInteracting()).thenReturn(enemyB);
+		performance.onGameTick(null, Collections.emptySet());
+		when(local.getInteracting()).thenReturn(null);
+		tick += TeamPerformanceTracker.PILE_CREDIT_TICKS + 2;
+		performance.onGameTick(null, Collections.emptySet());
+		performance.onDeath(enemyB);
+		assertEquals(0, row(performance.currentRows(), "Me").onPile);
+	}
+
+	@Test
+	public void aChipCallThatNeverDiesDoesNotCount()
+	{
+		TeamPerformanceTracker performance = performance();
+		// The caller chips enemy A for a bit - you're elsewhere - then moves on.
+		when(local.getInteracting()).thenReturn(enemyB);
+		for (tick = 0; tick < 10; tick++)
+		{
+			performance.onGameTick(null, Collections.singleton(enemyA));
+		}
+		for (; tick < 10 + TeamPerformanceTracker.TARGET_EXPIRY_TICKS + 2; tick++)
+		{
+			performance.onGameTick(null, Collections.emptySet());
+		}
+		// Enemy A dies much later, uncalled: still not a called target.
+		performance.onDeath(enemyA);
+		assertEquals(0, row(performance.currentRows(), "Me").targetTicks);
+		FightLogEntry entry = performance.currentRound().log.get(0);
+		assertFalse(entry.called);
+	}
+
+	@Test
+	public void aKilledTargetIsLoggedWithItsCallerAndPile()
+	{
+		TeamPerformanceTracker performance = performance();
+		when(mate.getInteracting()).thenReturn(enemyA);
+		when(local.getInteracting()).thenReturn(enemyA);
+		for (tick = 0; tick < 20; tick++)
+		{
+			performance.onGameTick(mate, Collections.singleton(enemyA));
+		}
+		performance.onDeath(enemyA);
+
+		FightLogEntry entry = performance.currentRound().log.get(0);
+		assertTrue(entry.called);
+		assertEquals("Mate", entry.caller);
+		assertEquals(20, entry.durationTicks);
+		// Most time on the target first - the caller isn't timed on their own call.
+		assertEquals(Arrays.asList("Me", "Mate"), entry.names);
+		assertFalse(entry.teammate);
+	}
+
+	/**
+	 * Enemies attack Mate for the given ticks (Mate eating pizzas times), then Mate dies.
+	 */
+	private FightLogEntry mateDies(TeamPerformanceTracker performance, int ticks, int pizzas, Player... attackers)
+	{
+		for (Player attacker : attackers)
+		{
+			when(attacker.getInteracting()).thenReturn(mate);
+		}
+		for (int i = 0; i < ticks; i++, tick++)
+		{
+			if (i < pizzas)
+			{
+				animate(mate, AnimationID.HUMAN_EAT);
+				performance.onAnimationChanged(mate);
+			}
+			performance.onGameTick(null, Collections.emptySet());
+		}
+		performance.onDeath(mate);
+		List<FightLogEntry> log = performance.currentRound().log;
+		return log.get(log.size() - 1);
+	}
+
+	@Test
+	public void dyingToTwoWithoutEatingIsAnEasyDeath()
+	{
+		when(config.easyDeathMaxAttackers()).thenReturn(3);
+		when(config.easyDeathMinSeconds()).thenReturn(6);
+		when(config.easyDeathMaxPizzas()).thenReturn(1);
+		TeamPerformanceTracker performance = performance();
+
+		FightLogEntry entry = mateDies(performance, 15, 0, enemyA, enemyB);
+		assertTrue(entry.teammate);
+		assertTrue(entry.easy);
+		assertEquals(Arrays.asList("Enemy A", "Enemy B"), entry.names);
+		assertEquals(15, entry.durationTicks);
+		assertEquals(1, row(performance.currentRows(), "Mate").easyDeaths);
+	}
+
+	@Test
+	public void deathsWithoutClearEvidenceAreNotFlagged()
+	{
+		when(config.easyDeathMaxAttackers()).thenReturn(1);
+		when(config.easyDeathMinSeconds()).thenReturn(6);
+		when(config.easyDeathMaxPizzas()).thenReturn(1);
+
+		// Too many on them.
+		assertFalse(mateDies(performance(), 15, 0, enemyA, enemyB).easy);
+		// Ate plenty.
+		assertFalse(mateDies(performance(), 15, 5, enemyA).easy);
+		// Too quick to have eaten.
+		assertFalse(mateDies(performance(), 4, 0, enemyA).easy);
+
+		// Off your screen part of the time: you didn't see it all.
+		TeamPerformanceTracker performance = performance();
+		when(enemyA.getInteracting()).thenReturn(mate);
+		performance.onGameTick(null, Collections.emptySet());
+		setPlayers(local, enemyA);
+		tick++;
+		performance.onGameTick(null, Collections.emptySet());
+		setPlayers(local, mate, enemyA, enemyB);
+		FightLogEntry entry = mateDies(performance, 14, 0, enemyA);
+		assertTrue(entry.partlyOffScreen);
+		assertFalse(entry.easy);
 	}
 }

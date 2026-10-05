@@ -38,7 +38,8 @@ class PerformanceRow
 	 */
 	final int ticksSeen;
 	/**
-	 * Ticks on screen while the primary caller had a target (the caller themself excluded).
+	 * Ticks on screen while the primary caller had a target that went on to die (the caller
+	 * themself excluded) - chip calls don't count.
 	 */
 	final int targetTicks;
 	/**
@@ -63,9 +64,13 @@ class PerformanceRow
 	final int eats;
 	final int deaths;
 	/**
-	 * Enemy deaths they were attacking in the last few ticks before.
+	 * Deaths flagged easy (TeamPerformanceTracker#isEasyDeath()).
 	 */
-	final int killsInvolved;
+	final int easyDeaths;
+	/**
+	 * Enemies who died while they were on them (TeamPerformanceTracker.PILE_CREDIT_TICKS).
+	 */
+	final int onPile;
 	final Rating rating;
 
 	/**
@@ -87,7 +92,7 @@ class PerformanceRow
 	PerformanceRow withRating(Rating newRating)
 	{
 		return new PerformanceRow(name, isYou, isCaller, ticksSeen, targetTicks, onTargetTicks, attacks, attacksOnTarget,
-			switches, switchTicks, damageTaken, damageDealt, eats, deaths, killsInvolved, newRating);
+			switches, switchTicks, damageTaken, damageDealt, eats, deaths, easyDeaths, onPile, newRating);
 	}
 
 	/**

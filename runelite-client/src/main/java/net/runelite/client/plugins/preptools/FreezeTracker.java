@@ -4,6 +4,8 @@ import java.util.HashMap;
 import java.util.Map;
 import javax.inject.Inject;
 import lombok.Getter;
+import lombok.extern.slf4j.Slf4j;
+import net.runelite.api.ActorSpotAnim;
 import net.runelite.api.Client;
 import net.runelite.api.GraphicID;
 import net.runelite.api.HeadIcon;
@@ -18,6 +20,7 @@ import net.runelite.api.gameval.SpotanimID;
  * frozen border and the frozen target/pile colours need it - and the overlays ask
  * isFreezeShown() for what to draw. Teleblocks are only tracked when shown. Client thread only.
  */
+@Slf4j
 class FreezeTracker
 {
 	/**
@@ -136,6 +139,10 @@ class FreezeTracker
 	{
 		Player local = client.getLocalPlayer();
 		int tick = client.getTickCount();
+		if (config.debugLogging())
+		{
+			logSpellGraphics(player, tick);
+		}
 
 		boolean localNewlyFrozen = false;
 		FreezeSpell spell = freezeSpellOn(player);
@@ -164,6 +171,28 @@ class FreezeTracker
 		}
 
 		return localNewlyFrozen;
+	}
+
+	/**
+	 * Splash and freeze graphics, for checking how the game shows a splash and a freeze landing on
+	 * the same tick. A player's spell graphics live in slots, a new one replacing whatever was in
+	 * its slot; GraphicChanged fires after each one is stored (seen in the injected client), so a
+	 * snare followed by a splash in the same tick is still seen here first. It can only be missed
+	 * if the server never sends the snare graphic - this log shows which.
+	 */
+	private void logSpellGraphics(Player player, int tick)
+	{
+		StringBuilder ids = new StringBuilder();
+		boolean relevant = false;
+		for (ActorSpotAnim spotAnim : player.getSpotAnims())
+		{
+			ids.append(ids.length() > 0 ? "," : "").append(spotAnim.getId());
+			relevant |= spotAnim.getId() == GraphicID.SPLASH || FREEZE_SPELLS.containsKey(spotAnim.getId());
+		}
+		if (relevant)
+		{
+			log.info("PvP Tools freeze: tick {} {} spot anims [{}]", tick, player.getName(), ids);
+		}
 	}
 
 	void onGameTick()

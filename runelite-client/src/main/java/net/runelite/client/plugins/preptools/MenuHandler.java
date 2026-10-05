@@ -113,7 +113,6 @@ class MenuHandler
 
 		Map<Player, HighlightStyle> styles = config.colourAttackOption() ? highlights.getStyles() : null;
 		Map<Player, String> playerNicknames = nicknames.getNicknames();
-		Map<Player, String> lookalikes = nicknames.getLookalikes();
 		boolean blockTeammateSpells = config.preventFreezingTeammates();
 		boolean hideTeammateAttack = config.hideAttackOnTeammates();
 		boolean shiftWalk = isShiftWalkActive();
@@ -155,11 +154,6 @@ class MenuHandler
 			if (nickname != null)
 			{
 				appendToTarget(entry, "[" + nickname + "]", config.playerNicknameColor());
-			}
-			String resembled = lookalikes.get(player);
-			if (resembled != null)
-			{
-				appendToTarget(entry, "[" + PlayerNicknameOverlay.lookalikeText(resembled) + "]", config.lookalikeNameColor());
 			}
 
 			String option = stripTags(entry.getOption());

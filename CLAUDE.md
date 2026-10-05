@@ -8,7 +8,9 @@ GameVals to 2026-09-16-rev240"). The active work in this repo is a single plugin
 Location: `runelite-client/src/main/java/net/runelite/client/plugins/preptools/`
 
 A team-PK / multi-clanning coordination tool — the kind of thing a small clan runs together while
-fighting as a team in the wilderness. Inspired by [Exilent](https://exilent.org), a PK-focused OSRS
+fighting as a team in the wilderness. **Used for FREE-TO-PLAY multi warring, in the wilderness and
+in Clan Wars** (user, 2026-10-02) - so no protection prayers, teleblock, ice spells, Entangle or
+special attacks in actual use; food is anchovy pizza. Weigh new features against F2P mechanics. Inspired by [Exilent](https://exilent.org), a PK-focused OSRS
 client with similar team-coordination features. Core pieces:
 
 - **Team** — "your team" everywhere in this plugin (`TeamTracker#isOwnTeam()`) = you +
@@ -249,40 +251,73 @@ client with similar team-coordination features. Core pieces:
 - **Experimental** (config section of that name, position 19, everything **default off**) - built
   2026-10-02, not yet proven in a fight. Once one is confirmed, give it its own section (keep keys).
   - *Low food detector* (`FoodTracker`, `FoodOverlay`) - **for Clan Wars, not the wilderness.**
-    Counting eat animations (829) does NOT work, as the user pointed out: potions play the same
-    animation, and several anchovy pizza bites can go down in one. So the animation is only a cue
-    (a window of `EAT_WINDOW_TICKS`); what's counted is the **heal on the health bar** in that
-    window - hp now - hp last tick + hitsplat damage in between, 9 hp a bite (wiki), at least
-    `MIN_HEAL` (rounding noise). A heal without an eat (blood spells) is ignored; an eat with no
-    health bar showing is "unmeasured" (`+N?`). Other players' health is a 0-30 ratio, max hp
-    assumed (`foodEnemyMaxHp`, 99) - +-3 hp per reading, enough for 9 vs 18. **Reset on death**
-    (user: in Clan Wars a dead player is out of the round and returns next round with full
-    food - a session briefly kept counts through deaths from the wiki's "keep your items", which
-    was wrong), for everyone on entering an instance (the portal - everyone enters with full
-    food), and by hand: shift-right-click "Reset food count", `foodResetHotkey` (unbound).
-    Forgotten after `foodForgetMinutes` unseen. "Low" is in pizzas: assumed pizzas minus bites/2, a half pizza counting as one left.
-    Enemies only, text one line below a highlighted name.
+    Counting eat animations (829) does NOT work: potions play it too, and several pizza bites go
+    down in one. Food = healing the bar can't explain: (hp after - hp before) + HP damage hitsplatted
+    in between (incl. poison/venom/bleed/burn), 9 hp a bite (wiki). **Version 1 undercounted by
+    more than half in the user's test** (25 pizzas eaten under constant attack, LOW FOOD only near the
+    end of a second inventory) - it measured per tick within 2 ticks of the animation and dropped
+    any heal under 5 hp after rounding. Version 2 (2026-10-02): readings are **segments between
+    health bar changes or hits** (a heal may only show with the next hit); a segment counts if an
+    eat animation played in it or the tick before it began (blood spells etc. excluded); heals are
+    **summed signed and rounded to bites once**, so 30-step bar rounding evens out; **max hp is
+    measured** per enemy from non-eating segments (damage / bar fraction lost, after half a bar),
+    `foodEnemyMaxHp` only until then. **v2 still read ~6 pizzas short of 23** in the user's
+    second test. Version 3: pizza bites go 1 then 2 ticks apart (wiki, Fast foods), so a chain is
+    one long animation - "eating" also = `getAnimation()` still 829 at a tick, not just the event;
+    and **bites cut short at full hp** (a pizza started 9 down wastes its second bite - a fifth of
+    all bites in simulation): a segment where hp could have reached max (start + healed) counts
+    `BITES_PER_EAT_ANIMATION` (2) per eat-animation event in it, within `CAPPED_BITE_TICKS` of a
+    real heal (so a potion at full hp isn't food). **CONFIRMED in game: one eat animation per
+    pizza, none for the second bite** (debug log: 25 events for 23 pizzas). v3 came within ~2
+    pizzas of 23 (43 of 46 bites); the per-pizza compensation is newer and untested in game.
+    `TrackerTest#aFullInventoryEatenUnderAttackIsCountedClosely` simulates real pizza eating
+    (bar every tick / only on hits, eating 18 or 9 down, one animation per pizza) to within
+    10% - keep it passing. Debug logging logs each eating segment incl. its eat-event count, and
+    heals ignored for no eating seen.
+    A brew reads as ~2 bites. Reset on death (user: a dead player is out of the round, back next
+    round with full food), at a new round (portal, `startRound()`), and by hand (shift-right-click
+    "Reset food count", `foodResetHotkey`). **No forgetting over time** (removed - nobody
+    restocks in Clan Wars).
   - *Attackable-range filtering* (`AttackRange` pure, `AttackRangeFilter` per tick) - an enemy
     whose combat differs by more than `min(your wildy level, theirs)` (+15 on PvP worlds, wiki) is
     greyed (`outOfRangeColor`, overrides target/pile/snipe colour, not attackers) and its Attack is
     greyed and never promoted. Your level uses the `IN_WILDERNESS` varbit; others only have
-    coordinates. Does nothing unless you're in the wilderness or on a PvP world - in Clan Wars or
-    Ferox it would grey everyone. Team levels differ (e.g. 55-60): `attackRangeBasis` YOU (default, exact for
+    coordinates. No bracket (nothing filtered) outside the wilderness, e.g. Clan Wars.
+    **Ferox Enclave** (asked for): the game hides the wilderness level there (varbit 0), so you'd
+    be level 0. Inside the Location Mapper's best-matching box named exactly "Ferox Enclave"
+    (`AttackRangeFilter.SAFE_ZONE_NAME`, shipped box levels 13-16) you get the level of the ground
+    you're on - who you could attack once you step out - and anyone inside it is unattackable
+    (also on PvP worlds). Renaming that box in the Mapper breaks this. Team levels differ (e.g. 55-60): `attackRangeBasis` YOU (default, exact for
     your clicks) or TEAM (greyed only if no on-screen teammate can reach them), plus
     `attackRangeMargin` slack.
-  - *Team performance tracker* (`TeamPerformanceTracker`, `PerformanceRow`, sidebar **Stats**
-    tab) - per teammate by name, until Reset: on-target share while the primary caller has a
-    target, ticks to switch to a new target (however long - **no time limit / "missed" count**:
-    the user called a 5-tick limit "ridiculously quick"; a target re-called first just isn't
-    measured), attack
-    animations (minus eat/block/death) total and on target, damage taken, eats, deaths, kills
-    involved (on the enemy within 10 ticks of its death). Rated HIGH/LOW at +-15 points from the
-    team median on-target share (3+ rateable non-callers). **Teammates' damage dealt is not
-    visible** - a hitsplat has no source - only yours (`isMine()`). Copy = TSV for a spreadsheet.
-  - *Player nicknames* (`PlayerNicknameTracker`, `PlayerNicknameOverlay`, `NameLookalike`,
-    sidebar **Names** tab, shift-right-click "Set nickname" via `ChatboxPanelManager`) -
-    TeamSpeak-style names for anyone, as `[Nick]` after the name in the menu; over their head only
-    with `showNicknamesOverHeads` (**default off**, asked for).
+  - *Team performance tracker + fight log* (`TeamPerformanceTracker`, `PerformanceRow`,
+    `PerformanceRound`, `FightLogEntry`, sidebar **Stats** tab) - per teammate by name, **per
+    round** (entering an instance - the Clan Wars portal - starts one; `PrepToolsPlugin#onGameTick`
+    detects it for food and stats alike; up to 20 kept, picked by start time).
+    **Called targets count only if they die** (asked for: callers chip at people before settling
+    on a target, which is normal): on-target time, switch time and attacks-on-target are held per
+    called target (`CalledTarget`) and added to the stats at its death; dropped if not re-called
+    for `TARGET_EXPIRY_TICKS` (30s) without dying. Also: attacks, damage taken, eats, deaths,
+    **On pile** (interacting/attack anim at the enemy within `PILE_CREDIT_TICKS` (16, ~10s) of
+    its death). Rated HIGH/LOW at +-15 points from the team median on-target share (3+ rateable
+    non-callers). **Teammates' damage dealt is not visible** - only yours (`isMine()`).
+    **Fight log** per round: every death - enemy (pile, caller, time to kill) or teammate (enemies
+    on them in the last 10s via interacting or attack anims, seconds under attack - ends after 6s
+    with nobody on them, pizzas eaten meanwhile, damage in last 10s, frozen). **EASY DEATH**
+    (`isEasyDeath()`, asked for "with no false positives"): ALL of seen the whole time under attack
+    (else "partly off screen", never flagged), attackers <= `easyDeathMaxAttackers` (3), under
+    attack >= `easyDeathMinSeconds` (6), pizzas <= `easyDeathMaxPizzas` (1). Copy = TSV / text.
+  - *Player nicknames* - **moved out of Experimental into its own Nicknames section, on by
+    default** (new key `nicknamesEnabled`; the old `showPlayerNicknames` key defaulted off, which
+    is why "Set nickname" didn't appear for the user). `PlayerNicknameTracker`,
+    `PlayerNicknameOverlay`, sidebar **Names** tab - TeamSpeak-style names for anyone, as `[Nick]` after the name in the menu; over their head
+    only with `showNicknamesOverHeads` (**default off**, asked for). "Set nickname"
+    (`ChatboxPanelManager` prompt): shift-right-click a player in game, or right-click a name in
+    the friends/ignore list, friends chat, clan list, chatbox or private chat
+    (`PrepToolsPlugin#onMenuEntryAdded`, same widget/option choice as core's Hiscore "Lookup").
+    Hover tooltip anywhere a menu names a player (`NicknameTooltipOverlay`: left-click entry's
+    player, or a name-list widget entry), like Friend Notes' tooltip. The lookalike-name warning
+    was built and **removed** ("not useful") - don't re-add.
     Hidden config `playerNicknames`, `Name=Nickname` per line. **There's no account id for other
     players** - `Nameable` is just `getName()`/`getPrevName()`. Core's Friend Notes plugin (what
     the user used for nicknames that survived name changes) stores notes by name and moves them on
@@ -296,9 +331,24 @@ client with similar team-coordination features. Core pieces:
     renames A to B to C while you're offline arrive as "C, previously B": a note keyed on A isn't
     moved. It isn't deleted either - it stays in config under `note_A`. What the server sends as
     the previous name is server-side and unconfirmed. (To read the injected client: unzip
-    `~/.gradle/caches/**/injected-client-*.jar`, `grep -rla <api class name>`, then `javap -c -p`.) Against renames meant to confuse:
+    `~/.gradle/caches/**/injected-client-*.jar`, `grep -rla <api class name>`, then `javap -c -p`.)
+    So `FriendRenameTracker` saves each list per account (RS-profile config `friendsListSnapshot`/
+    `ignoreListSnapshot`) and, once the list has loaded after login (10+ ticks, size steady 5),
+    compares (`RenameMatch`, pure): the game's previous name pairs for sure; then exactly one
+    left + one arrived is a rename too (catches double renames); anything else about a
+    nicknamed player goes to "Possible renames" in the Names tab. Moves our nickname and the
+    Friend Notes note (`ConfigListEditor#moveFriendNote()`, only if the new name has none). Never
+    saves an empty list (= not loaded yet). Adds/removes on another client between logins can
+    fake a one-for-one pair - the console line says what moved. Against renames meant to confuse:
     a name one edit off a nicknamed name, or equal after folding I/l/1, O/0, rn/m, vv/w and
     space/-/_, shows `NOT Nick?` (cached per name).
+- **Highlight Others** (own section, default off) - core Player Indicators' "Highlight others"
+  built in (`OthersOverlay`): names over every non-team player, our name font, skipping anyone
+  `CallerNameOverlay` already names. "Only in your level range" (+ `othersRangeBuffer`, default
+  0) uses `AttackRangeFilter#getOthersInRange()` - same bracket and Ferox rules; with no bracket
+  (Clan Wars) everyone shows.
+- **Misc: world on map button** (`WorldNumberOverlay`, default on) - "W318" over
+  `InterfaceID.Orbs.ORB_WORLDMAP` (`OrbsNomap` fallback).
 - **Decided: no "mirror window without PvP Tools overlays"** (asked 2026-10-02). Overlays are
   drawn into the same frame buffer as the game, interleaved with its layers (`Hooks#drawScene`/
   `drawAboveOverheads`/`drawInterface`/`draw`), and with GPU on that buffer is composited over
@@ -339,8 +389,8 @@ reloading them on `ConfigChanged`, and pushing data to the sidebar. Each feature
 | `LocationTracker` | position, wilderness level/location, Mapper corners/preview, `WildernessLocationStore` |
 | `ChatHotkeys`, `ScoutReporter` | Pile Spam, Spammer, Location Spam; Scout webhook |
 | `ConfigListEditor` | every edit to the hidden list config (callers/snipe/spam/capes/nicknames) - sidebar + menu |
-| `FoodTracker`, `AttackRangeFilter`, `TeamPerformanceTracker`, `PlayerNicknameTracker` | Experimental: food eaten, combat bracket (before `HighlightTracker` each tick), Stats tab, nicknames |
-| `CallerEntry`, `ConfigLists`, `ScoutReport`, `WeaponStyle`, `AttackCategory#resolve()`, `AttackRange`, `PerformanceRow#rate()`, `NameLookalike`, `FoodTracker#biteCount()` | pure logic - unit tested |
+| `FoodTracker`, `AttackRangeFilter`, `TeamPerformanceTracker`, `PlayerNicknameTracker`, `FriendRenameTracker` | Experimental: food eaten, combat bracket incl. Highlight Others' range (before `HighlightTracker` each tick), Stats tab, nicknames, renames between logins |
+| `CallerEntry`, `ConfigLists`, `ScoutReport`, `WeaponStyle`, `AttackCategory#resolve()`, `AttackRange`, `PerformanceRow#rate()`, `RenameMatch`, `FoodTracker#biteCount()` | pure logic - unit tested |
 
 Overlays inject the tracker they draw from, not the plugin. Tests live in
 `runelite-client/src/test/java/net/runelite/client/plugins/preptools/` - pure logic, plus
@@ -363,10 +413,17 @@ Overlays inject the tracker they draw from, not the plugin. Tests live in
 Everything built but not yet confirmed in game / on a real machine - move an item into the relevant
 section (or delete it) once the user confirms it:
 
-- **The Experimental section (2026-10-02)** - none of it seen in game. Check: does an enemy's
-  health bar update when they eat (the food detector depends on it), and does the heal land
-  within 2 ticks of the eat animation? Is a pizza combo one heal or two? Is the Clan Wars arena an
-  instance (the portal reset depends on `WorldView#isInstance()`)? Is the
+- **Fight log / easy deaths, called-targets-only-if-they-die (2026-10-02)** - not seen in game.
+  Also: does a same-tick splash + teammate's snare show the snare (Debug logging lines
+  "PvP Tools freeze:")?
+- **The Experimental section (2026-10-02)** - Check: food detector v2 against the user's
+  25-pizza test (v1 undercounted - see its entry); turn on Debug logging to see each eating segment
+  and the measured max hp in `client.log`. Is the Clan Wars arena an
+  instance (the portal reset depends on `WorldView#isInstance()`)? Does "Set nickname" appear once
+  per name in each list/chat, and the hover tooltip there? Does the friends list really finish
+  loading within ~10 ticks of login (else the rename comparison runs on a partial list - it
+  would see "left" names and, with one arrival, could mis-pair)? Does the world number sit right on
+  the map button in fixed and resizable modes? Ferox: range from the ground you stand on. Is the
   shallower-wilderness-level rule right (wiki only says "your level +- wilderness level")? On a PvP
   world the filter adds 15 to coordinate levels and knows nothing of PvP-world safe zones (banks
   etc.) - does that grey/ungrey the right people? Are attack animations counted without false positives (blocks not in
@@ -423,11 +480,6 @@ Agreed with the user but deliberately not built yet. Low priority unless marked 
   `ICE_BLITZ_IMPACT2/3` exist in `SpotanimID`), not Snare's case though. Next time: turn on
   debug logging and log freeze add/drop reasons in `FreezeTracker` to see which it is.
 
-- **Nicknames/Friend Notes that survive any number of renames** (discussed 2026-10-02, "leave it
-  for now"): save the friends list at logout; at the next login, pair friends who vanished with new
-  names you didn't add (they're renames, however many), and move notes/nicknames - automatic when
-  one-to-one, a sidebar to pair by hand otherwise. Adds/removes made on another client in between
-  muddy it. See the Player nicknames entry for why the game's own previous name isn't enough.
 - **(Low) Clear a TB when an in-view player leaves the Wilderness** - the game ends it then (OSRS
   wiki), but the icon stays until the timer runs out. Rare in practice, so deferred on purpose
   (2026-09-25). If built: a per-tick position check on each teleblocked player
@@ -677,6 +729,12 @@ These cost real debugging time to find. Don't rediscover them the hard way:
   so `:client:test` catches it before a launch. `run-runelite.sh` launches the newest
   `client-*-shaded.jar` because upstream merges bump the version (1.13.0-SNAPSHOT next) - delete
   old jars in `runelite-client/build/libs/` if in doubt.
+  **Quieter variant: the game updates its cs2 scripts and RuneLite's script overlays
+  (`runelite-client/src/main/scripts/*.rs2asm` + `.hash`) stop applying** - logged as `WARN
+  injected-client - Mismatch in overlaid cache archive hash for 12/<script id>`, no error. Every
+  RuneLite hook in that script silently dies: 2026-10-04, script 73 (`ChatDefaultOnKey`, fires
+  the `runeliteCommand` callback) broke every `::` command (`::hop 308` did nothing) while the
+  official client worked. Same fix: merge `upstream/master` ("Update Scripts to <date>").
 - **A `PluginPanel` with its own per-tab scroll panes must call `super(false)`.** The default
   `PluginPanel()` constructor wraps the whole panel in an outer `JScrollPane`. Nested inside that,
   a tab taller than the sidebar grows to full height in the OUTER pane, so its own inner pane has
@@ -706,6 +764,13 @@ These cost real debugging time to find. Don't rediscover them the hard way:
   while CI fails. To reproduce CI locally after `./gradlew :client:javadoc`:
   `sed '/^-d /d' runelite-client/build/tmp/javadoc/javadoc.options > /tmp/jd.options && javadoc @/tmp/jd.options -Xdoclint:all,-missing -d /tmp/jd 2>&1 | grep error`.
   (`//` comments are unaffected.)
+- **Same-tick splash + freeze (checked 2026-10-02):** an actor's spot anims are stored per SLOT
+  (injected client: `ci.do(slot, id, ...)` replaces the slot's entry, then posts GraphicChanged for
+  each set) - so a snare and a splash landing the same tick are both seen, either order, and
+  `FreezeTracker` freezes (`TrackerTest#aSnareLandingWithASplashOnTheSameTickStillFreezes`). It can
+  only be missed if the SERVER never sends the snare graphic; with Debug logging on, FreezeTracker
+  logs every splash/freeze graphic with all the player's spot anims - check `client.log` after a
+  same-tick test to settle it.
 - **A freeze spell's graphic shows on every hit, frozen or not** - a barrage on someone already
   frozen, or immune (5 ticks after a freeze), still plays the ice graphic but doesn't freeze or
   refresh. `FreezeTracker` ignores freeze graphics on anyone it's already tracking (frozen or

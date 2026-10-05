@@ -411,12 +411,82 @@ public interface PrepToolsConfig extends Config
 		return false;
 	}
 
+	// --- Highlight Others section ---
+	// Built in from core Player Indicators' "Highlight others" (names of everyone not on your team),
+	// plus an "only in your level range" filter.
+
+	@ConfigSection(
+		name = "Highlight Others",
+		description = "<html>Names over everyone not on your team, like Player<br>"
+			+ "Indicators' 'Highlight others' - optionally only those you<br>"
+			+ "could attack.</html>",
+		position = 8,
+		closedByDefault = true
+	)
+	String othersSection = "othersSection";
+
+	@ConfigItem(
+		keyName = "highlightOthers",
+		name = "Highlight others",
+		description = "<html>Shows the name of every player not on your team (you,<br>"
+			+ "friends chat, clan, callers) over their head. Turn off Player<br>"
+			+ "Indicators' own 'Highlight others' if you use this.</html>",
+		position = 1,
+		section = "othersSection"
+	)
+	default boolean highlightOthers()
+	{
+		return false;
+	}
+
+	@ConfigItem(
+		keyName = "othersColor",
+		name = "Others colour",
+		description = "Colour of other players' names.",
+		position = 2,
+		section = "othersSection"
+	)
+	default Color othersColor()
+	{
+		return Color.RED;
+	}
+
+	@ConfigItem(
+		keyName = "othersOnlyInRange",
+		name = "Only in your level range",
+		description = "<html>Only name players you could attack: combat level within<br>"
+			+ "the wilderness level (+15 on PvP worlds), with the buffer<br>"
+			+ "below. In Ferox Enclave, counts from the level you're<br>"
+			+ "standing in, and skips anyone inside Ferox. Outside the<br>"
+			+ "wilderness (e.g. Clan Wars) everyone is shown.</html>",
+		position = 3,
+		section = "othersSection"
+	)
+	default boolean othersOnlyInRange()
+	{
+		return false;
+	}
+
+	@Range(min = 0, max = 30)
+	@ConfigItem(
+		keyName = "othersRangeBuffer",
+		name = "Range buffer (levels)",
+		description = "<html>Widens your level range by this many combat levels each<br>"
+			+ "way - shows players a level or two from being attackable.</html>",
+		position = 4,
+		section = "othersSection"
+	)
+	default int othersRangeBuffer()
+	{
+		return 0;
+	}
+
 	// --- Menu section ---
 
 	@ConfigSection(
 		name = "Menu",
 		description = "Right-click menu tweaks that aren't tied to callers/targets specifically.",
-		position = 8,
+		position = 9,
 		closedByDefault = true
 	)
 	String menuSection = "menuSection";
@@ -888,7 +958,7 @@ public interface PrepToolsConfig extends Config
 	@ConfigSection(
 		name = "Team Capes",
 		description = "Custom names for team cape numbers, shown alongside the vanilla team cape counter.",
-		position = 9,
+		position = 10,
 		closedByDefault = true
 	)
 	String teamCapeSection = "teamCapeSection";
@@ -968,7 +1038,7 @@ public interface PrepToolsConfig extends Config
 	@ConfigSection(
 		name = "Friends Chat Log",
 		description = "A newest-first log of friends chat join/leave/death activity, shown in the sidebar panel.",
-		position = 10,
+		position = 11,
 		closedByDefault = true
 	)
 	String friendsChatLogSection = "friendsChatLogSection";
@@ -1004,7 +1074,7 @@ public interface PrepToolsConfig extends Config
 	@ConfigSection(
 		name = "Pile Spam",
 		description = "Quickly type the name of whoever you're following/piling into public chat.",
-		position = 11,
+		position = 12,
 		closedByDefault = true
 	)
 	String pileSpamSection = "pileSpamSection";
@@ -1044,7 +1114,7 @@ public interface PrepToolsConfig extends Config
 			+ "chat. Also holds the location-mapping tool in the sidebar<br>"
 			+ "panel, for building/editing that list from your own<br>"
 			+ "in-game coordinates.</html>",
-		position = 12,
+		position = 13,
 		closedByDefault = true
 	)
 	String locationSection = "locationSection";
@@ -1093,7 +1163,7 @@ public interface PrepToolsConfig extends Config
 		name = "Spammer",
 		description = "<html>A hotkey that types one of your saved messages into public<br>"
 			+ "chat. Messages are added/selected from the sidebar's Spam tab.</html>",
-		position = 13,
+		position = 14,
 		closedByDefault = true
 	)
 	String spammerSection = "spammerSection";
@@ -1156,7 +1226,7 @@ public interface PrepToolsConfig extends Config
 		name = "Multi Lines",
 		description = "<html>Draws the borders of multi-combat areas, and the level 20/30<br>"
 			+ "lines, on the ground.</html>",
-		position = 14,
+		position = 15,
 		closedByDefault = true
 	)
 	String multiLinesSection = "multiLinesSection";
@@ -1285,7 +1355,7 @@ public interface PrepToolsConfig extends Config
 	@ConfigSection(
 		name = "Teleblock Timers",
 		description = "Countdown shown when a player - including you - gets tele-blocked.",
-		position = 16,
+		position = 17,
 		closedByDefault = true
 	)
 	String teleblockSection = "teleblockSection";
@@ -1346,7 +1416,7 @@ public interface PrepToolsConfig extends Config
 	@ConfigSection(
 		name = "Attack Alert",
 		description = "A sound and/or a flashing screen border when you're attacked or frozen.",
-		position = 17,
+		position = 18,
 		closedByDefault = true
 	)
 	String attackAlertSection = "attackAlertSection";
@@ -1514,7 +1584,7 @@ public interface PrepToolsConfig extends Config
 		name = "Scout (Discord)",
 		description = "<html>Hotkey that posts a scout report - team capes seen near<br>"
 			+ "you, world and location - to a Discord channel.</html>",
-		position = 18,
+		position = 19,
 		closedByDefault = true
 	)
 	String scoutSection = "scoutSection";
@@ -1562,6 +1632,124 @@ public interface PrepToolsConfig extends Config
 		return 2;
 	}
 
+	// --- Nicknames section ---
+	// Out of Experimental (2026-10-02) under a new key, nicknamesEnabled, so it's on for everyone -
+	// the old showPlayerNicknames key defaulted off.
+
+	@ConfigSection(
+		name = "Nicknames",
+		description = "Your own nicknames for players, TeamSpeak-style.",
+		position = 20,
+		closedByDefault = true
+	)
+	String nicknamesSection = "nicknamesSection";
+
+	@ConfigItem(
+		keyName = "nicknamesEnabled",
+		name = "Player nicknames",
+		description = "<html>Your own nicknames for any player (sidebar Names tab, or<br>"
+			+ "'Set nickname' on a player - shift-right-click in game, or<br>"
+			+ "right-click in the friends list, friends chat, clan list or<br>"
+			+ "chat), shown after their name in the right-click menu. A<br>"
+			+ "nickname follows a name change only for a player on your<br>"
+			+ "friends or ignore list - the game tells no one else.</html>",
+		position = 1,
+		section = "nicknamesSection"
+	)
+	default boolean showPlayerNicknames()
+	{
+		return true;
+	}
+
+	@ConfigItem(
+		keyName = "nicknameTooltip",
+		name = "Nickname on hover",
+		description = "<html>Shows a player's nickname as a tooltip when you hover<br>"
+			+ "them - in game, in the friends/ignore list, friends chat,<br>"
+			+ "clan list or chat - like Friend Notes does.</html>",
+		position = 2,
+		section = "nicknamesSection"
+	)
+	default boolean nicknameTooltip()
+	{
+		return true;
+	}
+
+	@ConfigItem(
+		keyName = "followFriendRenames",
+		name = "Follow renames between logins",
+		description = "<html>Saves your friends/ignore list per account and compares it<br>"
+			+ "at the next login, so a nickname (and Friend Notes note)<br>"
+			+ "follows a friend who renamed while you were away - even<br>"
+			+ "twice. Unclear cases are offered in the Names tab.</html>",
+		position = 3,
+		section = "nicknamesSection"
+	)
+	default boolean followFriendRenames()
+	{
+		return true;
+	}
+
+	@ConfigItem(
+		keyName = "useFriendNotesAsNicknames",
+		name = "Friend notes as nicknames",
+		description = "<html>Use your Friend Notes plugin notes as nicknames for<br>"
+			+ "players who don't have one here. Those notes already<br>"
+			+ "follow your friends' name changes.</html>",
+		position = 4,
+		section = "nicknamesSection"
+	)
+	default boolean useFriendNotesAsNicknames()
+	{
+		return true;
+	}
+
+	@ConfigItem(
+		keyName = "showNicknamesOverHeads",
+		name = "Nicknames over heads",
+		description = "Also draw nicknames over players' heads, not just in the menu.",
+		position = 5,
+		section = "nicknamesSection"
+	)
+	default boolean showNicknamesOverHeads()
+	{
+		return false;
+	}
+
+	@ConfigItem(
+		keyName = "playerNicknameColor",
+		name = "Nickname colour",
+		description = "Colour of a player's nickname in the menu and over their head.",
+		position = 6,
+		section = "nicknamesSection"
+	)
+	default Color playerNicknameColor()
+	{
+		return new Color(255, 160, 255);
+	}
+
+	// --- Misc section ---
+
+	@ConfigSection(
+		name = "Misc",
+		description = "Small interface additions.",
+		position = 21,
+		closedByDefault = true
+	)
+	String miscSection = "miscSection";
+
+	@ConfigItem(
+		keyName = "showWorldOnMapButton",
+		name = "World on map button",
+		description = "Shows your current world number over the minimap's world map button.",
+		position = 1,
+		section = "miscSection"
+	)
+	default boolean showWorldOnMapButton()
+	{
+		return true;
+	}
+
 	// --- Experimental section ---
 	// New features that haven't been proven in real fights yet - all default off. Once one is
 	// confirmed in game, move it into its own section (keep the key names).
@@ -1570,7 +1758,7 @@ public interface PrepToolsConfig extends Config
 		name = "Experimental",
 		description = "<html>Features still being tested in real fights - all off by<br>"
 			+ "default. Expect rough edges, and report what you see.</html>",
-		position = 19,
+		position = 22,
 		closedByDefault = true
 	)
 	String experimentalSection = "experimentalSection";
@@ -1583,8 +1771,7 @@ public interface PrepToolsConfig extends Config
 			+ "eat, 9 hp a bite, so potions (no heal) don't count and two<br>"
 			+ "bites at once count as two - and shows it over their head,<br>"
 			+ "e.g. 'Ate 14 (~7 left)', turning into 'LOW FOOD' once<br>"
-			+ "they're nearly out. '+2?' = eats seen while their health<br>"
-			+ "bar wasn't showing, so the heal couldn't be measured.<br>"
+			+ "they're nearly out. Food eaten at full hp can't be seen.<br>"
 			+ "Reset when they die (out of the round - back next round<br>"
 			+ "with full food) and for everyone when you enter the Clan<br>"
 			+ "Wars portal. Shift-right-click a player 'Reset food count'<br>"
@@ -1660,26 +1847,12 @@ public interface PrepToolsConfig extends Config
 		return new Color(80, 255, 80);
 	}
 
-	@Range(min = 1, max = 60)
-	@ConfigItem(
-		keyName = "foodForgetMinutes",
-		name = "Forget eats after (min)",
-		description = "<html>An enemy's eat count is dropped once they haven't been<br>"
-			+ "seen for this long - they've probably left and restocked.</html>",
-		position = 7,
-		section = "experimentalSection"
-	)
-	default int foodForgetMinutes()
-	{
-		return 15;
-	}
-
 	@ConfigItem(
 		keyName = "foodResetHotkey",
 		name = "Reset food counts hotkey",
 		description = "<html>Resets every enemy's food count, e.g. at the start of a<br>"
 			+ "round if entering the portal didn't already do it.</html>",
-		position = 8,
+		position = 7,
 		section = "experimentalSection"
 	)
 	default Keybind foodResetHotkey()
@@ -1690,11 +1863,11 @@ public interface PrepToolsConfig extends Config
 	@Range(min = 10, max = 99)
 	@ConfigItem(
 		keyName = "foodEnemyMaxHp",
-		name = "Enemy max HP",
+		name = "Enemy max HP (until measured)",
 		description = "<html>The game only sends other players' health as a bar, not<br>"
-			+ "hitpoints - this is the hitpoints level it's assumed to stand<br>"
-			+ "for when working out how much they healed.</html>",
-		position = 9,
+			+ "hitpoints. Each enemy's max hp is measured from the hits<br>"
+			+ "they take; until there's enough of those, this is assumed.</html>",
+		position = 8,
 		section = "experimentalSection"
 	)
 	default int foodEnemyMaxHp()
@@ -1712,7 +1885,7 @@ public interface PrepToolsConfig extends Config
 			+ "colour, their Attack option is greyed, and they never get<br>"
 			+ "a prioritised left-click Attack. Wilderness and PvP worlds<br>"
 			+ "only - does nothing in Clan Wars or Ferox Enclave.</html>",
-		position = 10,
+		position = 9,
 		section = "experimentalSection"
 	)
 	default boolean attackRangeFilter()
@@ -1727,7 +1900,7 @@ public interface PrepToolsConfig extends Config
 			+ "Anyone on your team: greyed only if nobody on your team<br>"
 			+ "on screen can - for a team spread over a few combat<br>"
 			+ "levels, where a pile some of you can't reach is still a pile.</html>",
-		position = 11,
+		position = 10,
 		section = "experimentalSection"
 	)
 	default AttackRangeBasis attackRangeBasis()
@@ -1742,7 +1915,7 @@ public interface PrepToolsConfig extends Config
 		description = "<html>Widens the bracket by this many combat levels each way, so<br>"
 			+ "someone a step from being in range (the fight drifting a<br>"
 			+ "wilderness level deeper) isn't greyed out yet.</html>",
-		position = 12,
+		position = 11,
 		section = "experimentalSection"
 	)
 	default int attackRangeMargin()
@@ -1755,7 +1928,7 @@ public interface PrepToolsConfig extends Config
 		keyName = "outOfRangeColor",
 		name = "Out-of-range colour",
 		description = "Highlight and Attack option colour for an out-of-range enemy.",
-		position = 13,
+		position = 12,
 		section = "experimentalSection"
 	)
 	default Color outOfRangeColor()
@@ -1767,10 +1940,12 @@ public interface PrepToolsConfig extends Config
 		keyName = "enablePerformanceTracker",
 		name = "Team performance tracker",
 		description = "<html>Records each teammate's fight numbers on the sidebar's<br>"
-			+ "Stats tab: time on the called target, how fast they switch<br>"
-			+ "to a new one, attacks, damage taken, eats, deaths, kills.<br>"
-			+ "Only counts what happens on your screen.</html>",
-		position = 14,
+			+ "Stats tab, per round (each trip through the Clan Wars<br>"
+			+ "portal): time on the called target (targets that died only),<br>"
+			+ "switch time, attacks, damage taken, eats, deaths, on pile,<br>"
+			+ "plus a fight log of every death. Only counts what happens<br>"
+			+ "on your screen.</html>",
+		position = 13,
 		section = "experimentalSection"
 	)
 	default boolean enablePerformanceTracker()
@@ -1784,7 +1959,7 @@ public interface PrepToolsConfig extends Config
 		name = "Rate after (seconds)",
 		description = "<html>A teammate is only rated high/low once they've been on<br>"
 			+ "screen this long while a target was called.</html>",
-		position = 15,
+		position = 14,
 		section = "experimentalSection"
 	)
 	default int performanceMinTargetSeconds()
@@ -1792,87 +1967,48 @@ public interface PrepToolsConfig extends Config
 		return 30;
 	}
 
+	@Range(min = 1, max = 10)
 	@ConfigItem(
-		keyName = "showPlayerNicknames",
-		name = "Player nicknames",
-		description = "<html>Your own nicknames for any player (sidebar Names tab, or<br>"
-			+ "shift-right-click a player, 'Set nickname'), shown after<br>"
-			+ "their name in the right-click menu. A nickname follows a<br>"
-			+ "name change only for a player on your friends or ignore<br>"
-			+ "list - the game tells no one else.</html>",
+		keyName = "easyDeathMaxAttackers",
+		name = "Easy death: max attackers",
+		description = "<html>Fight log: a teammate's death is only flagged 'easy' if no<br>"
+			+ "more than this many enemies were on them in their last 10s.<br>"
+			+ "Dying to a bigger pile is understandable - never flagged.</html>",
+		position = 15,
+		section = "experimentalSection"
+	)
+	default int easyDeathMaxAttackers()
+	{
+		return 3;
+	}
+
+	@Range(min = 1, max = 60)
+	@ConfigItem(
+		keyName = "easyDeathMinSeconds",
+		name = "Easy death: min seconds",
+		description = "<html>...and only if they'd been under attack at least this long -<br>"
+			+ "long enough to have eaten. A quick burst isn't flagged.</html>",
 		position = 16,
 		section = "experimentalSection"
 	)
-	default boolean showPlayerNicknames()
+	default int easyDeathMinSeconds()
 	{
-		return false;
+		return 6;
 	}
 
+	@Range(min = 0, max = 10)
 	@ConfigItem(
-		keyName = "useFriendNotesAsNicknames",
-		name = "Friend notes as nicknames",
-		description = "<html>Use your Friend Notes plugin notes as nicknames for<br>"
-			+ "players who don't have one here. Those notes already<br>"
-			+ "follow your friends' name changes.</html>",
+		keyName = "easyDeathMaxPizzas",
+		name = "Easy death: max pizzas",
+		description = "<html>...and only if they ate no more than this many pizzas while<br>"
+			+ "under attack. Also never flagged if they were off your<br>"
+			+ "screen at any point - you didn't see it all.</html>",
 		position = 17,
 		section = "experimentalSection"
 	)
-	default boolean useFriendNotesAsNicknames()
+	default int easyDeathMaxPizzas()
 	{
-		return true;
-	}
-
-	@ConfigItem(
-		keyName = "showNicknamesOverHeads",
-		name = "Nicknames over heads",
-		description = "<html>Also draw nicknames (and 'NOT Nick?' lookalike warnings)<br>"
-			+ "over players' heads, not just in the menu.</html>",
-		position = 18,
-		section = "experimentalSection"
-	)
-	default boolean showNicknamesOverHeads()
-	{
-		return false;
-	}
-
-	@ConfigItem(
-		keyName = "playerNicknameColor",
-		name = "Nickname colour",
-		description = "Colour of a player's nickname in the menu and over their head.",
-		position = 19,
-		section = "experimentalSection"
-	)
-	default Color playerNicknameColor()
-	{
-		return new Color(255, 160, 255);
-	}
-
-	@ConfigItem(
-		keyName = "warnLookalikeNames",
-		name = "Warn on lookalike names",
-		description = "<html>Flags a player whose name is one letter off a nicknamed<br>"
-			+ "player's, or only differs by lookalike characters (I/l/1,<br>"
-			+ "O/0, rn/m, vv/w, spaces/-/_): 'NOT Nick?' in the menu<br>"
-			+ "(and over their head with that on) - a clan renaming to<br>"
-			+ "confuse you.</html>",
-		position = 20,
-		section = "experimentalSection"
-	)
-	default boolean warnLookalikeNames()
-	{
-		return true;
-	}
-
-	@ConfigItem(
-		keyName = "lookalikeNameColor",
-		name = "Lookalike colour",
-		description = "Colour of the 'NOT Nick?' lookalike warning.",
-		position = 21,
-		section = "experimentalSection"
-	)
-	default Color lookalikeNameColor()
-	{
-		return new Color(255, 60, 60);
+		return 1;
 	}
 
 	// Hidden: edited only from the sidebar and the menu (see the note on the callers list).
@@ -1893,7 +2029,7 @@ public interface PrepToolsConfig extends Config
 	@ConfigSection(
 		name = "Debug",
 		description = "Diagnostic logging - only needed if something isn't working.",
-		position = 20,
+		position = 23,
 		closedByDefault = true
 	)
 	String debugSection = "debugSection";
@@ -1935,7 +2071,7 @@ public interface PrepToolsConfig extends Config
 	@ConfigSection(
 		name = "Freeze Timers",
 		description = "Countdown shown when a player - including you - gets frozen.",
-		position = 15,
+		position = 16,
 		closedByDefault = true
 	)
 	String freezeSection = "freezeSection";
