@@ -455,6 +455,21 @@ variable rules failed CI after a refactor that passed compile, checkstyle and te
 `:buildAll` passing locally is NOT enough for Javadoc - this machine's JDK only warns where CI
 errors; see the strict Javadoc check in the lessons below.
 
+**Jagex accounts / RL Account Selector app** (`tools/rl-account-selector/`, `install.sh` adds a
+menu entry + `rl-account-selector`): GTK app listing `~/.runelite/Accounts/*.properties` (the user's
+`--insecure-write-credentials` dumps) with Play / Rebuild / Rebuild & Play. Read from the
+injected client (the wiki doesn't say): it loads `new File(~/.runelite,
+System.getProperty("runelite.credentials.path", "credentials.properties"))` and **writes
+refreshed tokens back to that file**. So the app (and `./run-runelite.sh <account>`) passes
+`-Drunelite.credentials.path=Accounts/<name>.properties` via `JDK_JAVA_OPTIONS` - no copying,
+accounts side by side. "Copy mode" keeps the old copy-to-`credentials.properties` workflow but
+saves that file back to its account (matched by `JX_CHARACTER_ID`) before switching away.
+"No account" (pinned first row) = the normal login screen: points the property at
+`no-credentials/none.properties` (folder doesn't exist) and strips `JX_*` env vars, which the
+client also reads credentials from. Icon: `icon.png`, the user's artwork cropped to a circle round the wreath, filling the icon, made by
+`make-icon.py` (re-run it to change the artwork, then `install.sh`: GNOME caches an icon by path until logout, so
+install.sh copies it to a content-hashed name under `~/.local/share/icons/rl-account-selector/`); the desktop entry is named after the app id so GNOME's dock matches it.
+
 **Always ask before killing/relaunching the running dev client**, even after rebuilding the jar and
 even mid-task. Rebuilding is fine to do without asking — that's non-disruptive. Restarting the
 client kills whatever game session is active (possibly mid-fight), so confirm first every time,
