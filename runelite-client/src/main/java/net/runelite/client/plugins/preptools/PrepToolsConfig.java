@@ -595,6 +595,21 @@ public interface PrepToolsConfig extends Config
 		return true;
 	}
 
+	@ConfigItem(
+		keyName = "blockBindsOnHeldPlayers",
+		name = "Block binds on frozen players",
+		description = "<html>Removes 'Cast' Bind, Snare and Entangle on a player who is<br>"
+			+ "frozen right now - the game refuses them ('already held by a<br>"
+			+ "magical force'). Ice spells are never blocked: they still hit.<br>"
+			+ "Uses Freeze Timers' tracking, so only as good as that.</html>",
+		position = 8,
+		section = "menuSection"
+	)
+	default boolean blockBindsOnHeldPlayers()
+	{
+		return true;
+	}
+
 	// --- Targeted player (friends chat) section ---
 
 	@ConfigSection(
@@ -1939,12 +1954,12 @@ public interface PrepToolsConfig extends Config
 	@ConfigItem(
 		keyName = "enablePerformanceTracker",
 		name = "Team performance tracker",
-		description = "<html>Records each teammate's fight numbers on the sidebar's<br>"
-			+ "Stats tab, per round (each trip through the Clan Wars<br>"
-			+ "portal): time on the called target (targets that died only),<br>"
-			+ "switch time, attacks, damage taken, eats, deaths, on pile,<br>"
-			+ "plus a fight log of every death. Only counts what happens<br>"
-			+ "on your screen.</html>",
+		description = "<html>Lists each teammate on the sidebar's Stats tab, in the<br>"
+			+ "order they died, per round (each trip through the Clan Wars<br>"
+			+ "portal): when they died, pizzas eaten, how many kills they<br>"
+			+ "were on the pile for, and their average place getting onto<br>"
+			+ "piles (a missed pile counts as last). Only counts what<br>"
+			+ "happens on your screen.</html>",
 		position = 13,
 		section = "experimentalSection"
 	)
@@ -1953,62 +1968,114 @@ public interface PrepToolsConfig extends Config
 		return false;
 	}
 
-	@Range(min = 10, max = 600)
 	@ConfigItem(
-		keyName = "performanceMinTargetSeconds",
-		name = "Rate after (seconds)",
-		description = "<html>A teammate is only rated high/low once they've been on<br>"
-			+ "screen this long while a target was called.</html>",
-		position = 14,
+		keyName = "blockBindsOnImmunePlayers",
+		name = "Block binds on immune players",
+		description = "<html>Removes 'Cast' Bind, Snare and Entangle on a player in the<br>"
+			+ "5 ticks after a freeze when they can't be frozen again (the<br>"
+			+ "game refuses: 'currently immune'). Ice spells are never blocked.</html>",
+		position = 18,
 		section = "experimentalSection"
 	)
-	default int performanceMinTargetSeconds()
+	default boolean blockBindsOnImmunePlayers()
 	{
-		return 30;
+		return false;
 	}
 
-	@Range(min = 1, max = 10)
 	@ConfigItem(
-		keyName = "easyDeathMaxAttackers",
-		name = "Easy death: max attackers",
-		description = "<html>Fight log: a teammate's death is only flagged 'easy' if no<br>"
-			+ "more than this many enemies were on them in their last 10s.<br>"
-			+ "Dying to a bigger pile is understandable - never flagged.</html>",
-		position = 15,
+		keyName = "bigHitpoints",
+		name = "Big hitpoints display",
+		description = "<html>Your hitpoints as a big number with a bar, under your<br>"
+			+ "character where your eyes already are in a fight. Green to<br>"
+			+ "red as they drop; pulses below the low hitpoints mark.</html>",
+		position = 19,
 		section = "experimentalSection"
 	)
-	default int easyDeathMaxAttackers()
+	default boolean bigHitpoints()
 	{
-		return 3;
+		return false;
 	}
 
-	@Range(min = 1, max = 60)
+	@Range(min = 12, max = 72)
 	@ConfigItem(
-		keyName = "easyDeathMinSeconds",
-		name = "Easy death: min seconds",
-		description = "<html>...and only if they'd been under attack at least this long -<br>"
-			+ "long enough to have eaten. A quick burst isn't flagged.</html>",
-		position = 16,
+		keyName = "bigHitpointsSize",
+		name = "Big hitpoints size",
+		description = "Font size of the big hitpoints number.",
+		position = 20,
 		section = "experimentalSection"
 	)
-	default int easyDeathMinSeconds()
+	default int bigHitpointsSize()
 	{
-		return 6;
+		return 32;
 	}
 
-	@Range(min = 0, max = 10)
 	@ConfigItem(
-		keyName = "easyDeathMaxPizzas",
-		name = "Easy death: max pizzas",
-		description = "<html>...and only if they ate no more than this many pizzas while<br>"
-			+ "under attack. Also never flagged if they were off your<br>"
-			+ "screen at any point - you didn't see it all.</html>",
-		position = 17,
+		keyName = "lowHitpointsVignette",
+		name = "Low hitpoints red edges",
+		description = "<html>Below the low hitpoints mark, the edges of the game screen<br>"
+			+ "glow red - stronger the lower you go, pulsing - so you notice<br>"
+			+ "without looking at anything.</html>",
+		position = 21,
 		section = "experimentalSection"
 	)
-	default int easyDeathMaxPizzas()
+	default boolean lowHitpointsVignette()
 	{
-		return 1;
+		return false;
+	}
+
+	@Range(min = 1, max = 99)
+	@ConfigItem(
+		keyName = "lowHitpointsPercent",
+		name = "Low hitpoints mark (%)",
+		description = "<html>At or below this share of your max hitpoints, the big<br>"
+			+ "display pulses and the red edges show.</html>",
+		position = 22,
+		section = "experimentalSection"
+	)
+	default int lowHitpointsPercent()
+	{
+		return 50;
+	}
+
+	@ConfigItem(
+		keyName = "multiAttackAlert",
+		name = "Piled alert sound",
+		description = "<html>A sound of its own when more than the number below of<br>"
+			+ "enemies are attacking you at once. Played instead of the<br>"
+			+ "Attack Alert sound if both happen on one tick. Uses Attack<br>"
+			+ "Alert's volume, cooldown and custom file.</html>",
+		position = 23,
+		section = "experimentalSection"
+	)
+	default boolean multiAttackAlert()
+	{
+		return false;
+	}
+
+	@Range(min = 1, max = 20)
+	@ConfigItem(
+		keyName = "multiAttackThreshold",
+		name = "Piled: more than",
+		description = "The alert plays when more than this many enemies are attacking you.",
+		position = 24,
+		section = "experimentalSection"
+	)
+	default int multiAttackThreshold()
+	{
+		return 2;
+	}
+
+	@ConfigItem(
+		keyName = "multiAttackSound",
+		name = "Piled sound",
+		description = "<html>Which sound. Sailing chart is the sound the game plays when<br>"
+			+ "you chart something in Sailing.</html>",
+		position = 25,
+		section = "experimentalSection"
+	)
+	default AttackAlertSound multiAttackSound()
+	{
+		return AttackAlertSound.SAILING_CHART;
 	}
 
 	// Hidden: edited only from the sidebar and the menu (see the note on the callers list).

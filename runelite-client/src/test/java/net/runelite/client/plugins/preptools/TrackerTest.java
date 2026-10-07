@@ -3,7 +3,6 @@ package net.runelite.client.plugins.preptools;
 import java.util.Arrays;
 import java.util.Collections;
 import java.util.EnumSet;
-import java.util.Set;
 import java.util.List;
 import net.runelite.api.Client;
 import net.runelite.api.Friend;
@@ -153,7 +152,8 @@ public class TrackerTest
 	public void aSnareLandingWithASplashOnTheSameTickStillFreezes()
 	{
 		// You splash, a teammate's snare catches, same tick. The game keeps one graphic per slot
-		// (the second replaces the first) but reports each as it's set - either order freezes.
+		// (the second replaces the first); if it reports each as it's set, either order freezes.
+		// If only the splash arrives, see aMissedFreezeIsInferredFromTheAlreadyHeldMessage().
 		for (boolean splashFirst : new boolean[]{false, true})
 		{
 			FreezeTracker freezes = new FreezeTracker(client, config, team);
@@ -163,6 +163,56 @@ public class TrackerTest
 			freezes.onGraphicChanged(enemyA);
 			assertTrue("splash first: " + splashFirst, freezes.isFrozen(enemyA));
 		}
+	}
+
+	@Test
+	public void heldAndImmuneFollowTheRealSpellDuration()
+	{
+		FreezeTracker freezes = new FreezeTracker(client, config, team);
+		spotAnims(enemyA, GraphicID.SNARE);
+		freezes.onGraphicChanged(enemyA);
+
+		// Snare holds 16 ticks, then 5 immune - the shown countdown's extra tick doesn't count.
+		tick = 15;
+		assertTrue(freezes.isHeld(enemyA));
+		assertFalse(freezes.isImmune(enemyA));
+		tick = 16;
+		assertFalse(freezes.isHeld(enemyA));
+		assertTrue(freezes.isImmune(enemyA));
+		tick = 20;
+		assertTrue(freezes.isImmune(enemyA));
+		tick = 21;
+		assertFalse(freezes.isImmune(enemyA));
+		assertFalse(freezes.isHeld(enemyB));
+		assertFalse(freezes.isImmune(enemyB));
+	}
+
+	@Test
+	public void aMissedFreezeIsInferredFromTheAlreadyHeldMessage()
+	{
+		// Only your splash reached the client; 3 ticks later the game says your bind's target is
+		// already held - the teammate's snare landed with the splash.
+		FreezeTracker freezes = new FreezeTracker(client, config, team);
+		tick = 4;
+		spotAnims(enemyA, GraphicID.SPLASH);
+		freezes.onGraphicChanged(enemyA);
+		assertFalse(freezes.isFrozen(enemyA));
+
+		tick = 7;
+		freezes.onGameTick();
+		freezes.onTargetAlreadyHeld(enemyA);
+		FreezeState state = freezes.getFreezeStates().get(enemyA);
+		assertEquals(4, state.startTick);
+		assertEquals(4 + 16 + 5, state.immunityEndTick);
+		assertTrue(freezes.isHeld(enemyA));
+
+		// No splash seen: assume it started now.
+		freezes.onTargetAlreadyHeld(enemyB);
+		assertEquals(7, freezes.getFreezeStates().get(enemyB).startTick);
+
+		// A freeze we already track is left alone.
+		freezes.onTargetAlreadyHeld(enemyA);
+		assertSame(state, freezes.getFreezeStates().get(enemyA));
 	}
 
 	@Test
@@ -741,7 +791,7 @@ public class TrackerTest
 	private TeamPerformanceTracker performance()
 	{
 		when(config.enablePerformanceTracker()).thenReturn(true);
-		return new TeamPerformanceTracker(client, config, team, new FreezeTracker(client, config, team));
+		return new TeamPerformanceTracker(client, config, team);
 	}
 
 	private static PerformanceRow row(List<PerformanceRow> rows, String name)
@@ -750,86 +800,21 @@ public class TrackerTest
 	}
 
 	@Test
-	public void performanceTracksTimeOnTargetAndSwitches()
-	{
-		TeamPerformanceTracker performance = performance();
-		Set<Player> targets = Collections.singleton(enemyA);
-
-		// Tick 0: target called. Mate is already on it, you aren't.
-		when(mate.getInteracting()).thenReturn(enemyA);
-		performance.onGameTick(null, targets);
-		// Ticks 1-2: you're still elsewhere; tick 3 you switch.
-		when(local.getInteracting()).thenReturn(enemyB);
-		tick = 1;
-		performance.onGameTick(null, targets);
-		tick = 2;
-		performance.onGameTick(null, targets);
-		when(local.getInteracting()).thenReturn(enemyA);
-		tick = 3;
-		performance.onGameTick(null, targets);
-
-		// Nothing counts until the target dies.
-		assertEquals(0, row(performance.currentRows(), "Me").targetTicks);
-		performance.onDeath(enemyA);
-
-		List<PerformanceRow> rows = performance.currentRows();
-		PerformanceRow me = row(rows, "Me");
-		PerformanceRow mateRow = row(rows, "Mate");
-		assertEquals(4, me.targetTicks);
-		assertEquals(1, me.onTargetTicks);
-		assertEquals(1, me.switches);
-		assertEquals(3.0, me.averageSwitchTicks(), 0.001);
-		assertEquals(100, mateRow.onTargetPercent());
-		assertEquals(0.0, mateRow.averageSwitchTicks(), 0.001);
-		assertTrue(me.isYou);
-	}
-
-	@Test
-	public void aSlowSwitchIsStillMeasuredAndAnUnreachedTargetIsNotAMiss()
-	{
-		TeamPerformanceTracker performance = performance();
-		when(local.getInteracting()).thenReturn(enemyB);
-
-		// Mate never reaches enemyA before it's re-called - no measurement, no penalty.
-		performance.onGameTick(null, Collections.singleton(enemyA));
-		tick = 20;
-		performance.onGameTick(null, Collections.singleton(enemyB));
-		assertEquals(0, row(performance.currentRows(), "Mate").switches);
-
-		// Mate takes 30 ticks to get onto enemyB - slow, but counted once B dies.
-		tick = 50;
-		when(mate.getInteracting()).thenReturn(enemyB);
-		performance.onGameTick(null, Collections.singleton(enemyB));
-		performance.onDeath(enemyB);
-		assertEquals(30.0, row(performance.currentRows(), "Mate").averageSwitchTicks(), 0.001);
-	}
-
-	@Test
-	public void performanceCountsAttacksEatsDamageAndKills()
+	public void statsCountPizzasPilesAndDeaths()
 	{
 		TeamPerformanceTracker performance = performance();
 		when(mate.getInteracting()).thenReturn(enemyA);
-		performance.onGameTick(null, Collections.singleton(enemyA));
+		performance.onGameTick();
 
-		animate(mate, 7855);
-		performance.onAnimationChanged(mate);
-		animate(mate, AnimationID.HUMAN_SHIELD_DEFENCE);
+		animate(mate, AnimationID.HUMAN_EAT);
 		performance.onAnimationChanged(mate);
 		animate(mate, AnimationID.HUMAN_EAT);
 		performance.onAnimationChanged(mate);
-		// Enemies' animations aren't tracked.
-		animate(enemyA, 7855);
+		// A block isn't an attack or an eat; enemies' animations aren't tracked.
+		animate(mate, AnimationID.HUMAN_SHIELD_DEFENCE);
+		performance.onAnimationChanged(mate);
+		animate(enemyA, AnimationID.HUMAN_EAT);
 		performance.onAnimationChanged(enemyA);
-
-		Hitsplat hit = mock(Hitsplat.class, withSettings().defaultAnswer(CALLS_REAL_METHODS));
-		when(hit.getHitsplatType()).thenReturn(HitsplatID.DAMAGE_OTHER);
-		when(hit.getAmount()).thenReturn(25);
-		performance.onHitsplatApplied(mate, hit);
-
-		Hitsplat mine = mock(Hitsplat.class, withSettings().defaultAnswer(CALLS_REAL_METHODS));
-		when(mine.getHitsplatType()).thenReturn(HitsplatID.DAMAGE_ME);
-		when(mine.getAmount()).thenReturn(30);
-		performance.onHitsplatApplied(enemyA, mine);
 
 		// Death animation and ActorDeath both report it - one kill.
 		tick = 3;
@@ -837,15 +822,95 @@ public class TrackerTest
 		performance.onDeath(enemyA);
 
 		PerformanceRow mateRow = row(performance.currentRows(), "Mate");
-		assertEquals(1, mateRow.attacks);
-		assertEquals(1, mateRow.attacksOnTarget);
-		assertEquals(1, mateRow.eats);
-		assertEquals(25, mateRow.damageTaken);
+		assertEquals(2, mateRow.pizzas);
 		assertEquals(1, mateRow.onPile);
-		assertEquals(-1, mateRow.damageDealt);
-		assertEquals(30, row(performance.currentRows(), "Me").damageDealt);
-		// You weren't on enemyA.
+		assertEquals(1, mateRow.pilesAround);
+		// You were around but not on enemyA.
 		assertEquals(0, row(performance.currentRows(), "Me").onPile);
+		assertEquals(1, row(performance.currentRows(), "Me").pilesAround);
+		assertEquals(1, performance.snapshot().get(0).kills);
+
+		// Mate dies: first in the list, with the time; you're still alive.
+		tick = 30;
+		performance.onDeath(mate);
+		List<PerformanceRow> rows = performance.currentRows();
+		assertEquals("Mate", rows.get(0).name);
+		assertEquals(1, rows.get(0).deathMillis.size());
+		assertTrue(row(rows, "Me").deathMillis.isEmpty());
+	}
+
+	@Test
+	public void aKillNobodyCouldSeeIsNotCountedAgainstThem()
+	{
+		TeamPerformanceTracker performance = performance();
+		performance.onGameTick();
+		// Mate leaves your screen for a long time; an enemy dies meanwhile.
+		setPlayers(local, enemyA, enemyB);
+		tick = TeamPerformanceTracker.PILE_CREDIT_TICKS + 5;
+		performance.onGameTick();
+		performance.onDeath(enemyA);
+		assertEquals(0, row(performance.currentRows(), "Mate").pilesAround);
+		assertEquals(1, row(performance.currentRows(), "Me").pilesAround);
+	}
+
+	@Test
+	public void pileOrderIsThePlaceTeammatesGotOnAndAMissIsLast()
+	{
+		TeamPerformanceTracker performance = performance();
+		Player other = player("Other", true);
+		setPlayers(local, mate, other, enemyA, enemyB);
+		team.refresh();
+
+		// Pile 1 on enemy A: Mate on at tick 0, you at tick 2, Other never.
+		when(mate.getInteracting()).thenReturn(enemyA);
+		performance.onGameTick();
+		tick = 2;
+		when(local.getInteracting()).thenReturn(enemyA);
+		performance.onGameTick();
+		tick = 4;
+		performance.onDeath(enemyA);
+
+		// Pile 2 on enemy B: Other first, then you; Mate never.
+		when(mate.getInteracting()).thenReturn(null);
+		when(local.getInteracting()).thenReturn(null);
+		when(other.getInteracting()).thenReturn(enemyB);
+		tick = 30;
+		performance.onGameTick();
+		when(local.getInteracting()).thenReturn(enemyB);
+		tick = 31;
+		performance.onGameTick();
+		tick = 33;
+		performance.onDeath(enemyB);
+
+		List<PerformanceRow> rows = performance.currentRows();
+		// Mate: 1st, then missed = last of 3 around.
+		assertEquals(2.0, row(rows, "Mate").averagePileOrder(), 0.001);
+		// You: 2nd both times.
+		assertEquals(2.0, row(rows, "Me").averagePileOrder(), 0.001);
+		// Other: missed (3rd), then 1st.
+		assertEquals(2.0, row(rows, "Other").averagePileOrder(), 0.001);
+		assertEquals(1, row(rows, "Other").onPile);
+		assertEquals(2, row(rows, "Other").pilesAround);
+	}
+
+	@Test
+	public void anOldChipDoesNotMakeYouFirstOntoThePile()
+	{
+		TeamPerformanceTracker performance = performance();
+		// You chip enemy A at tick 0, leave, and come back long after Mate started the real pile.
+		when(local.getInteracting()).thenReturn(enemyA);
+		performance.onGameTick();
+		when(local.getInteracting()).thenReturn(null);
+		when(mate.getInteracting()).thenReturn(enemyA);
+		for (tick = 10; tick < 10 + TeamPerformanceTracker.PILE_CREDIT_TICKS + 5; tick++)
+		{
+			performance.onGameTick();
+		}
+		when(local.getInteracting()).thenReturn(enemyA);
+		performance.onGameTick();
+		performance.onDeath(enemyA);
+		assertEquals(1.0, row(performance.currentRows(), "Mate").averagePileOrder(), 0.001);
+		assertEquals(2.0, row(performance.currentRows(), "Me").averagePileOrder(), 0.001);
 	}
 
 	private static Friend friend(String name)
@@ -935,19 +1000,21 @@ public class TrackerTest
 	public void eachRoundHasItsOwnNumbers()
 	{
 		TeamPerformanceTracker performance = performance();
-		performance.onGameTick(null, Collections.emptySet());
-		assertEquals(1, row(performance.currentRows(), "Mate").ticksSeen);
+		animate(mate, AnimationID.HUMAN_EAT);
+		performance.onAnimationChanged(mate);
+		assertEquals(1, row(performance.currentRows(), "Mate").pizzas);
 
 		// Through the portal.
 		performance.startRound();
 		tick = 1;
-		performance.onGameTick(null, Collections.emptySet());
-		performance.onGameTick(null, Collections.emptySet());
+		performance.onGameTick();
+		performance.onAnimationChanged(mate);
+		performance.onAnimationChanged(mate);
 
 		List<PerformanceRound> rounds = performance.snapshot();
 		assertEquals(2, rounds.size());
-		assertEquals(1, row(rounds.get(0).rows, "Mate").ticksSeen);
-		assertEquals(2, row(rounds.get(1).rows, "Mate").ticksSeen);
+		assertEquals(1, row(rounds.get(0).rows, "Mate").pizzas);
+		assertEquals(2, row(rounds.get(1).rows, "Mate").pizzas);
 
 		// An empty round isn't kept: going through again before anything happened just restarts it.
 		performance.startRound();
@@ -971,126 +1038,19 @@ public class TrackerTest
 		when(mate.getInteracting()).thenReturn(null);
 		for (tick = 1; tick <= TeamPerformanceTracker.PILE_CREDIT_TICKS - 2; tick++)
 		{
-			performance.onGameTick(null, Collections.emptySet());
+			performance.onGameTick();
 		}
 		performance.onDeath(enemyA);
 		assertEquals(1, row(performance.currentRows(), "Mate").onPile);
 
 		// Too long ago doesn't count.
 		when(local.getInteracting()).thenReturn(enemyB);
-		performance.onGameTick(null, Collections.emptySet());
+		performance.onGameTick();
 		when(local.getInteracting()).thenReturn(null);
 		tick += TeamPerformanceTracker.PILE_CREDIT_TICKS + 2;
-		performance.onGameTick(null, Collections.emptySet());
+		performance.onGameTick();
 		performance.onDeath(enemyB);
 		assertEquals(0, row(performance.currentRows(), "Me").onPile);
-	}
-
-	@Test
-	public void aChipCallThatNeverDiesDoesNotCount()
-	{
-		TeamPerformanceTracker performance = performance();
-		// The caller chips enemy A for a bit - you're elsewhere - then moves on.
-		when(local.getInteracting()).thenReturn(enemyB);
-		for (tick = 0; tick < 10; tick++)
-		{
-			performance.onGameTick(null, Collections.singleton(enemyA));
-		}
-		for (; tick < 10 + TeamPerformanceTracker.TARGET_EXPIRY_TICKS + 2; tick++)
-		{
-			performance.onGameTick(null, Collections.emptySet());
-		}
-		// Enemy A dies much later, uncalled: still not a called target.
-		performance.onDeath(enemyA);
-		assertEquals(0, row(performance.currentRows(), "Me").targetTicks);
-		FightLogEntry entry = performance.currentRound().log.get(0);
-		assertFalse(entry.called);
-	}
-
-	@Test
-	public void aKilledTargetIsLoggedWithItsCallerAndPile()
-	{
-		TeamPerformanceTracker performance = performance();
-		when(mate.getInteracting()).thenReturn(enemyA);
-		when(local.getInteracting()).thenReturn(enemyA);
-		for (tick = 0; tick < 20; tick++)
-		{
-			performance.onGameTick(mate, Collections.singleton(enemyA));
-		}
-		performance.onDeath(enemyA);
-
-		FightLogEntry entry = performance.currentRound().log.get(0);
-		assertTrue(entry.called);
-		assertEquals("Mate", entry.caller);
-		assertEquals(20, entry.durationTicks);
-		// Most time on the target first - the caller isn't timed on their own call.
-		assertEquals(Arrays.asList("Me", "Mate"), entry.names);
-		assertFalse(entry.teammate);
-	}
-
-	/**
-	 * Enemies attack Mate for the given ticks (Mate eating pizzas times), then Mate dies.
-	 */
-	private FightLogEntry mateDies(TeamPerformanceTracker performance, int ticks, int pizzas, Player... attackers)
-	{
-		for (Player attacker : attackers)
-		{
-			when(attacker.getInteracting()).thenReturn(mate);
-		}
-		for (int i = 0; i < ticks; i++, tick++)
-		{
-			if (i < pizzas)
-			{
-				animate(mate, AnimationID.HUMAN_EAT);
-				performance.onAnimationChanged(mate);
-			}
-			performance.onGameTick(null, Collections.emptySet());
-		}
-		performance.onDeath(mate);
-		List<FightLogEntry> log = performance.currentRound().log;
-		return log.get(log.size() - 1);
-	}
-
-	@Test
-	public void dyingToTwoWithoutEatingIsAnEasyDeath()
-	{
-		when(config.easyDeathMaxAttackers()).thenReturn(3);
-		when(config.easyDeathMinSeconds()).thenReturn(6);
-		when(config.easyDeathMaxPizzas()).thenReturn(1);
-		TeamPerformanceTracker performance = performance();
-
-		FightLogEntry entry = mateDies(performance, 15, 0, enemyA, enemyB);
-		assertTrue(entry.teammate);
-		assertTrue(entry.easy);
-		assertEquals(Arrays.asList("Enemy A", "Enemy B"), entry.names);
-		assertEquals(15, entry.durationTicks);
-		assertEquals(1, row(performance.currentRows(), "Mate").easyDeaths);
-	}
-
-	@Test
-	public void deathsWithoutClearEvidenceAreNotFlagged()
-	{
-		when(config.easyDeathMaxAttackers()).thenReturn(1);
-		when(config.easyDeathMinSeconds()).thenReturn(6);
-		when(config.easyDeathMaxPizzas()).thenReturn(1);
-
-		// Too many on them.
-		assertFalse(mateDies(performance(), 15, 0, enemyA, enemyB).easy);
-		// Ate plenty.
-		assertFalse(mateDies(performance(), 15, 5, enemyA).easy);
-		// Too quick to have eaten.
-		assertFalse(mateDies(performance(), 4, 0, enemyA).easy);
-
-		// Off your screen part of the time: you didn't see it all.
-		TeamPerformanceTracker performance = performance();
-		when(enemyA.getInteracting()).thenReturn(mate);
-		performance.onGameTick(null, Collections.emptySet());
-		setPlayers(local, enemyA);
-		tick++;
-		performance.onGameTick(null, Collections.emptySet());
-		setPlayers(local, mate, enemyA, enemyB);
-		FightLogEntry entry = mateDies(performance, 14, 0, enemyA);
-		assertTrue(entry.partlyOffScreen);
-		assertFalse(entry.easy);
+		assertEquals(2, row(performance.currentRows(), "Me").pilesAround);
 	}
 }

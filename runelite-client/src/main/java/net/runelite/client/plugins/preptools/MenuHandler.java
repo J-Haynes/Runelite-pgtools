@@ -23,7 +23,7 @@ import net.runelite.client.util.ColorUtil;
 /**
  * Right-click menu changes on players: recolouring and prioritising Attack (target, pile, snipe,
  * attacker), making a caller's Follow the left-click, removing Attack and spell casts on
- * teammates, and shift-click Walk here.
+ * teammates, removing binds on players already held (or immune), and shift-click Walk here.
  *
  * Edits happen in PostMenuSort, after the game's own sort - earlier edits get overwritten. The one
  * exception is setDeprioritized() (shift-click Walk here), an input the sort itself reads, so it's
@@ -35,6 +35,12 @@ class MenuHandler
 {
 	private static final Set<String> FREEZE_SPELL_NAMES = Set.of(
 		"bind", "snare", "entangle", "ice rush", "ice burst", "ice blitz", "ice barrage");
+
+	/**
+	 * The binding spells - unlike ice spells, the game refuses them on a held or immune target
+	 * instead of still hitting it, so a cast there is a wasted click.
+	 */
+	private static final Set<String> BINDING_SPELL_NAMES = Set.of("bind", "snare", "entangle");
 
 	/**
 	 * Lunar spells meant for teammates - never blocked by preventFreezingTeammates().
@@ -51,12 +57,13 @@ class MenuHandler
 	private final HighlightTracker highlights;
 	private final AttackRangeFilter range;
 	private final PlayerNicknameTracker nicknames;
+	private final FreezeTracker freezes;
 
 	private long lastDebugLogMillis;
 
 	@Inject
 	MenuHandler(Client client, PrepToolsConfig config, TeamTracker team, HighlightTracker highlights, AttackRangeFilter range,
-		PlayerNicknameTracker nicknames)
+		PlayerNicknameTracker nicknames, FreezeTracker freezes)
 	{
 		this.client = client;
 		this.config = config;
@@ -64,6 +71,7 @@ class MenuHandler
 		this.highlights = highlights;
 		this.range = range;
 		this.nicknames = nicknames;
+		this.freezes = freezes;
 	}
 
 	static String stripTags(String text)
@@ -114,6 +122,8 @@ class MenuHandler
 		Map<Player, HighlightStyle> styles = config.colourAttackOption() ? highlights.getStyles() : null;
 		Map<Player, String> playerNicknames = nicknames.getNicknames();
 		boolean blockTeammateSpells = config.preventFreezingTeammates();
+		boolean blockBindsOnHeld = config.blockBindsOnHeldPlayers();
+		boolean blockBindsOnImmune = config.blockBindsOnImmunePlayers();
 		boolean hideTeammateAttack = config.hideAttackOnTeammates();
 		boolean shiftWalk = isShiftWalkActive();
 		boolean prioritiseFollow = config.prioritiseCallerFollow() && !shiftWalk;
@@ -249,7 +259,9 @@ class MenuHandler
 				// The spell name is in TARGET ("Snare -> Name (level-92)"); OPTION is just "Cast".
 				String spell = isFreezeSpellName(option) ? option
 					: selectedSpell != null ? selectedSpell : spellNameFromTarget(entry.getTarget());
-				if (blockTeammateSpells && teammate && !isTeamSupportSpellName(spell))
+				if (blockTeammateSpells && teammate && !isTeamSupportSpellName(spell)
+					|| isBindingSpellName(spell) && (blockBindsOnHeld && freezes.isHeld(player)
+					|| blockBindsOnImmune && freezes.isImmune(player)))
 				{
 					removedAny = true;
 					removedLeftClick |= i == entries.length - 1;
@@ -317,6 +329,11 @@ class MenuHandler
 	static boolean isFreezeSpellName(String name)
 	{
 		return name != null && FREEZE_SPELL_NAMES.contains(name.toLowerCase());
+	}
+
+	static boolean isBindingSpellName(String name)
+	{
+		return name != null && BINDING_SPELL_NAMES.contains(name.toLowerCase());
 	}
 
 	static boolean isTeamSupportSpellName(String name)

@@ -13,7 +13,8 @@ import net.runelite.client.audio.AudioPlayer;
 /**
  * The Attack Alert config section: a sound and/or a flashing screen border (drawn by
  * ScreenBorderFlashOverlay) when an enemy starts attacking you, and a border when you're frozen -
- * optionally kept on, solid, until the freeze ends.
+ * optionally kept on, solid, until the freeze ends. Experimental: a sound of its own when you're
+ * piled - more than multiAttackThreshold enemies on you at once.
  */
 @Slf4j
 class AttackAlert
@@ -29,6 +30,8 @@ class AttackAlert
 
 	private boolean previouslyAttacked;
 	private long lastAlertMillis;
+	private boolean previouslyPiled;
+	private long lastPiledAlertMillis;
 
 	// Written on the client thread, read by the overlay while rendering.
 	private volatile Color borderFlashColor;
@@ -56,27 +59,39 @@ class AttackAlert
 	{
 		boolean sound = config.attackAlertSound();
 		boolean flash = config.borderFlashWhenAttacked();
+		boolean piledSound = config.multiAttackAlert();
 		Player local = client.getLocalPlayer();
-		boolean attacked = false;
-		if ((sound || flash) && local != null)
+		int attackers = 0;
+		if ((sound || flash || piledSound) && local != null)
 		{
 			for (Player player : client.getPlayers())
 			{
 				if (player != null && player != local && player.getInteracting() == local && !team.isOwnTeam(player))
 				{
-					attacked = true;
-					break;
+					attackers++;
 				}
 			}
 		}
+		boolean attacked = attackers > 0;
+		boolean piled = attackers > config.multiAttackThreshold();
 
 		long now = System.currentTimeMillis();
-		if (attacked && !previouslyAttacked && now - lastAlertMillis >= Math.max(0, config.attackAlertCooldownMillis()))
+		long cooldown = Math.max(0, config.attackAlertCooldownMillis());
+		boolean playedPiled = false;
+		if (piledSound && piled && !previouslyPiled && now - lastPiledAlertMillis >= cooldown)
+		{
+			lastPiledAlertMillis = now;
+			playSound(config.multiAttackSound());
+			playedPiled = true;
+		}
+		previouslyPiled = piled;
+
+		if (attacked && !previouslyAttacked && now - lastAlertMillis >= cooldown)
 		{
 			lastAlertMillis = now;
-			if (sound)
+			if (sound && !playedPiled)
 			{
-				playSound();
+				playSound(config.attackAlertGameSound());
 			}
 			if (flash)
 			{
@@ -116,6 +131,8 @@ class AttackAlert
 	{
 		previouslyAttacked = false;
 		lastAlertMillis = 0;
+		previouslyPiled = false;
+		lastPiledAlertMillis = 0;
 		borderFlashEndMillis = 0;
 	}
 
@@ -126,7 +143,7 @@ class AttackAlert
 		borderFlashEndMillis = borderFlashStartMillis + Math.max(0, config.borderFlashDurationMillis());
 	}
 
-	private void playSound()
+	private void playSound(AttackAlertSound choice)
 	{
 		int volume = Math.max(0, Math.min(100, config.attackAlertVolume()));
 		if (volume == 0)
@@ -134,7 +151,6 @@ class AttackAlert
 			return;
 		}
 
-		AttackAlertSound choice = config.attackAlertGameSound();
 		if (choice != AttackAlertSound.CUSTOM_FILE)
 		{
 			// Volume is 0-127 and plays even with the game's sound effects muted.

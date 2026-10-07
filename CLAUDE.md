@@ -230,7 +230,11 @@ client with similar team-coordination features. Core pieces:
   when Attackers made it 24; `PrepToolsPlugin#migrateAttackPriorityOrder()` carries an old
   choice over once), blocks casting **any** spell on a teammate (`preventFreezingTeammates` - key kept from when it
   was freezes only, now "Block spells on teammates" in the Menu section, default on; the Lunar
-  teammate spells like Vengeance Other stay allowed; item-on-player "Use" isn't touched), removes Attack on
+  teammate spells like Vengeance Other stay allowed; item-on-player "Use" isn't touched), blocks
+  Bind/Snare/Entangle on a player who's frozen (`blockBindsOnHeldPlayers`, default on - the game
+  refuses them, "already held by a magical force"; **ice spells are never blocked**, they still hit;
+  `FreezeTracker#isHeld()` = real spell duration, not the shown +1) and, Experimental, on an immune
+  one (`blockBindsOnImmunePlayers`, "currently immune to that spell"), removes Attack on
   teammates (`hideAttackOnTeammates`, default on - the game can offer Attack on FC members in
   the wilderness, and a fall-in stacks the team on one member; a teammate's Attack, if kept, is
   never coloured or promoted), and (opt-in) shift-click
@@ -290,23 +294,30 @@ client with similar team-coordination features. Core pieces:
     (also on PvP worlds). Renaming that box in the Mapper breaks this. Team levels differ (e.g. 55-60): `attackRangeBasis` YOU (default, exact for
     your clicks) or TEAM (greyed only if no on-screen teammate can reach them), plus
     `attackRangeMargin` slack.
-  - *Team performance tracker + fight log* (`TeamPerformanceTracker`, `PerformanceRow`,
-    `PerformanceRound`, `FightLogEntry`, sidebar **Stats** tab) - per teammate by name, **per
-    round** (entering an instance - the Clan Wars portal - starts one; `PrepToolsPlugin#onGameTick`
-    detects it for food and stats alike; up to 20 kept, picked by start time).
-    **Called targets count only if they die** (asked for: callers chip at people before settling
-    on a target, which is normal): on-target time, switch time and attacks-on-target are held per
-    called target (`CalledTarget`) and added to the stats at its death; dropped if not re-called
-    for `TARGET_EXPIRY_TICKS` (30s) without dying. Also: attacks, damage taken, eats, deaths,
-    **On pile** (interacting/attack anim at the enemy within `PILE_CREDIT_TICKS` (16, ~10s) of
-    its death). Rated HIGH/LOW at +-15 points from the team median on-target share (3+ rateable
-    non-callers). **Teammates' damage dealt is not visible** - only yours (`isMine()`).
-    **Fight log** per round: every death - enemy (pile, caller, time to kill) or teammate (enemies
-    on them in the last 10s via interacting or attack anims, seconds under attack - ends after 6s
-    with nobody on them, pizzas eaten meanwhile, damage in last 10s, frozen). **EASY DEATH**
-    (`isEasyDeath()`, asked for "with no false positives"): ALL of seen the whole time under attack
-    (else "partly off screen", never flagged), attackers <= `easyDeathMaxAttackers` (3), under
-    attack >= `easyDeathMinSeconds` (6), pizzas <= `easyDeathMaxPizzas` (1). Copy = TSV / text.
+  - *Team performance tracker* (`TeamPerformanceTracker`, `PerformanceRow`, `PerformanceRound`,
+    sidebar **Stats** tab) - per round (entering an instance - the Clan Wars portal - starts one;
+    `PrepToolsPlugin#onGameTick` detects it for food and stats alike; up to 20 kept). **Simplified
+    2026-10-07 (asked for):** one row per teammate **in order of death** (survivors last,
+    `PerformanceRow#byDeath()`), showing only when they died, pizzas eaten (eat animations, one a
+    pizza) and **On pile N/M** - kills they were on (interacting/attack anim at the enemy within
+    `PILE_CREDIT_TICKS` of its death) out of kills while they were on your screen. The ratings,
+    switch time, called-target time, damage and the fight log/EASY DEATH were removed - don't
+    re-add without asking.
+    **Pile order** (asked for 2026-10-07): per kill they were around for, the place they got onto
+    that pile (`TeamPerformanceTracker#pileOrder()`: by the start tick of their latest stretch on
+    the enemy - a gap over `PILE_CREDIT_TICKS` starts a new stretch, so an old chip isn't "1st";
+    same tick = shared place). **A missed pile counts as last place** (teammates around), so
+    skipping piles can't help the average; the row also shows "missed N". Shown as "Pile order avg
+    4.2". A **live** "not following the pile" marker was built and **removed** the same day ("useless
+    information during battle" - after the fact is what matters). Don't re-add.
+  - *Big hitpoints display* (`HitpointsOverlay`) - big outlined HP number + bar under your
+    character, green to red, pulses at/below `lowHitpointsPercent` (50). *Low hitpoints red edges*
+    (`LowHitpointsOverlay`) - red radial vignette below that mark, stronger the lower, pulsing.
+  - *Piled alert sound* (`AttackAlert`) - its own sound when more than `multiAttackThreshold` (2)
+    enemies are interacting with you (rising edge, Attack Alert's volume/cooldown/custom file; wins
+    over the normal attacked sound on the same tick). Default `SAILING_CHART` = sound id **11166**,
+    the "Chart complete" sound - from the OSRS wiki's `File:Charting_sound_effect.wav` licence
+    template (`id=11166`), not in `SoundEffectID`; unconfirmed in game.
   - *Player nicknames* - **moved out of Experimental into its own Nicknames section, on by
     default** (new key `nicknamesEnabled`; the old `showPlayerNicknames` key defaulted off, which
     is why "Set nickname" didn't appear for the user). `PlayerNicknameTracker`,
@@ -356,6 +367,12 @@ client with similar team-coordination features. Core pieces:
   of the finished frame (`DrawManager`) always includes them. Offered instead: a hotkey that
   hides all PvP Tools overlays while recording.
 
+**Jagex's third-party client guidelines:** raised with the user on 2026-10-05 (several features
+here match Jagex's banned list). The user says they don't apply in the context this project is
+developed and used in. Don't re-raise them for feature requests. Still out of scope: anything
+that performs game actions for the player (clicks, casts, eats, moves) - that's botting.
+Roadmap: `REVIEW_AND_ROADMAP.md`.
+
 Config file (`PrepToolsConfig.java`) is the fastest way to see the full feature surface — it's kept
 well-commented and organized by section, sections ordered/all collapsed-by-default to match the
 sidebar's own tab order. The sidebar (`PrepToolsPanel.java`) is a `MaterialTabGroup` in a fixed
@@ -390,7 +407,7 @@ reloading them on `ConfigChanged`, and pushing data to the sidebar. Each feature
 | `ChatHotkeys`, `ScoutReporter` | Pile Spam, Spammer, Location Spam; Scout webhook |
 | `ConfigListEditor` | every edit to the hidden list config (callers/snipe/spam/capes/nicknames) - sidebar + menu |
 | `FoodTracker`, `AttackRangeFilter`, `TeamPerformanceTracker`, `PlayerNicknameTracker`, `FriendRenameTracker` | Experimental: food eaten, combat bracket incl. Highlight Others' range (before `HighlightTracker` each tick), Stats tab, nicknames, renames between logins |
-| `CallerEntry`, `ConfigLists`, `ScoutReport`, `WeaponStyle`, `AttackCategory#resolve()`, `AttackRange`, `PerformanceRow#rate()`, `RenameMatch`, `FoodTracker#biteCount()` | pure logic - unit tested |
+| `CallerEntry`, `ConfigLists`, `ScoutReport`, `WeaponStyle`, `AttackCategory#resolve()`, `AttackRange`, `PerformanceRow#byDeath()`, `RenameMatch`, `FoodTracker#biteCount()` | pure logic - unit tested |
 
 Overlays inject the tracker they draw from, not the plugin. Tests live in
 `runelite-client/src/test/java/net/runelite/client/plugins/preptools/` - pure logic, plus
@@ -413,8 +430,14 @@ Overlays inject the tracker they draw from, not the plugin. Tests live in
 Everything built but not yet confirmed in game / on a real machine - move an item into the relevant
 section (or delete it) once the user confirms it:
 
-- **Fight log / easy deaths, called-targets-only-if-they-die (2026-10-02)** - not seen in game.
-  Also: does a same-tick splash + teammate's snare show the snare (Debug logging lines
+- **Simplified Stats tab + pile order, big HP display/red edges, piled alert (2026-10-07)** - not
+  seen in game. Does sound 11166 really play the Sailing chart sound? Does a mage's interacting
+  stay on the target between manual casts (else their pile stretch breaks and they rank late)?
+- **Bind blocks + "already held" fallback (2026-10-05)** - not seen in game. Is the message
+  `GAMEMESSAGE` and exactly that text (wiki)? Is your interacting target still the bind's target
+  when it arrives? Does the immune block ever hide a cast that would have landed (a cast is
+  checked at cast time, not when the projectile hits - unconfirmed)?
+- **Same-tick splash + teammate's snare** - does it show the snare (Debug logging lines
   "PvP Tools freeze:")?
 - **The Experimental section (2026-10-02)** - Check: food detector v2 against the user's
   25-pizza test (v1 undercounted - see its entry); turn on Debug logging to see each eating segment
@@ -479,6 +502,8 @@ Agreed with the user but deliberately not built yet. Low priority unless marked 
   as a new freeze; (3) an unlisted impact variant (`ICE_BARRAGE_IMPACT2/3/4/_LONG/_SHORT`,
   `ICE_BLITZ_IMPACT2/3` exist in `SpotanimID`), not Snare's case though. Next time: turn on
   debug logging and log freeze add/drop reasons in `FreezeTracker` to see which it is.
+  **Likely cause found 2026-10-05:** a same-tick splash (see the lessons) - now covered by the
+  "already held" message fallback, which is exactly the message from this report.
 
 - **(Low) Clear a TB when an in-view player leaves the Wilderness** - the game ends it then (OSRS
   wiki), but the icon stays until the timer runs out. Rare in practice, so deferred on purpose
@@ -509,7 +534,14 @@ errors; see the strict Javadoc check in the lessons below.
 
 **Jagex accounts / RL Account Selector app** (`tools/rl-account-selector/`, `install.sh` adds a
 menu entry + `rl-account-selector`): GTK app listing `~/.runelite/Accounts/*.properties` (the user's
-`--insecure-write-credentials` dumps) with Play / Rebuild / Rebuild & Play. Read from the
+`--insecure-write-credentials` dumps) with Play / Rebuild / Rebuild & Play. **How the tokens work** (read from the
+injected client 2026-10-05, closed source): `JX_*` env vars (set by the Jagex launcher) win; with
+`--insecure-write-credentials` they're also dumped to the file. Otherwise the file is read. On
+login the client trades `JX_REFRESH_TOKEN` at `auth.jagex.com/shield/oauth/token`
+(`grant_type=refresh_token`, `scope=gamesso.token.create`) for a fresh access token, and if Jagex
+returned a *different* refresh token it rewrites the file. So the refresh tokens look rotating: two
+copies of one account's file can invalidate each other, and so can running one account twice.
+Refresh-token lifetime is unknown. The dumped files are mode 664 (group-readable). Plan for an easier, all-OS version (not built): `JAGEX_ACCOUNTS_PLAN.md`. Read from the
 injected client (the wiki doesn't say): it loads `new File(~/.runelite,
 System.getProperty("runelite.credentials.path", "credentials.properties"))` and **writes
 refreshed tokens back to that file**. So the app (and `./run-runelite.sh <account>`) passes
@@ -764,6 +796,14 @@ These cost real debugging time to find. Don't rediscover them the hard way:
   while CI fails. To reproduce CI locally after `./gradlew :client:javadoc`:
   `sed '/^-d /d' runelite-client/build/tmp/javadoc/javadoc.options > /tmp/jd.options && javadoc @/tmp/jd.options -Xdoclint:all,-missing -d /tmp/jd 2>&1 | grep error`.
   (`//` comments are unaffected.)
+- **Same-tick splash + freeze - the client may only ever get one of them (2026-10-05):** the
+  2026-10-02 debug log has many `[85]`/`[180]` (splash/snare) lines and never both on one player,
+  so they likely share a graphic slot and the server sends one. The user reported exactly this
+  (you splash, a teammate's snare catches, no icon). Fallback: the game message "Your target is
+  already held by a magical force." (`PrepToolsPlugin#onChatMessage`) calls
+  `FreezeTracker#onTargetAlreadyHeld()` for whoever you're interacting with - assumes a Snare
+  starting at their last splash (if within 16 ticks), else now. Earlier note, still true as far
+  as it goes:
 - **Same-tick splash + freeze (checked 2026-10-02):** an actor's spot anims are stored per SLOT
   (injected client: `ci.do(slot, id, ...)` replaces the slot's entry, then posts GraphicChanged for
   each set) - so a snare and a splash landing the same tick are both seen, either order, and

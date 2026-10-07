@@ -1,11 +1,13 @@
 package net.runelite.client.plugins.preptools;
 
+import java.awt.Color;
 import java.util.Arrays;
 import java.util.Collections;
 import java.util.HashMap;
 import java.util.EnumMap;
 import java.util.List;
 import java.util.Map;
+import java.util.stream.Collectors;
 import net.runelite.api.MenuAction;
 import net.runelite.api.coords.WorldPoint;
 import net.runelite.client.menus.TestMenuEntry;
@@ -130,34 +132,18 @@ public class PureLogicTest
 		assertFalse(FoodTracker.isLow(0, 2, 5));
 	}
 
-	private static PerformanceRow perf(String name, boolean caller, int targetTicks, int onTarget)
+	private static PerformanceRow perf(String name, Long... deaths)
 	{
-		return new PerformanceRow(name, false, caller, targetTicks, targetTicks, onTarget, 0, 0, 0, 0, 0, -1, 0, 0, 0, 0,
-			PerformanceRow.Rating.UNRATED);
+		return new PerformanceRow(name, false, false, Arrays.asList(deaths), 0, 0, 0, 0);
 	}
 
 	@Test
-	public void performanceIsRatedAgainstTheTeamMedian()
+	public void statsAreInOrderOfDeathWithTheLivingLast()
 	{
-		List<PerformanceRow> rated = PerformanceRow.rate(Arrays.asList(
-			perf("Low", false, 100, 40),
-			perf("Mid", false, 100, 70),
-			perf("High", false, 100, 90),
-			perf("Mid2", false, 100, 72),
-			perf("New", false, 10, 0),
-			perf("Caller", true, 100, 100)), 50);
-
-		assertEquals("High", rated.get(0).name);
-		assertEquals(PerformanceRow.Rating.HIGH, rated.get(0).rating);
-		assertEquals(PerformanceRow.Rating.LOW, rated.get(3).rating);
-		assertEquals("Low", rated.get(3).name);
-		// Not enough time yet, and the caller, are never rated - and sort last.
-		assertEquals(PerformanceRow.Rating.UNRATED, rated.get(4).rating);
-		assertEquals(PerformanceRow.Rating.UNRATED, rated.get(5).rating);
-
-		// Fewer than three rateable players: no median to compare against.
-		assertTrue(PerformanceRow.rate(Arrays.asList(perf("A", false, 100, 10), perf("B", false, 100, 90)), 50)
-			.stream().allMatch(r -> r.rating == PerformanceRow.Rating.UNRATED));
+		List<PerformanceRow> sorted = PerformanceRow.byDeath(Arrays.asList(
+			perf("Zed"), perf("Late", 300L), perf("Abe"), perf("Early", 100L, 900L)));
+		assertEquals(Arrays.asList("Early", "Late", "Abe", "Zed"),
+			sorted.stream().map(r -> r.name).collect(Collectors.toList()));
 	}
 
 	@Test
@@ -233,27 +219,31 @@ public class PureLogicTest
 	}
 
 	@Test
-	public void easyDeathNeedsEveryPieceOfEvidence()
+	public void pileOrderSharesAPlaceForTeammatesOnInTheSameTick()
 	{
-		assertTrue(TeamPerformanceTracker.isEasyDeath(2, 20, 0, false, 3, 10, 1));
-		assertFalse(TeamPerformanceTracker.isEasyDeath(4, 20, 0, false, 3, 10, 1));
-		assertFalse(TeamPerformanceTracker.isEasyDeath(2, 9, 0, false, 3, 10, 1));
-		assertFalse(TeamPerformanceTracker.isEasyDeath(2, 20, 2, false, 3, 10, 1));
-		assertFalse(TeamPerformanceTracker.isEasyDeath(2, 20, 0, true, 3, 10, 1));
-		// Nobody seen on them: no evidence at all.
-		assertFalse(TeamPerformanceTracker.isEasyDeath(0, 20, 0, false, 3, 10, 1));
+		Map<String, Integer> starts = new java.util.HashMap<>();
+		starts.put("a", 10);
+		starts.put("b", 10);
+		starts.put("c", 14);
+		starts.put("d", 12);
+		Map<String, Integer> places = TeamPerformanceTracker.pileOrder(starts);
+		assertEquals(1, (int) places.get("a"));
+		assertEquals(1, (int) places.get("b"));
+		assertEquals(3, (int) places.get("d"));
+		assertEquals(4, (int) places.get("c"));
 	}
 
 	@Test
-	public void fightLogLines()
+	public void hitpointsColourAndLowEdges()
 	{
-		FightLogEntry kill = new FightLogEntry(0, false, "Zezima", true, "Bob", 58, Arrays.asList("Mate", "Me"), 0, 0,
-			false, false, false);
-		assertEquals("Called by Bob · 0:34 to kill · on pile (2): Mate, Me", PrepToolsPanel.fightLogDetail(kill));
-		FightLogEntry death = new FightLogEntry(0, true, "Mate", false, null, 25, Arrays.asList("A", "B"), 0, 40,
-			true, false, true);
-		assertEquals("2 on them (A, B) · 15s under attack · ate 0 pizzas · 40 dmg in last 10s · frozen",
-			PrepToolsPanel.fightLogDetail(death));
+		assertEquals(Color.GREEN, HitpointsOverlay.hitpointsColor(1));
+		assertEquals(Color.RED, HitpointsOverlay.hitpointsColor(0));
+		// Above the mark: nothing. Below: stronger the lower, never zero.
+		assertEquals(0, LowHitpointsOverlay.edgeAlpha(60, 99, 50, 0));
+		int justUnder = LowHitpointsOverlay.edgeAlpha(49, 99, 50, 0);
+		int nearlyDead = LowHitpointsOverlay.edgeAlpha(5, 99, 50, 0);
+		assertTrue(justUnder > 0);
+		assertTrue(nearlyDead > justUnder);
 	}
 
 	@Test

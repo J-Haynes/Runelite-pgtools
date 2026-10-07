@@ -33,6 +33,7 @@ public class MenuHandlerTest
 	private HighlightTracker highlights;
 	private AttackRangeFilter range;
 	private PlayerNicknameTracker nicknames;
+	private FreezeTracker freezes;
 	private MenuHandler menu;
 
 	private final Player local = mock(Player.class);
@@ -52,7 +53,8 @@ public class MenuHandlerTest
 		highlights = mock(HighlightTracker.class);
 		range = mock(AttackRangeFilter.class);
 		nicknames = mock(PlayerNicknameTracker.class);
-		menu = new MenuHandler(client, config, team, highlights, range, nicknames);
+		freezes = mock(FreezeTracker.class);
+		menu = new MenuHandler(client, config, team, highlights, range, nicknames, freezes);
 
 		when(client.getLocalPlayer()).thenReturn(local);
 		when(team.isOwnTeam(teammate)).thenReturn(true);
@@ -267,5 +269,32 @@ public class MenuHandlerTest
 		when(client.getMenuEntries()).thenReturn(new MenuEntry[]{entry("Attack", enemy), walkHere()});
 		menu.onPostMenuSort();
 		verify(client, never()).setMenuEntries(any());
+	}
+
+	@Test
+	public void bindsOnAHeldPlayerAreRemovedButIceSpellsStay()
+	{
+		when(freezes.isHeld(enemy)).thenReturn(true);
+		MenuEntry snareHeld = cast("Cast", "Snare", enemy);
+		MenuEntry barrageHeld = cast("Cast", "Ice Barrage", enemy);
+		MenuEntry blastHeld = cast("Cast", "Fire Blast", enemy);
+		MenuEntry snareFree = cast("Cast", "Snare", target);
+
+		List<MenuEntry> result = run(snareFree, blastHeld, barrageHeld, snareHeld);
+
+		assertEquals(Arrays.asList(snareFree, blastHeld, barrageHeld), result);
+	}
+
+	@Test
+	public void bindsOnAnImmunePlayerAreRemovedOnlyWhenTheExperimentalOptionIsOn()
+	{
+		when(freezes.isImmune(enemy)).thenReturn(true);
+		when(client.getMenuEntries()).thenReturn(new MenuEntry[]{cast("Cast", "Entangle", enemy)});
+		menu.onPostMenuSort();
+		verify(client, never()).setMenuEntries(any());
+
+		when(config.blockBindsOnImmunePlayers()).thenReturn(true);
+		MenuEntry barrage = cast("Cast", "Ice Barrage", enemy);
+		assertEquals(Collections.singletonList(barrage), run(barrage, cast("Cast", "Entangle", enemy)));
 	}
 }

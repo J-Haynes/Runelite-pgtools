@@ -47,6 +47,7 @@ import net.runelite.api.events.FriendsChatMemberJoined;
 import net.runelite.api.events.FriendsChatMemberLeft;
 import net.runelite.api.events.GameStateChanged;
 import net.runelite.api.events.GameTick;
+import net.runelite.api.events.ChatMessage;
 import net.runelite.api.events.GraphicChanged;
 import net.runelite.api.events.HitsplatApplied;
 import net.runelite.api.events.MenuEntryAdded;
@@ -108,6 +109,7 @@ public class PrepToolsPlugin extends Plugin
 	private static final String ADD_TO_SNIPE_LIST = "Add to snipe list";
 	private static final String SET_NICKNAME = "Set nickname";
 	private static final String RESET_FOOD_COUNT = "Reset food count";
+	private static final String ALREADY_HELD_MESSAGE = "Your target is already held by a magical force.";
 
 	private static final String FRIEND_NOTES_GROUP = ConfigListEditor.FRIEND_NOTES_GROUP;
 	private static final String FRIEND_NOTES_KEY_PREFIX = ConfigListEditor.FRIEND_NOTES_KEY_PREFIX;
@@ -199,6 +201,12 @@ public class PrepToolsPlugin extends Plugin
 
 	@Inject
 	private WorldNumberOverlay worldNumberOverlay;
+
+	@Inject
+	private HitpointsOverlay hitpointsOverlay;
+
+	@Inject
+	private LowHitpointsOverlay lowHitpointsOverlay;
 
 	@Inject
 	private TeamTracker team;
@@ -332,6 +340,8 @@ public class PrepToolsPlugin extends Plugin
 		overlayManager.add(nicknameTooltipOverlay);
 		overlayManager.add(othersOverlay);
 		overlayManager.add(worldNumberOverlay);
+		overlayManager.add(hitpointsOverlay);
+		overlayManager.add(lowHitpointsOverlay);
 		multiLinesOverlay.load();
 		hotkeys.start();
 		keyManager.registerKeyListener(foodResetListener);
@@ -366,6 +376,8 @@ public class PrepToolsPlugin extends Plugin
 		overlayManager.remove(nicknameTooltipOverlay);
 		overlayManager.remove(othersOverlay);
 		overlayManager.remove(worldNumberOverlay);
+		overlayManager.remove(hitpointsOverlay);
+		overlayManager.remove(lowHitpointsOverlay);
 		multiLinesOverlay.clear();
 		hotkeys.stop();
 		keyManager.unregisterKeyListener(foodResetListener);
@@ -412,7 +424,7 @@ public class PrepToolsPlugin extends Plugin
 		freezes.onGameTick();
 		range.onGameTick();
 		highlights.onGameTick();
-		performance.onGameTick(highlights.getPrimaryCaller(), highlights.getTargets());
+		performance.onGameTick();
 		food.onGameTick();
 		fightInfo.onGameTick();
 		attackAlert.onGameTick();
@@ -484,7 +496,7 @@ public class PrepToolsPlugin extends Plugin
 			attackAlert.clear();
 			range.clear();
 			performance.clearPlayers();
-			food.clearPlayers();
+				food.clearPlayers();
 			nicknames.clear();
 			renames.onSessionChanged();
 			teamCapeCounts = Collections.emptyMap();
@@ -549,6 +561,24 @@ public class PrepToolsPlugin extends Plugin
 		if (event.getActor() instanceof Player && freezes.onGraphicChanged((Player) event.getActor()))
 		{
 			attackAlert.onLocalFrozen();
+		}
+	}
+
+	/**
+	 * The game refused your bind because the target is already held: we missed that freeze (see
+	 * FreezeTracker#onTargetAlreadyHeld()). The target is whoever you're interacting with.
+	 */
+	@Subscribe
+	public void onChatMessage(ChatMessage event)
+	{
+		if (event.getType() != ChatMessageType.GAMEMESSAGE || !ALREADY_HELD_MESSAGE.equals(Text.removeTags(event.getMessage())))
+		{
+			return;
+		}
+		Player local = client.getLocalPlayer();
+		if (local != null && local.getInteracting() instanceof Player)
+		{
+			freezes.onTargetAlreadyHeld((Player) local.getInteracting());
 		}
 	}
 
@@ -710,7 +740,6 @@ public class PrepToolsPlugin extends Plugin
 	@Subscribe
 	public void onHitsplatApplied(HitsplatApplied event)
 	{
-		performance.onHitsplatApplied(event.getActor(), event.getHitsplat());
 		food.onHitsplatApplied(event.getActor(), event.getHitsplat());
 	}
 

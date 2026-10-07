@@ -74,6 +74,11 @@ class FreezeTracker
 	private static final int TELEBLOCK_DURATION_TICKS = 500;
 	private static final int TELEBLOCK_DURATION_TICKS_PROTECTED = 250;
 
+	/**
+	 * What onTargetAlreadyHeld() assumes the unseen freeze was: Snare, the usual F2P bind.
+	 */
+	private static final int ASSUMED_FREEZE_GRAPHIC = GraphicID.SNARE;
+
 	private final Client client;
 	private final PrepToolsConfig config;
 	private final TeamTracker team;
@@ -83,6 +88,12 @@ class FreezeTracker
 
 	@Getter
 	private final Map<Player, TeleblockState> teleblockStates = new HashMap<>();
+
+	/**
+	 * The last tick each player was hit by a splash - when a teammate's snare catches on the same
+	 * tick, the splash can be the only graphic the client gets (see onTargetAlreadyHeld()).
+	 */
+	private final Map<Player, Integer> lastSplashTicks = new HashMap<>();
 
 	@Inject
 	FreezeTracker(Client client, PrepToolsConfig config, TeamTracker team)
@@ -119,6 +130,52 @@ class FreezeTracker
 	}
 
 	/**
+	 * Whether the player is held by a freeze right now - the game then refuses Bind, Snare and
+	 * Entangle ("Your target is already held by a magical force."). Unlike isFrozen(), this ends at
+	 * the spell's real duration, not the shown countdown's extra tick.
+	 */
+	boolean isHeld(Player player)
+	{
+		FreezeState state = player != null ? freezeStates.get(player) : null;
+		return state != null && client.getTickCount() < state.immunityEndTick - FREEZE_IMMUNITY_TICKS;
+	}
+
+	/**
+	 * Whether the player is in the 5 ticks after a freeze when they can't be frozen again - the game
+	 * then refuses Bind, Snare and Entangle ("The target is currently immune to that spell.").
+	 */
+	boolean isImmune(Player player)
+	{
+		FreezeState state = player != null ? freezeStates.get(player) : null;
+		int tick = client.getTickCount();
+		return state != null && tick >= state.immunityEndTick - FREEZE_IMMUNITY_TICKS && tick < state.immunityEndTick;
+	}
+
+	/**
+	 * The game said the player you cast a bind on is already held, so a freeze was missed - most
+	 * likely your splash and a teammate's snare landed on the same tick, and only one graphic per
+	 * slot reaches the client (the 2026-10-02 debug log never shows a splash and a snare together).
+	 * Assumes a snare that began at the splash seen within a snare's length, else now; if that
+	 * guess runs long, the movement check drops it as soon as they move.
+	 */
+	void onTargetAlreadyHeld(Player player)
+	{
+		if (player == null || isHeld(player))
+		{
+			return;
+		}
+		int tick = client.getTickCount();
+		FreezeSpell spell = FREEZE_SPELLS.get(ASSUMED_FREEZE_GRAPHIC);
+		Integer splashTick = lastSplashTicks.get(player);
+		int startTick = splashTick != null && tick - splashTick < spell.durationTicks ? splashTick : tick;
+		freezeStates.put(player, newFreeze(spell, player, startTick, tick));
+		if (config.debugLogging())
+		{
+			log.info("PvP Tools freeze: tick {} {} already held - assumed a snare from tick {}", tick, player.getName(), startTick);
+		}
+	}
+
+	/**
 	 * Whether FreezeOverlay (and the teleblock row offset) should draw this player's freeze: Freeze
 	 * Timers on, and not a teammate hidden by "Hide for own team" - which never hides your own.
 	 */
@@ -144,6 +201,11 @@ class FreezeTracker
 			logSpellGraphics(player, tick);
 		}
 
+		if (player.hasSpotAnim(GraphicID.SPLASH))
+		{
+			lastSplashTicks.put(player, tick);
+		}
+
 		boolean localNewlyFrozen = false;
 		FreezeSpell spell = freezeSpellOn(player);
 		if (spell != null)
@@ -153,7 +215,7 @@ class FreezeTracker
 			FreezeState existing = freezeStates.get(player);
 			if (existing == null || tick >= existing.immunityEndTick)
 			{
-				freezeStates.put(player, newFreeze(spell, player, tick));
+				freezeStates.put(player, newFreeze(spell, player, tick, tick));
 				localNewlyFrozen = player == local;
 			}
 		}
@@ -201,6 +263,7 @@ class FreezeTracker
 		int tick = client.getTickCount();
 
 		freezeStates.entrySet().removeIf(entry -> !advance(entry.getKey(), entry.getValue(), tick));
+		lastSplashTicks.values().removeIf(splashTick -> tick - splashTick >= FREEZE_SPELLS.get(ASSUMED_FREEZE_GRAPHIC).durationTicks);
 
 		if (config.hideTeleblockTimersForOwnTeam())
 		{
@@ -218,12 +281,14 @@ class FreezeTracker
 	{
 		freezeStates.remove(player);
 		teleblockStates.remove(player);
+		lastSplashTicks.remove(player);
 	}
 
 	void clear()
 	{
 		freezeStates.clear();
 		teleblockStates.clear();
+		lastSplashTicks.clear();
 	}
 
 	/**
@@ -245,11 +310,15 @@ class FreezeTracker
 		return longest;
 	}
 
-	private static FreezeState newFreeze(FreezeSpell spell, Player player, int tick)
+	/**
+	 * A freeze that landed on startTick, seen on tick (later only when inferred after the fact).
+	 */
+	private static FreezeState newFreeze(FreezeSpell spell, Player player, int startTick, int tick)
 	{
 		int duration = spell.durationTicks + DISPLAY_EXTRA_TICKS;
-		return new FreezeState(spell.spriteId, tick, tick + duration, System.currentTimeMillis(), duration * 600L,
-			tick + spell.durationTicks + FREEZE_IMMUNITY_TICKS, player.getWorldLocation());
+		long startTimeMillis = System.currentTimeMillis() - (tick - startTick) * 600L;
+		return new FreezeState(spell.spriteId, startTick, startTick + duration, startTimeMillis, duration * 600L,
+			startTick + spell.durationTicks + FREEZE_IMMUNITY_TICKS, player.getWorldLocation());
 	}
 
 	/**

@@ -23,6 +23,7 @@ import java.util.Deque;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 import java.util.Set;
 import java.util.TreeMap;
 import javax.swing.BorderFactory;
@@ -156,8 +157,9 @@ public class PrepToolsPanel extends PluginPanel
 
 	// --- Stats (team performance) ---
 	private final JPanel performanceListPanel = new JPanel();
+	private final JLabel performanceKillsLabel = new JLabel();
 	private JButton copyPerformanceButton;
-	private List<PerformanceRow> lastPerformanceRows;
+	private PerformanceRound shownPerformanceRound;
 	private Boolean lastPerformanceEnabled;
 	private final JComboBox<String> performanceRoundBox = new JComboBox<>();
 	private List<PerformanceRound> lastPerformanceRounds = Collections.emptyList();
@@ -167,9 +169,6 @@ public class PrepToolsPanel extends PluginPanel
 	private Long selectedRoundStart;
 	private boolean updatingRoundBox;
 	private boolean performanceEnabled;
-	private final JPanel fightLogPanel = new JPanel();
-	private JButton copyFightLogButton;
-	private PerformanceRound shownFightLogRound;
 
 	// --- Friends chat log ---
 	private JTextArea friendsChatLogArea;
@@ -1516,11 +1515,10 @@ public class PrepToolsPanel extends PluginPanel
 	}
 
 	// ============================================================================================
-	// Stats tab (experimental) - TeamPerformanceTracker's per-teammate numbers.
+	// Stats tab (experimental) - TeamPerformanceTracker: per teammate, in order of death.
 	// ============================================================================================
 
-	private static final Color PERFORMANCE_HIGH_COLOR = new Color(100, 210, 100);
-	private static final Color PERFORMANCE_LOW_COLOR = new Color(230, 90, 80);
+	private static final Color PERFORMANCE_DIED_COLOR = new Color(230, 90, 80);
 
 	private JPanel buildPerformanceSection()
 	{
@@ -1533,13 +1531,11 @@ public class PrepToolsPanel extends PluginPanel
 		JLabel title = createSectionTitle("Team Performance", 0);
 		JTextArea description = createDescriptionArea(
 			"Experimental - turn on \"Team performance tracker\" in the Experimental settings. "
-				+ "On target: share of the time the primary caller had a target that they were on it - "
-				+ "rated green/red against the team's median once they've had enough called time. "
-				+ "Switch: average ticks to reach a newly called target. "
-				+ "Only called targets that died count - a caller chipping at people first doesn't. "
-				+ "Attacks: total / on the called target. On pile: enemies who died while they were on "
-				+ "them. Each trip through the Clan Wars portal starts a new round - pick earlier ones "
-				+ "below. Only what happens on your screen counts, and only your own damage dealt can be seen.");
+				+ "Teammates in the order they died, survivors last: when they died, pizzas eaten, "
+				+ "how many of the kills they were around for they were on the pile for, and their "
+				+ "average place getting onto those piles (1 = first on; a missed pile counts as last). "
+				+ "Each trip through the Clan Wars portal starts a new round - pick earlier ones "
+				+ "below. Only what happens on your screen counts.");
 
 		performanceRoundBox.setFont(FontManager.getRunescapeSmallFont());
 		performanceRoundBox.setAlignmentX(LEFT_ALIGNMENT);
@@ -1571,6 +1567,10 @@ public class PrepToolsPanel extends PluginPanel
 		performanceListPanel.setAlignmentX(LEFT_ALIGNMENT);
 		performanceListPanel.setMaximumSize(new Dimension(PluginPanel.PANEL_WIDTH, Integer.MAX_VALUE));
 
+		performanceKillsLabel.setFont(FontManager.getRunescapeSmallFont());
+		performanceKillsLabel.setForeground(ColorScheme.LIGHT_GRAY_COLOR);
+		performanceKillsLabel.setAlignmentX(LEFT_ALIGNMENT);
+
 		section.add(title);
 		section.add(Box.createVerticalStrut(TIER_GAP));
 		section.add(description);
@@ -1578,27 +1578,10 @@ public class PrepToolsPanel extends PluginPanel
 		section.add(createSubHeader("Teammates", buttons));
 		section.add(Box.createVerticalStrut(4));
 		section.add(performanceRoundBox);
+		section.add(Box.createVerticalStrut(4));
+		section.add(performanceKillsLabel);
 		section.add(Box.createVerticalStrut(TIER_GAP));
 		section.add(performanceListPanel);
-
-		copyFightLogButton = createSmallButton("Copy", "Copy this round's fight log to clipboard");
-		copyFightLogButton.setEnabled(false);
-		copyFightLogButton.addActionListener(e -> copyFightLogToClipboard());
-		fightLogPanel.setLayout(new BoxLayout(fightLogPanel, BoxLayout.Y_AXIS));
-		fightLogPanel.setBackground(ColorScheme.DARK_GRAY_COLOR);
-		fightLogPanel.setAlignmentX(LEFT_ALIGNMENT);
-		fightLogPanel.setMaximumSize(new Dimension(PluginPanel.PANEL_WIDTH, Integer.MAX_VALUE));
-		section.add(Box.createVerticalStrut(TIER_GAP * 2));
-		section.add(createSubHeader("Fight log", copyFightLogButton));
-		section.add(Box.createVerticalStrut(4));
-		section.add(createDescriptionArea(
-			"Every death this round. Kills: who was on the pile, and for called targets who called "
-				+ "them and how long they took. Our deaths: how many were on them, how long they were "
-				+ "under attack and how many pizzas they ate. EASY DEATH only when the evidence is "
-				+ "clear - few attackers, plenty of time to eat, barely ate, and seen the whole time "
-				+ "(limits in the Experimental settings)."));
-		section.add(Box.createVerticalStrut(TIER_GAP));
-		section.add(fightLogPanel);
 		updatePerformance(Collections.emptyList(), false);
 		return section;
 	}
@@ -1639,136 +1622,22 @@ public class PrepToolsPanel extends PluginPanel
 	{
 		int index = performanceRoundBox.getSelectedIndex();
 		PerformanceRound round = index >= 0 && index < lastPerformanceRounds.size() ? lastPerformanceRounds.get(index) : null;
-		showPerformanceRows(round != null ? round.rows : Collections.emptyList(), performanceEnabled);
-		showFightLog(round);
-	}
-
-	private static final Color FIGHT_LOG_KILL_COLOR = new Color(100, 210, 100);
-
-	/**
-	 * Rebuilds the fight log - only when the round shown or its log changed.
-	 */
-	private void showFightLog(PerformanceRound round)
-	{
-		if (round != null && shownFightLogRound != null && round.startMillis == shownFightLogRound.startMillis
-			&& round.log.equals(shownFightLogRound.log))
-		{
-			return;
-		}
-		shownFightLogRound = round;
-		fightLogPanel.removeAll();
-		copyFightLogButton.setEnabled(round != null && !round.log.isEmpty());
-
-		if (round == null || round.log.isEmpty())
-		{
-			JLabel empty = new JLabel("(no deaths yet this round)");
-			empty.setForeground(ColorScheme.LIGHT_GRAY_COLOR);
-			empty.setFont(FontManager.getRunescapeSmallFont());
-			fightLogPanel.add(empty);
-		}
-		else
-		{
-			// Newest first - the end of the round is what you look at mid-war.
-			for (int i = round.log.size() - 1; i >= 0; i--)
-			{
-				fightLogPanel.add(buildFightLogEntry(round.log.get(i), round.startMillis));
-				fightLogPanel.add(Box.createVerticalStrut(4));
-			}
-		}
-		revalidate();
-		repaint();
-	}
-
-	private JPanel buildFightLogEntry(FightLogEntry entry, long roundStartMillis)
-	{
-		Color color = entry.easy ? PERFORMANCE_LOW_COLOR : entry.teammate ? Color.WHITE : FIGHT_LOG_KILL_COLOR;
-		JPanel panel = new JPanel();
-		panel.setLayout(new BoxLayout(panel, BoxLayout.Y_AXIS));
-		panel.setBackground(ColorScheme.DARKER_GRAY_COLOR);
-		panel.setAlignmentX(LEFT_ALIGNMENT);
-		panel.setMaximumSize(new Dimension(PluginPanel.PANEL_WIDTH, Integer.MAX_VALUE));
-		panel.setBorder(BorderFactory.createCompoundBorder(
-			BorderFactory.createMatteBorder(0, 2, 0, 0, entry.easy ? PERFORMANCE_LOW_COLOR : entry.teammate
-				? ColorScheme.MEDIUM_GRAY_COLOR : FIGHT_LOG_KILL_COLOR),
-			new EmptyBorder(3, 5, 3, 3)));
-
-		JLabel title = new JLabel(fightLogTitle(entry, roundStartMillis));
-		title.setFont(FontManager.getRunescapeBoldFont());
-		title.setForeground(color);
-		title.setAlignmentX(LEFT_ALIGNMENT);
-		JTextArea detail = createWidthClampedTextArea(fightLogDetail(entry));
-		detail.setForeground(ColorScheme.LIGHT_GRAY_COLOR);
-		panel.add(title);
-		panel.add(detail);
-		return panel;
-	}
-
-	private static String fightLogTitle(FightLogEntry entry, long roundStartMillis)
-	{
-		String time = formatDuration((entry.timeMillis - roundStartMillis) / 1000);
-		if (entry.teammate)
-		{
-			return time + "  " + entry.name + " died" + (entry.easy ? " - EASY DEATH" : "");
-		}
-		return time + "  " + (entry.called ? "Killed " + entry.name : entry.name + " died");
-	}
-
-	static String fightLogDetail(FightLogEntry entry)
-	{
-		if (entry.teammate)
-		{
-			if (entry.names.isEmpty())
-			{
-				return "Nobody seen on them" + (entry.partlyOffScreen ? " (partly off screen)" : "");
-			}
-			return entry.names.size() + " on them (" + String.join(", ", entry.names) + ")"
-				+ (entry.durationTicks >= 0 ? " · " + entry.durationTicks * 6 / 10 + "s under attack" : "")
-				+ " · ate " + entry.pizzasEaten + (entry.pizzasEaten == 1 ? " pizza" : " pizzas")
-				+ " · " + entry.recentDamage + " dmg in last 10s"
-				+ (entry.frozen ? " · frozen" : "")
-				+ (entry.partlyOffScreen ? " · partly off screen" : "");
-		}
-		String pile = entry.names.isEmpty() ? "nobody on the pile"
-			: "on pile (" + entry.names.size() + "): " + String.join(", ", entry.names);
-		if (!entry.called)
-		{
-			return "Not called · " + pile;
-		}
-		return (entry.caller != null ? "Called by " + entry.caller + " · " : "")
-			+ formatDuration(entry.durationTicks * 6L / 10) + " to kill · " + pile;
-	}
-
-	private static String formatDuration(long seconds)
-	{
-		return String.format("%d:%02d", seconds / 60, seconds % 60);
-	}
-
-	private void copyFightLogToClipboard()
-	{
-		PerformanceRound round = shownFightLogRound;
-		if (round == null || round.log.isEmpty())
-		{
-			return;
-		}
-		StringBuilder sb = new StringBuilder();
-		for (FightLogEntry entry : round.log)
-		{
-			sb.append(fightLogTitle(entry, round.startMillis)).append(" - ").append(fightLogDetail(entry)).append('\n');
-		}
-		Toolkit.getDefaultToolkit().getSystemClipboard().setContents(new StringSelection(sb.toString().trim()), null);
+		performanceKillsLabel.setText("Kills this round: " + (round != null ? round.kills : 0));
+		showPerformanceRows(round, performanceEnabled);
 	}
 
 	/**
-	 * Rebuilds the Stats list - only when the rows changed.
+	 * Rebuilds the Stats list - only when the round shown or its rows changed.
 	 */
-	private void showPerformanceRows(List<PerformanceRow> rows, boolean enabled)
+	private void showPerformanceRows(PerformanceRound round, boolean enabled)
 	{
-		if (rows.equals(lastPerformanceRows) && Boolean.valueOf(enabled).equals(lastPerformanceEnabled))
+		if (Objects.equals(round, shownPerformanceRound) && Boolean.valueOf(enabled).equals(lastPerformanceEnabled))
 		{
 			return;
 		}
-		lastPerformanceRows = new ArrayList<>(rows);
+		shownPerformanceRound = round;
 		lastPerformanceEnabled = enabled;
+		List<PerformanceRow> rows = round != null ? round.rows : Collections.emptyList();
 		copyPerformanceButton.setEnabled(!rows.isEmpty());
 		performanceListPanel.removeAll();
 
@@ -1781,85 +1650,95 @@ public class PrepToolsPanel extends PluginPanel
 		}
 		for (PerformanceRow row : rows)
 		{
-			performanceListPanel.add(buildPerformanceRow(row));
+			performanceListPanel.add(buildPerformanceRow(row, round.startMillis));
 		}
 
 		revalidate();
 		repaint();
 	}
 
-	private JPanel buildPerformanceRow(PerformanceRow row)
+	private JPanel buildPerformanceRow(PerformanceRow row, long roundStartMillis)
 	{
-		Color ratingColor = row.rating == PerformanceRow.Rating.HIGH ? PERFORMANCE_HIGH_COLOR
-			: row.rating == PerformanceRow.Rating.LOW ? PERFORMANCE_LOW_COLOR : null;
-
+		boolean died = !row.deathMillis.isEmpty();
 		JPanel rowPanel = new JPanel();
 		rowPanel.setLayout(new BoxLayout(rowPanel, BoxLayout.Y_AXIS));
 		rowPanel.setBackground(ColorScheme.DARKER_GRAY_COLOR);
 		rowPanel.setBorder(BorderFactory.createCompoundBorder(
-			BorderFactory.createMatteBorder(0, 2, 0, 0, ratingColor != null ? ratingColor : ColorScheme.MEDIUM_GRAY_COLOR),
+			BorderFactory.createMatteBorder(0, 2, 0, 0, died ? PERFORMANCE_DIED_COLOR : ColorScheme.MEDIUM_GRAY_COLOR),
 			new EmptyBorder(3, 5, 3, 3)));
 
 		JLabel nameLabel = new JLabel(row.isYou ? row.name + " (you)" : row.isCaller ? row.name + " (caller)" : row.name);
 		nameLabel.setFont(FontManager.getRunescapeBoldFont());
 		nameLabel.setForeground(row.isYou ? YOU_HIGHLIGHT_COLOR : row.isCaller ? CALLER_HIGHLIGHT_COLOR : Color.WHITE);
-		int share = row.onTargetPercent();
-		JLabel shareLabel = new JLabel(share < 0 ? "-" : share + "% on target");
-		shareLabel.setFont(FontManager.getRunescapeSmallFont());
-		shareLabel.setForeground(ratingColor != null ? ratingColor : ColorScheme.LIGHT_GRAY_COLOR);
+		JLabel diedLabel = new JLabel(deathTimes(row, roundStartMillis));
+		diedLabel.setFont(FontManager.getRunescapeSmallFont());
+		diedLabel.setForeground(died ? PERFORMANCE_DIED_COLOR : ColorScheme.LIGHT_GRAY_COLOR);
 		JPanel top = new JPanel(new BorderLayout(4, 0));
 		top.setOpaque(false);
 		top.add(nameLabel, BorderLayout.CENTER);
-		top.add(shareLabel, BorderLayout.EAST);
+		top.add(diedLabel, BorderLayout.EAST);
 		top.setAlignmentX(LEFT_ALIGNMENT);
 		rowPanel.add(top);
 
-		double switchTicks = row.averageSwitchTicks();
-		rowPanel.add(createPerformanceDetail("Switch " + (switchTicks < 0 ? "-" : String.format("%.1ft", switchTicks))
-			+ " · Attacks " + row.attacks + "/" + row.attacksOnTarget));
-		rowPanel.add(createPerformanceDetail("Taken " + row.damageTaken
-			+ (row.damageDealt >= 0 ? " · Dealt " + row.damageDealt : "")
-			+ " · Eats " + row.eats + " · On pile " + row.onPile + " · Deaths " + row.deaths
-			+ (row.easyDeaths > 0 ? " (" + row.easyDeaths + " easy)" : "")));
+		JLabel detail = new JLabel("Ate " + row.pizzas + (row.pizzas == 1 ? " pizza" : " pizzas")
+			+ " · On pile " + row.onPile + "/" + row.pilesAround);
+		detail.setFont(FontManager.getRunescapeSmallFont());
+		detail.setForeground(ColorScheme.LIGHT_GRAY_COLOR);
+		detail.setToolTipText("On the pile for " + row.onPile + " of the " + row.pilesAround + " kills they were around for");
+		detail.setAlignmentX(LEFT_ALIGNMENT);
+		rowPanel.add(detail);
+
+		double order = row.averagePileOrder();
+		int missed = row.pilesAround - row.onPile;
+		JLabel orderLabel = new JLabel("Pile order " + (order < 0 ? "-" : String.format("avg %.1f", order))
+			+ (missed > 0 ? " · missed " + missed : ""));
+		orderLabel.setFont(FontManager.getRunescapeSmallFont());
+		orderLabel.setForeground(ColorScheme.LIGHT_GRAY_COLOR);
+		orderLabel.setToolTipText("Average place getting onto a pile (1 = first teammate on). A missed pile counts as last place.");
+		orderLabel.setAlignmentX(LEFT_ALIGNMENT);
+		rowPanel.add(orderLabel);
 		return rowPanel;
 	}
 
-	private static JLabel createPerformanceDetail(String text)
+	/**
+	 * "Died 2:31" (time into the round; more than one for the wilderness), or "Alive".
+	 */
+	private static String deathTimes(PerformanceRow row, long roundStartMillis)
 	{
-		JLabel label = new JLabel(text);
-		label.setFont(FontManager.getRunescapeSmallFont());
-		label.setForeground(ColorScheme.LIGHT_GRAY_COLOR);
-		label.setToolTipText(text);
-		label.setAlignmentX(LEFT_ALIGNMENT);
-		return label;
+		if (row.deathMillis.isEmpty())
+		{
+			return "Alive";
+		}
+		List<String> times = new ArrayList<>();
+		for (long millis : row.deathMillis)
+		{
+			times.add(formatDuration(Math.max(0, millis - roundStartMillis) / 1000));
+		}
+		return "Died " + String.join(", ", times);
+	}
+
+	private static String formatDuration(long seconds)
+	{
+		return String.format("%d:%02d", seconds / 60, seconds % 60);
 	}
 
 	private void copyPerformanceToClipboard()
 	{
-		List<PerformanceRow> rows = lastPerformanceRows;
-		if (rows == null || rows.isEmpty())
+		PerformanceRound round = shownPerformanceRound;
+		if (round == null || round.rows.isEmpty())
 		{
 			return;
 		}
 
-		StringBuilder sb = new StringBuilder("Name\tRating\tOn target %\tAvg switch (ticks)\tAttacks"
-			+ "\tAttacks on target\tDamage taken\tDamage dealt\tEats\tOn pile\tDeaths\tEasy deaths\tTicks seen\n");
-		for (PerformanceRow row : rows)
+		StringBuilder sb = new StringBuilder("Name\tDied\tPizzas\tOn pile\tKills around for\tAvg pile order\n");
+		for (PerformanceRow row : round.rows)
 		{
-			double switchTicks = row.averageSwitchTicks();
 			sb.append(row.name).append('\t')
-				.append(row.isCaller ? "caller" : row.rating.name().toLowerCase()).append('\t')
-				.append(row.onTargetPercent() < 0 ? "" : row.onTargetPercent()).append('\t')
-				.append(switchTicks < 0 ? "" : String.format("%.1f", switchTicks)).append('\t')
-				.append(row.attacks).append('\t')
-				.append(row.attacksOnTarget).append('\t')
-				.append(row.damageTaken).append('\t')
-				.append(row.damageDealt < 0 ? "" : row.damageDealt).append('\t')
-				.append(row.eats).append('\t')
+				.append(row.deathMillis.isEmpty() ? "" : deathTimes(row, round.startMillis).substring("Died ".length())).append('\t')
+				.append(row.pizzas).append('\t')
 				.append(row.onPile).append('\t')
-				.append(row.deaths).append('\t')
-				.append(row.easyDeaths).append('\t')
-				.append(row.ticksSeen).append('\n');
+				.append(row.pilesAround).append('\t')
+				.append(row.averagePileOrder() < 0 ? "" : String.format("%.1f", row.averagePileOrder())).append('\n');
 		}
 		Toolkit.getDefaultToolkit().getSystemClipboard().setContents(new StringSelection(sb.toString().trim()), null);
 	}
