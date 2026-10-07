@@ -37,3 +37,6 @@ bin/
 
 ### Mac OS ###
 .DS_Store
+# Local planning docs, not part of the repo
+JAGEX_ACCOUNTS_PLAN.md
+REVIEW_AND_ROADMAP.md
