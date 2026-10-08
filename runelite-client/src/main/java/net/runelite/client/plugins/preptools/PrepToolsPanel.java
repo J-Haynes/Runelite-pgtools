@@ -1535,7 +1535,8 @@ public class PrepToolsPanel extends PluginPanel
 				+ "how many of the kills they were around for they were on the pile for, and their "
 				+ "average place getting onto those piles (1 = first on; a missed pile counts as last). "
 				+ "Each trip through the Clan Wars portal starts a new round - pick earlier ones "
-				+ "below. Only what happens on your screen counts.");
+				+ "below. Times count from the end of the Clan Wars countdown, and nothing eaten "
+				+ "before it counts (that's boost potions). Only what happens on your screen counts.");
 
 		performanceRoundBox.setFont(FontManager.getRunescapeSmallFont());
 		performanceRoundBox.setAlignmentX(LEFT_ALIGNMENT);
@@ -1667,7 +1668,7 @@ public class PrepToolsPanel extends PluginPanel
 			BorderFactory.createMatteBorder(0, 2, 0, 0, died ? PERFORMANCE_DIED_COLOR : ColorScheme.MEDIUM_GRAY_COLOR),
 			new EmptyBorder(3, 5, 3, 3)));
 
-		JLabel nameLabel = new JLabel(row.isYou ? row.name + " (you)" : row.isCaller ? row.name + " (caller)" : row.name);
+		JLabel nameLabel = new JLabel(performanceName(row, true));
 		nameLabel.setFont(FontManager.getRunescapeBoldFont());
 		nameLabel.setForeground(row.isYou ? YOU_HIGHLIGHT_COLOR : row.isCaller ? CALLER_HIGHLIGHT_COLOR : Color.WHITE);
 		JLabel diedLabel = new JLabel(deathTimes(row, roundStartMillis));
@@ -1681,7 +1682,7 @@ public class PrepToolsPanel extends PluginPanel
 		rowPanel.add(top);
 
 		JLabel detail = new JLabel("Ate " + row.pizzas + (row.pizzas == 1 ? " pizza" : " pizzas")
-			+ " · On pile " + row.onPile + "/" + row.pilesAround);
+			+ " (" + row.pizzaHp() + " hp) · On pile " + row.onPile + "/" + row.pilesAround);
 		detail.setFont(FontManager.getRunescapeSmallFont());
 		detail.setForeground(ColorScheme.LIGHT_GRAY_COLOR);
 		detail.setToolTipText("On the pile for " + row.onPile + " of the " + row.pilesAround + " kills they were around for");
@@ -1701,7 +1702,22 @@ public class PrepToolsPanel extends PluginPanel
 	}
 
 	/**
-	 * "Died 2:31" (time into the round; more than one for the wilderness), or "Alive".
+	 * "Name [Nick] (you)" - the nickname only where there's room for it (the Copy has its own
+	 * column).
+	 */
+	private static String performanceName(PerformanceRow row, boolean withNickname)
+	{
+		String name = row.name;
+		if (withNickname && row.nickname != null)
+		{
+			name += " [" + row.nickname + "]";
+		}
+		return row.isYou ? name + " (you)" : row.isCaller ? name + " (caller)" : name;
+	}
+
+	/**
+	 * "Died 2m 31s" (time into the fight; more than one for the wilderness), or "Alive". Not
+	 * "2:31" - a spreadsheet reads that as a time of day (2:31 AM).
 	 */
 	private static String deathTimes(PerformanceRow row, long roundStartMillis)
 	{
@@ -1719,7 +1735,7 @@ public class PrepToolsPanel extends PluginPanel
 
 	private static String formatDuration(long seconds)
 	{
-		return String.format("%d:%02d", seconds / 60, seconds % 60);
+		return String.format("%dm %02ds", seconds / 60, seconds % 60);
 	}
 
 	private void copyPerformanceToClipboard()
@@ -1730,14 +1746,17 @@ public class PrepToolsPanel extends PluginPanel
 			return;
 		}
 
-		StringBuilder sb = new StringBuilder("Name\tDied\tPizzas\tOn pile\tKills around for\tAvg pile order\n");
+		StringBuilder sb = new StringBuilder("Player\tNickname\tDied (time into fight)\tPizzas ate (hp healed)"
+			+ "\tKills on the pile for\tKills nearby\tPiles missed\tAvg pile order (1 = first on)\n");
 		for (PerformanceRow row : round.rows)
 		{
-			sb.append(row.name).append('\t')
-				.append(row.deathMillis.isEmpty() ? "" : deathTimes(row, round.startMillis).substring("Died ".length())).append('\t')
-				.append(row.pizzas).append('\t')
+			sb.append(performanceName(row, false)).append('\t')
+				.append(row.nickname != null ? row.nickname : "").append('\t')
+				.append(row.deathMillis.isEmpty() ? "Alive" : deathTimes(row, round.startMillis).substring("Died ".length())).append('\t')
+				.append(row.pizzas).append(" (").append(row.pizzaHp()).append("hp)").append('\t')
 				.append(row.onPile).append('\t')
 				.append(row.pilesAround).append('\t')
+				.append(row.pilesAround - row.onPile).append('\t')
 				.append(row.averagePileOrder() < 0 ? "" : String.format("%.1f", row.averagePileOrder())).append('\n');
 		}
 		Toolkit.getDefaultToolkit().getSystemClipboard().setContents(new StringSelection(sb.toString().trim()), null);

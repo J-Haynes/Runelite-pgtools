@@ -12,6 +12,9 @@ import lombok.EqualsAndHashCode;
 @EqualsAndHashCode
 class PerformanceRound
 {
+	/**
+	 * When the fighting started (after a portal round's countdown) - death times count from here.
+	 */
 	final long startMillis;
 	/**
 	 * Enemies seen dying this round.

@@ -134,7 +134,7 @@ public class PureLogicTest
 
 	private static PerformanceRow perf(String name, Long... deaths)
 	{
-		return new PerformanceRow(name, false, false, Arrays.asList(deaths), 0, 0, 0, 0);
+		return new PerformanceRow(name, null, false, false, Arrays.asList(deaths), 0, 0, 0, 0);
 	}
 
 	@Test

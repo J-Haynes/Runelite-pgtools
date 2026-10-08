@@ -310,6 +310,16 @@ client with similar team-coordination features. Core pieces:
     skipping piles can't help the average; the row also shows "missed N". Shown as "Pile order avg
     4.2". A **live** "not following the pile" marker was built and **removed** the same day ("useless
     information during battle" - after the fact is what matters). Don't re-add.
+    **Used by copying a round into a spreadsheet and posting it as CSV in Discord** (2026-10-08
+    feedback): Copy has verbose column headers, the player's nickname in its own column (sidebar:
+    `Name [Nick]`), `(you)`/`(caller)` after the name, pizzas as `2 (36hp)` (18 hp a pizza), and
+    times as `2m 31s` - `2:31` pasted into LibreOffice as 2:31 AM. A Clan Wars round has a **2 minute
+    countdown**: times count from its end and eats during it (boost potions) aren't counted. The
+    end comes from varbit `CLANWARS_COUNTDOWN` (4286) = **ticks left** - read from the game's own
+    HUD scripts in the cache (cs2 596 shows the countdown widget while it's above 0, times it from
+    varbit * 30 client cycles; 598 formats it), so a late joiner is right too. Chosen over a chat
+    message (server text, not in the cache). To read cs2 yourself: the `cache` module's
+    `Disassembler` over a *copy* of `~/.runelite/jagexcache/oldschool/LIVE`.
   - *Big hitpoints display* (`HitpointsOverlay`) - big outlined HP number + bar under your
     character, green to red, pulses at/below `lowHitpointsPercent` (50). *Low hitpoints red edges*
     (`LowHitpointsOverlay`) - red radial vignette below that mark, stronger the lower, pulsing.
@@ -430,6 +440,9 @@ Overlays inject the tracker they draw from, not the plugin. Tests live in
 Everything built but not yet confirmed in game / on a real machine - move an item into the relevant
 section (or delete it) once the user confirms it:
 
+- **Stats countdown from the varbit (2026-10-08)** - from the cache scripts, not seen in game.
+  Debug logging logs each change ("Clan Wars countdown A to B"): it should go to ~200 at the
+  portal (less if late) and to 0 when the walls drop.
 - **Simplified Stats tab + pile order, big HP display/red edges, piled alert (2026-10-07)** - not
   seen in game. Does sound 11166 really play the Sailing chart sound? Does a mage's interacting
   stay on the target between manual casts (else their pile stretch breaks and they rank late)?

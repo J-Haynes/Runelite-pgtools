@@ -9,8 +9,11 @@ import java.util.Set;
 import javax.inject.Inject;
 import net.runelite.api.Actor;
 import net.runelite.api.Client;
+import net.runelite.api.Constants;
 import net.runelite.api.Player;
+import lombok.extern.slf4j.Slf4j;
 import net.runelite.api.gameval.AnimationID;
+import net.runelite.api.gameval.VarbitID;
 import net.runelite.client.util.Text;
 
 /**
@@ -21,7 +24,7 @@ import net.runelite.client.util.Text;
  * <ul>
  * <li>when they died,</li>
  * <li>how many pizzas they ate - eat animations, one a pizza (confirmed in game; a potion plays it
- * too),</li>
+ * too, so nothing is counted during the Clan Wars countdown, when the team drinks its boosts),</li>
  * <li>how many of the enemies that died they were on the pile for: interacting with them, or an
  * attack animation at them, in the last PILE_CREDIT_TICKS before the death (generous: a pile on
  * someone eating runs long between hits, and interacting drops the moment the target dies) - out
@@ -32,10 +35,16 @@ import net.runelite.client.util.Text;
  * minute earlier doesn't make you 1st. Around for a kill but never on it counts as last place -
  * the number of teammates around - so missing a pile can't improve the average.</li>
  * </ul>
- * Only what happens on your screen counts. Kept by name. Client thread only.
+ * A Clan Wars round starts with a 2 minute countdown: death times count from its end, and eats
+ * before it aren't counted. The end comes from the CLANWARS_COUNTDOWN varbit - the ticks left, as
+ * read from the game's own HUD script (cs2 596 shows the countdown widget while it's above 0 and
+ * times it from varbit * 30 client cycles = varbit ticks), so it's right however late you go
+ * through the portal. Only what happens on your screen counts. Kept by name. Client thread only.
  */
+@Slf4j
 class TeamPerformanceTracker
 {
+
 	/**
 	 * How recently (ticks, about 10s) a teammate must have been on an enemy to count as on the pile
 	 * when they died - and seen at all to count as around for it. Also how long a repeated death
@@ -66,6 +75,12 @@ class TeamPerformanceTracker
 	private final Client client;
 	private final PrepToolsConfig config;
 	private final TeamTracker team;
+	private final PlayerNicknameTracker nicknames;
+
+	/**
+	 * Last CLANWARS_COUNTDOWN varbit seen (ticks until the fight starts, 0 = none running).
+	 */
+	private int lastCountdown;
 
 	private static final class Stats
 	{
@@ -82,13 +97,18 @@ class TeamPerformanceTracker
 
 	private static final class Round
 	{
-		final long startMillis;
+		/**
+		 * When the fighting starts - the end of the Clan Wars countdown, if there is one.
+		 */
+		long startMillis;
+		int startTick;
 		final Map<String, Stats> stats = new HashMap<>();
 		int kills;
 
-		Round(long startMillis)
+		Round(long startMillis, int startTick)
 		{
 			this.startMillis = startMillis;
+			this.startTick = startTick;
 		}
 	}
 
@@ -121,11 +141,12 @@ class TeamPerformanceTracker
 	private final Map<String, Integer> lastDeathTick = new HashMap<>();
 
 	@Inject
-	TeamPerformanceTracker(Client client, PrepToolsConfig config, TeamTracker team)
+	TeamPerformanceTracker(Client client, PrepToolsConfig config, TeamTracker team, PlayerNicknameTracker nicknames)
 	{
 		this.client = client;
 		this.config = config;
 		this.team = team;
+		this.nicknames = nicknames;
 		reset();
 	}
 
@@ -139,7 +160,9 @@ class TeamPerformanceTracker
 		{
 			rounds.remove(round);
 		}
-		round = new Round(System.currentTimeMillis());
+		round = new Round(System.currentTimeMillis(), client.getTickCount());
+		lastCountdown = client.getVarbitValue(VarbitID.CLANWARS_COUNTDOWN);
+		startAfterCountdown(lastCountdown);
 		rounds.add(round);
 		while (rounds.size() > MAX_ROUNDS)
 		{
@@ -150,12 +173,13 @@ class TeamPerformanceTracker
 	}
 
 	/**
-	 * The sidebar's Reset button: every round gone, a fresh one started.
+	 * The sidebar's Reset button: every round gone, a fresh one started - straight away, no
+	 * countdown (the wilderness has none).
 	 */
 	void reset()
 	{
 		rounds.clear();
-		round = new Round(System.currentTimeMillis());
+		round = new Round(System.currentTimeMillis(), client.getTickCount());
 		rounds.add(round);
 		lastDeathTick.clear();
 		clearPlayers();
@@ -163,12 +187,26 @@ class TeamPerformanceTracker
 
 	void onGameTick()
 	{
+		int tick = client.getTickCount();
+		// A countdown started (or was set again), or just ended - the fight starts when it runs out.
+		// Whether the server counts the varbit down or sets it once, its last value says when.
+		int countdown = client.getVarbitValue(VarbitID.CLANWARS_COUNTDOWN);
+		if (countdown != lastCountdown)
+		{
+			startAfterCountdown(countdown);
+			if (config.debugLogging())
+			{
+				log.info("PvP Tools stats: Clan Wars countdown {} to {} at tick {} - fight starts at tick {}",
+					lastCountdown, countdown, tick, round.startTick);
+			}
+			lastCountdown = countdown;
+		}
+
 		if (!config.enablePerformanceTracker())
 		{
 			return;
 		}
 
-		int tick = client.getTickCount();
 		Player local = client.getLocalPlayer();
 		for (Player player : client.getPlayers())
 		{
@@ -213,7 +251,11 @@ class TeamPerformanceTracker
 		String name = team.standardName(player);
 		if (FoodTracker.EAT_ANIMATION_IDS.contains(animation))
 		{
-			statsFor(name, player).pizzas++;
+			// Before the fight starts it's a boost potion, not food.
+			if (client.getTickCount() >= round.startTick)
+			{
+				statsFor(name, player).pizzas++;
+			}
 			return;
 		}
 
@@ -222,6 +264,15 @@ class TeamPerformanceTracker
 		{
 			onEnemy((Player) interacting, name, client.getTickCount());
 		}
+	}
+
+	/**
+	 * The current round's fight starts this many ticks from now.
+	 */
+	private void startAfterCountdown(int ticksLeft)
+	{
+		round.startTick = client.getTickCount() + ticksLeft;
+		round.startMillis = System.currentTimeMillis() + (long) ticksLeft * Constants.GAME_TICK_LENGTH;
 	}
 
 	private void onEnemy(Player enemy, String name, int tick)
@@ -345,7 +396,7 @@ class TeamPerformanceTracker
 			List<PerformanceRow> rows = new ArrayList<>();
 			for (Stats s : r.stats.values())
 			{
-				rows.add(new PerformanceRow(s.displayName, s.isYou, s.isCaller, new ArrayList<>(s.deathMillis), s.pizzas,
+				rows.add(new PerformanceRow(s.displayName, nicknames.nicknameFor(s.displayName), s.isYou, s.isCaller, new ArrayList<>(s.deathMillis), s.pizzas,
 					s.onPile, s.pilesAround, s.pileOrderSum));
 			}
 			result.add(new PerformanceRound(r.startMillis, r.kills, PerformanceRow.byDeath(rows)));

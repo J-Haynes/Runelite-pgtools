@@ -4,6 +4,7 @@ import java.util.Arrays;
 import java.util.Collections;
 import java.util.EnumSet;
 import java.util.List;
+import java.util.Map;
 import net.runelite.api.Client;
 import net.runelite.api.Friend;
 import net.runelite.api.FriendContainer;
@@ -16,6 +17,7 @@ import net.runelite.api.WorldType;
 import net.runelite.api.gameval.AnimationID;
 import net.runelite.api.coords.WorldPoint;
 import net.runelite.api.gameval.SpotanimID;
+import net.runelite.api.gameval.VarbitID;
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertNull;
@@ -791,7 +793,7 @@ public class TrackerTest
 	private TeamPerformanceTracker performance()
 	{
 		when(config.enablePerformanceTracker()).thenReturn(true);
-		return new TeamPerformanceTracker(client, config, team);
+		return new TeamPerformanceTracker(client, config, team, new PlayerNicknameTracker(client, config, team));
 	}
 
 	private static PerformanceRow row(List<PerformanceRow> rows, String name)
@@ -837,6 +839,43 @@ public class TrackerTest
 		assertEquals("Mate", rows.get(0).name);
 		assertEquals(1, rows.get(0).deathMillis.size());
 		assertTrue(row(rows, "Me").deathMillis.isEmpty());
+	}
+
+	@Test
+	public void aPortalRoundCountsNothingEatenDuringTheCountdown()
+	{
+		PlayerNicknameTracker nicknames = new PlayerNicknameTracker(client, config, team);
+		nicknames.setNicknames(Map.of("Mate", "Matey"));
+		when(config.enablePerformanceTracker()).thenReturn(true);
+		TeamPerformanceTracker performance = new TeamPerformanceTracker(client, config, team, nicknames);
+
+		// Through the portal late: 150 ticks of the countdown left.
+		when(client.getVarbitValue(VarbitID.CLANWARS_COUNTDOWN)).thenReturn(150);
+		long before = System.currentTimeMillis();
+		performance.startRound();
+		performance.onGameTick();
+		assertTrue(performance.snapshot().get(0).startMillis >= before + 150 * 600L);
+
+		// A strength potion during the countdown isn't a pizza.
+		tick = 149;
+		performance.onGameTick();
+		animate(mate, AnimationID.HUMAN_EAT);
+		performance.onAnimationChanged(mate);
+
+		// The countdown ends when the varbit goes to 0, whatever it said before.
+		tick = 160;
+		when(client.getVarbitValue(VarbitID.CLANWARS_COUNTDOWN)).thenReturn(0);
+		long end = System.currentTimeMillis();
+		performance.onGameTick();
+		animate(mate, AnimationID.HUMAN_EAT);
+		performance.onAnimationChanged(mate);
+
+		PerformanceRow mateRow = row(performance.currentRows(), "Mate");
+		assertEquals(1, mateRow.pizzas);
+		assertEquals(18, mateRow.pizzaHp());
+		assertEquals("Matey", mateRow.nickname);
+		long start = performance.snapshot().get(0).startMillis;
+		assertTrue(start >= end && start <= System.currentTimeMillis());
 	}
 
 	@Test
@@ -1004,7 +1043,7 @@ public class TrackerTest
 		performance.onAnimationChanged(mate);
 		assertEquals(1, row(performance.currentRows(), "Mate").pizzas);
 
-		// Through the portal.
+		// Through the portal (no countdown running).
 		performance.startRound();
 		tick = 1;
 		performance.onGameTick();

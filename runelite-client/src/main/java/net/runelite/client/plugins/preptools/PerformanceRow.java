@@ -15,6 +15,10 @@ import lombok.EqualsAndHashCode;
 class PerformanceRow
 {
 	final String name;
+	/**
+	 * Their nickname (Names tab or Friend Notes), or null.
+	 */
+	final String nickname;
 	final boolean isYou;
 	final boolean isCaller;
 	/**
@@ -38,6 +42,14 @@ class PerformanceRow
 	 * missed (TeamPerformanceTracker's class comment).
 	 */
 	final int pileOrderSum;
+
+	/**
+	 * Hp the pizzas are worth - two 9 hp bites each.
+	 */
+	int pizzaHp()
+	{
+		return pizzas * FoodTracker.BITES_PER_EAT_ANIMATION * FoodTracker.HP_PER_BITE;
+	}
 
 	/**
 	 * Their average place getting onto a pile, 1 = always first; -1 with no kills around them.
