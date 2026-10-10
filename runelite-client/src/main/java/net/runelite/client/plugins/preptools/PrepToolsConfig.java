@@ -1647,6 +1647,19 @@ public interface PrepToolsConfig extends Config
 		return 2;
 	}
 
+	@ConfigItem(
+		keyName = "scoutPosterName",
+		name = "Post as",
+		description = "<html>The name the scout report is posted under in Discord.<br>"
+			+ "Leave blank to use your in-game name.</html>",
+		position = 4,
+		section = "scoutSection"
+	)
+	default String scoutPosterName()
+	{
+		return "";
+	}
+
 	// --- Nicknames section ---
 	// Out of Experimental (2026-10-02) under a new key, nicknamesEnabled, so it's on for everyone -
 	// the old showPlayerNicknames key defaulted off.
@@ -2010,12 +2023,26 @@ public interface PrepToolsConfig extends Config
 	}
 
 	@ConfigItem(
+		keyName = "bigHitpointsAttackers",
+		name = "Attacking you under hitpoints",
+		description = "<html>Under the big hitpoints display, a weapon icon and count<br>"
+			+ "for each style of enemy attacking you (melee, ranged,<br>"
+			+ "magic) - the infobox's 'Attacking you' row, where your eyes are.</html>",
+		position = 21,
+		section = "experimentalSection"
+	)
+	default boolean bigHitpointsAttackers()
+	{
+		return false;
+	}
+
+	@ConfigItem(
 		keyName = "lowHitpointsVignette",
 		name = "Low hitpoints red edges",
 		description = "<html>Below the low hitpoints mark, the edges of the game screen<br>"
 			+ "glow red - stronger the lower you go, pulsing - so you notice<br>"
 			+ "without looking at anything.</html>",
-		position = 21,
+		position = 22,
 		section = "experimentalSection"
 	)
 	default boolean lowHitpointsVignette()
@@ -2029,7 +2056,7 @@ public interface PrepToolsConfig extends Config
 		name = "Low hitpoints mark (%)",
 		description = "<html>At or below this share of your max hitpoints, the big<br>"
 			+ "display pulses and the red edges show.</html>",
-		position = 22,
+		position = 23,
 		section = "experimentalSection"
 	)
 	default int lowHitpointsPercent()
@@ -2044,7 +2071,7 @@ public interface PrepToolsConfig extends Config
 			+ "enemies are attacking you at once. Played instead of the<br>"
 			+ "Attack Alert sound if both happen on one tick. Uses Attack<br>"
 			+ "Alert's volume, cooldown and custom file.</html>",
-		position = 23,
+		position = 24,
 		section = "experimentalSection"
 	)
 	default boolean multiAttackAlert()
@@ -2057,7 +2084,7 @@ public interface PrepToolsConfig extends Config
 		keyName = "multiAttackThreshold",
 		name = "Piled: more than",
 		description = "The alert plays when more than this many enemies are attacking you.",
-		position = 24,
+		position = 25,
 		section = "experimentalSection"
 	)
 	default int multiAttackThreshold()
@@ -2070,7 +2097,7 @@ public interface PrepToolsConfig extends Config
 		name = "Piled sound",
 		description = "<html>Which sound. Sailing chart is the sound the game plays when<br>"
 			+ "you chart something in Sailing.</html>",
-		position = 25,
+		position = 26,
 		section = "experimentalSection"
 	)
 	default AttackAlertSound multiAttackSound()

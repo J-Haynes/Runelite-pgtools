@@ -10,7 +10,9 @@ import javax.inject.Inject;
 import net.runelite.api.Actor;
 import net.runelite.api.Client;
 import net.runelite.api.Constants;
+import net.runelite.api.Hitsplat;
 import net.runelite.api.Player;
+import net.runelite.api.Skill;
 import lombok.extern.slf4j.Slf4j;
 import net.runelite.api.gameval.AnimationID;
 import net.runelite.api.gameval.VarbitID;
@@ -23,8 +25,9 @@ import net.runelite.client.util.Text;
  * read mid-war):
  * <ul>
  * <li>when they died,</li>
- * <li>how many pizzas they ate - eat animations, one a pizza (confirmed in game; a potion plays it
- * too, so nothing is counted during the Clan Wars countdown, when the team drinks its boosts),</li>
+ * <li>how many pizzas they ate - eat animations, one a pizza (confirmed in game). A potion plays it
+ * too: nothing is counted during the Clan Wars countdown, when the team drinks its boosts, nor an
+ * eat at full hitpoints (see missingHp) - a strength potion mid-round.</li>
  * <li>how many of the enemies that died they were on the pile for: interacting with them, or an
  * attack animation at them, in the last PILE_CREDIT_TICKS before the death (generous: a pile on
  * someone eating runs long between hits, and interacting drops the moment the target dies) - out
@@ -70,6 +73,17 @@ class TeamPerformanceTracker
 		AnimationID.HUMAN_STAFF_BLOCK_LEATHER_HIT_3, AnimationID.HUMAN_UNARMEDBLOCK_LEATHER_HIT_3,
 		AnimationID.HUMAN_SPEAR_BLOCK_LEATHER_HIT_3);
 
+	/**
+	 * Hitpoints regenerate one a minute (100 ticks).
+	 */
+	private static final int HP_REGEN_TICKS = 100;
+
+	/**
+	 * For a teammate whose damage we missed, the bar's fraction lost is turned into hitpoints as
+	 * if they had this many - only to know they're down at all.
+	 */
+	private static final int ASSUMED_MAX_HP = 99;
+
 	private static final Set<Integer> DEATH_ANIMATION_IDS = Set.of(AnimationID.HUMAN_DEATH, AnimationID.HUMAN_DEATH_BACKWARDS);
 
 	private final Client client;
@@ -93,6 +107,18 @@ class TeamPerformanceTracker
 		int onPile;
 		int pilesAround;
 		int pileOrderSum;
+		boolean seen;
+		/**
+		 * Estimated hitpoints they're down, null if unknown - an eat only counts as a pizza while
+		 * this isn't 0, so a potion at full hp isn't one. Another player's health bar can't say:
+		 * it's only there after a hit, and a heal often only shows with the next hit. So: 0 if
+		 * first seen before the fight starts (everyone's full) or when their bar changes to full;
+		 * plus every hit; minus a pizza's worth (18) per pizza and 1 a minute (regeneration);
+		 * unknown again after they're out of view. Yours is exact, from your own stats.
+		 */
+		Integer missingHp;
+		int lastBarRatio = -1;
+		int lastBarScale = -1;
 	}
 
 	private static final class Round
@@ -218,6 +244,7 @@ class TeamPerformanceTracker
 			Stats s = statsFor(name, player);
 			s.isYou = player == local;
 			s.isCaller = team.isConfiguredCaller(player);
+			updateMissingHp(s, player, tick);
 			s.lastSeenTick = tick;
 
 			Actor interacting = player.getInteracting();
@@ -254,7 +281,7 @@ class TeamPerformanceTracker
 			// Before the fight starts it's a boost potion, not food.
 			if (client.getTickCount() >= round.startTick)
 			{
-				statsFor(name, player).pizzas++;
+				onEat(statsFor(name, player), player);
 			}
 			return;
 		}
@@ -263,6 +290,106 @@ class TeamPerformanceTracker
 		if (interacting instanceof Player && !team.isOwnTeam((Player) interacting))
 		{
 			onEnemy((Player) interacting, name, client.getTickCount());
+		}
+	}
+
+	/**
+	 * A pizza - unless they're known to be at full hitpoints, when it's a potion.
+	 */
+	private void onEat(Stats s, Player player)
+	{
+		if (s.missingHp != null && s.missingHp <= 0)
+		{
+			if (config.debugLogging())
+			{
+				log.info("PvP Tools stats: '{}' ate at full hp - a potion, not counted as a pizza", player.getName());
+			}
+			return;
+		}
+		s.pizzas++;
+		if (s.missingHp != null)
+		{
+			s.missingHp = Math.max(0, s.missingHp - FoodTracker.BITES_PER_EAT_ANIMATION * FoodTracker.HP_PER_BITE);
+		}
+	}
+
+	/**
+	 * Hits on teammates - how far down they are (missingHp).
+	 */
+	void onHitsplatApplied(Actor actor, Hitsplat hitsplat)
+	{
+		if (!config.enablePerformanceTracker() || !(actor instanceof Player) || !team.isOwnTeam((Player) actor)
+			|| !FoodTracker.isHpDamage(hitsplat))
+		{
+			return;
+		}
+		Player player = (Player) actor;
+		String name = team.standardName(player);
+		if (name == null)
+		{
+			return;
+		}
+		Stats s = statsFor(name, player);
+		if (s.missingHp != null)
+		{
+			s.missingHp += hitsplat.getAmount();
+		}
+	}
+
+	/**
+	 * Once a tick, before lastSeenTick moves on - see Stats#missingHp.
+	 */
+	private void updateMissingHp(Stats s, Player player, int tick)
+	{
+		boolean fightStarted = tick >= round.startTick;
+		if (!s.seen)
+		{
+			s.seen = true;
+			s.missingHp = fightStarted ? null : 0;
+		}
+		else if (fightStarted && tick - s.lastSeenTick > 1)
+		{
+			// Back in view: whatever happened meanwhile, we didn't see it.
+			s.missingHp = null;
+		}
+
+		if (player == client.getLocalPlayer())
+		{
+			int max = client.getRealSkillLevel(Skill.HITPOINTS);
+			if (max > 0)
+			{
+				s.missingHp = Math.max(0, max - client.getBoostedSkillLevel(Skill.HITPOINTS));
+			}
+			return;
+		}
+
+		if (s.missingHp != null && s.missingHp > 0 && tick % HP_REGEN_TICKS == 0)
+		{
+			s.missingHp--;
+		}
+
+		// Only a change in the bar is news - a bar left over from the last hit can be stale.
+		int ratio = player.getHealthRatio();
+		int scale = player.getHealthScale();
+		if (scale <= 0 || ratio < 0)
+		{
+			s.lastBarRatio = -1;
+			s.lastBarScale = -1;
+			return;
+		}
+		if (ratio == s.lastBarRatio && scale == s.lastBarScale)
+		{
+			return;
+		}
+		s.lastBarRatio = ratio;
+		s.lastBarScale = scale;
+		if (ratio >= scale)
+		{
+			s.missingHp = 0;
+		}
+		else if (s.missingHp == null || s.missingHp == 0)
+		{
+			s.missingHp = Math.max(1, (int) Math.ceil((double) (scale - ratio) / scale * ASSUMED_MAX_HP));
 		}
 	}
 

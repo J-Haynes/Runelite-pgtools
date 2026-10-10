@@ -13,8 +13,8 @@ class ClanIdRow
 {
 	final String name;
 	/**
-	 * The caller's configured nickname, shown as "Name (Nickname)" - only set for rows that are
-	 * also an on-screen caller with a nickname, null otherwise.
+	 * Shown as "Name (Nickname)": a caller's caller-list nickname, else the player's nickname from
+	 * the Names tab (or Friend Notes); null if neither.
 	 */
 	final String nickname;
 	final int id;

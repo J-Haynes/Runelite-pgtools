@@ -169,7 +169,9 @@ class FightInfoTracker
 		meleeAttackerCount = rangedAttackerCount = magicAttackerCount = 0;
 
 		Player local = client.getLocalPlayer();
-		if (!config.showFightInfoOverlay() || !config.showAttackingYou() || local == null)
+		boolean shown = config.showFightInfoOverlay() && config.showAttackingYou()
+			|| config.bigHitpoints() && config.bigHitpointsAttackers();
+		if (!shown || local == null)
 		{
 			previouslyAttacked = false;
 			return;

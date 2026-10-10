@@ -161,10 +161,17 @@ class FoodTracker
 		segment.eatStarts++;
 	}
 
+	/**
+	 * Whether the hitsplat took hitpoints.
+	 */
+	static boolean isHpDamage(Hitsplat hitsplat)
+	{
+		return hitsplat.getAmount() > 0 && !NON_DAMAGE_TYPES.contains(hitsplat.getHitsplatType());
+	}
+
 	void onHitsplatApplied(Actor actor, Hitsplat hitsplat)
 	{
-		if (config.showFoodCounter() && actor instanceof Player && hitsplat.getAmount() > 0
-			&& !NON_DAMAGE_TYPES.contains(hitsplat.getHitsplatType()))
+		if (config.showFoodCounter() && actor instanceof Player && isHpDamage(hitsplat))
 		{
 			segments.computeIfAbsent((Player) actor, p -> new Segment()).damage += hitsplat.getAmount();
 		}

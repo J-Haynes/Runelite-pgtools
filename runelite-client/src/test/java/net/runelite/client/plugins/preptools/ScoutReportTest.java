@@ -4,6 +4,7 @@ import java.util.HashMap;
 import java.util.Map;
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
+import static org.junit.Assert.assertNull;
 import static org.junit.Assert.assertTrue;
 import okhttp3.HttpUrl;
 import org.junit.Test;
@@ -56,6 +57,16 @@ public class ScoutReportTest
 		assertFalse(ScoutReporter.isDiscordWebhook(HttpUrl.parse("https://evil.com/api/webhooks/1/abc")));
 		assertFalse(ScoutReporter.isDiscordWebhook(HttpUrl.parse("https://notdiscord.com/api/webhooks/1/abc")));
 		assertFalse(ScoutReporter.isDiscordWebhook(HttpUrl.parse("https://discord.com/channels/1")));
+	}
+
+	@Test
+	public void postsUnderTheConfiguredNameElseYourInGameName()
+	{
+		assertEquals("Scout Bot", ScoutReporter.posterName("  Scout Bot ", "Me"));
+		assertEquals("Me", ScoutReporter.posterName("", "<img=2>Me"));
+		assertEquals("Me", ScoutReporter.posterName("   ", "Me"));
+		assertNull(ScoutReporter.posterName("", null));
+		assertEquals(80, ScoutReporter.posterName("x".repeat(100), "Me").length());
 	}
 
 	@Test

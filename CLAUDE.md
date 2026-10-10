@@ -107,7 +107,8 @@ client with similar team-coordination features. Core pieces:
   teammates too (it used to count anyone following you). (Core's `Notification` config type + `Notifier` was considered: free UI
   incl. a whole-screen tint, but no in-game sounds and silent while focused by default.)
 - **Scout (Discord)** — hotkey (F9 default) posts to a Discord webhook (`scoutWebhookUrl`,
-  `secret = true`), with your in-game name as the poster (`ScoutReporter#post()`). Multi-line,
+  `secret = true`), posted under `scoutPosterName` ("Post as"), or your in-game name if that's
+  blank (`ScoutReporter#posterName()`, cut to Discord's 80 chars). Multi-line,
   format asked for explicitly (`ScoutReport#format()`, tested in `ScoutReportTest`):
   `W308, Ferox Enclave, lvl 15 wild.` then one `10x Team-50 (EoP),` line per cape, most first,
   last line without the comma (`No team capes in sight` if none qualify).
@@ -245,7 +246,8 @@ client with similar team-coordination features. Core pieces:
   using the infobox's `WeaponStyle` lists (`PrepToolsPlugin#computeClanWeapons()`; teammates with
   an unlisted weapon are just counted). Then **Player IDs**: surfacing your own and your friends chat/clan members' player ids
   (`Player#getId()`), sorted, with the current min/max flagged as click-priority risks and
-  configured callers highlighted as "Name (Nickname)", and you in a third colour (blue, wins over
+  configured callers highlighted, every row with a nickname shown as "Name (Nickname)" (caller-list
+  nickname, else the Names tab's / Friend Notes'), and you in a third colour (blue, wins over
   caller colour). Both sections have a Copy button. See `MENU_ORDER_PID_INVESTIGATION.md` at the repo root for the
   underlying mechanic this is built on (right-click Attack-menu ordering on a stack) and its current
   confidence level/open questions. Clan-only by design: OSRS's friendly-fire protection means an
@@ -300,7 +302,12 @@ client with similar team-coordination features. Core pieces:
     2026-10-07 (asked for):** one row per teammate **in order of death** (survivors last,
     `PerformanceRow#byDeath()`), showing only when they died, pizzas eaten (eat animations, one a
     pizza) and **On pile N/M** - kills they were on (interacting/attack anim at the enemy within
-    `PILE_CREDIT_TICKS` of its death) out of kills while they were on your screen. The ratings,
+    `PILE_CREDIT_TICKS` of its death) out of kills while they were on your screen.
+    **Potions after the countdown (asked for 2026-10-11):** an eat only counts as a pizza while
+    the teammate isn't known to be at full hp (`Stats#missingHp`: 0 if first seen during the
+    countdown or their bar *changes* to full, + every hit, - 18 a pizza, - 1 a minute, unknown
+    after leaving view; yours exact from your stats). Not "ate but didn't gain hp": another
+    player's bar is only there after a hit and a heal often only shows with the next hit. The ratings,
     switch time, called-target time, damage and the fight log/EASY DEATH were removed - don't
     re-add without asking.
     **Pile order** (asked for 2026-10-07): per kill they were around for, the place they got onto
@@ -321,7 +328,9 @@ client with similar team-coordination features. Core pieces:
     message (server text, not in the cache). To read cs2 yourself: the `cache` module's
     `Disassembler` over a *copy* of `~/.runelite/jagexcache/oldschool/LIVE`.
   - *Big hitpoints display* (`HitpointsOverlay`) - big outlined HP number + bar under your
-    character, green to red, pulses at/below `lowHitpointsPercent` (50). *Low hitpoints red edges*
+    character, green to red, pulses at/below `lowHitpointsPercent` (50). `bigHitpointsAttackers`
+    adds the infobox's "Attacking you" weapon icons + counts under the bar (`FightInfoTracker`
+    counts attackers whenever either display wants them). *Low hitpoints red edges*
     (`LowHitpointsOverlay`) - red radial vignette below that mark, stronger the lower, pulsing.
   - *Piled alert sound* (`AttackAlert`) - its own sound when more than `multiAttackThreshold` (2)
     enemies are interacting with you (rising edge, Attack Alert's volume/cooldown/custom file; wins
@@ -436,6 +445,10 @@ Overlays inject the tracker they draw from, not the plugin. Tests live in
   allow. Values the sidebar writes (pin, config lists, Mapper preview) are `volatile` swaps.
 
 ## Open questions / unverified
+
+- **Pizza vs potion by missing hp, Scout "Post as", Clan Info nicknames, attackers under big HP
+  (2026-10-11)** - not seen in game. Does a strength potion mid-round still count? Debug logging
+  logs "ate at full hp - a potion". Assumes everyone is at full hp during the Clan Wars countdown.
 
 Everything built but not yet confirmed in game / on a real machine - move an item into the relevant
 section (or delete it) once the user confirms it:

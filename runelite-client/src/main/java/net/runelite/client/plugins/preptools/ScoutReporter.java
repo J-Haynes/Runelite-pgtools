@@ -24,8 +24,8 @@ import okhttp3.RequestBody;
 import okhttp3.Response;
 
 /**
- * The Scout (Discord) hotkey: posts a ScoutReport to the configured Discord webhook, under your
- * in-game name. Only ever sends to a Discord webhook URL, with mentions disabled so a cape name
+ * The Scout (Discord) hotkey: posts a ScoutReport to the configured Discord webhook, under the
+ * "Post as" name (your in-game name if that's blank). Only ever sends to a Discord webhook URL, with mentions disabled so a cape name
  * can't ping the channel; the outcome is echoed to your chatbox as a console line.
  */
 @Slf4j
@@ -36,6 +36,7 @@ class ScoutReporter
 	 * hotkey shouldn't spam it.
 	 */
 	private static final long COOLDOWN_MILLIS = 5000;
+	private static final int MAX_USERNAME_LENGTH = 80;
 	private static final MediaType JSON = MediaType.get("application/json; charset=utf-8");
 
 	private final Client client;
@@ -62,6 +63,24 @@ class ScoutReporter
 		boolean discordHost = host.equals("discord.com") || host.endsWith(".discord.com")
 			|| host.equals("discordapp.com") || host.endsWith(".discordapp.com");
 		return url.isHttps() && discordHost && url.encodedPath().startsWith("/api/webhooks/");
+	}
+
+	/**
+	 * The name to post as: the configured one, or your in-game name if it's blank. Null if
+	 * neither - Discord then uses the webhook's own name. Discord allows at most 80 characters.
+	 */
+	static String posterName(String configured, String inGameName)
+	{
+		String name = configured != null ? configured.trim() : "";
+		if (name.isEmpty() && inGameName != null)
+		{
+			name = Text.removeTags(inGameName).trim();
+		}
+		if (name.isEmpty())
+		{
+			return null;
+		}
+		return name.length() > MAX_USERNAME_LENGTH ? name.substring(0, MAX_USERNAME_LENGTH) : name;
 	}
 
 	/**
@@ -100,9 +119,10 @@ class ScoutReporter
 		Map<String, Object> payload = new LinkedHashMap<>();
 		payload.put("content", report);
 		Player local = client.getLocalPlayer();
-		if (local != null && local.getName() != null)
+		String username = posterName(config.scoutPosterName(), local != null ? local.getName() : null);
+		if (username != null)
 		{
-			payload.put("username", Text.removeTags(local.getName()));
+			payload.put("username", username);
 		}
 		payload.put("allowed_mentions", Collections.singletonMap("parse", Collections.emptyList()));
 

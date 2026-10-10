@@ -52,9 +52,9 @@ import net.runelite.client.ui.overlay.OverlayPosition;
  */
 public class FightInfoOverlay extends Overlay
 {
-	private static final int MELEE_WEAPON_ICON_ITEM_ID = 1333; // Rune scimitar
-	private static final int RANGED_WEAPON_ICON_ITEM_ID = 853;  // Maple shortbow
-	private static final int MAGIC_WEAPON_ICON_ITEM_ID = 1381;  // Staff of air
+	static final int MELEE_WEAPON_ICON_ITEM_ID = 1333; // Rune scimitar
+	static final int RANGED_WEAPON_ICON_ITEM_ID = 853;  // Maple shortbow
+	static final int MAGIC_WEAPON_ICON_ITEM_ID = 1381;  // Staff of air
 
 	// Real overhead protection prayer sprite IDs, verified against RuneLite's SpriteID source.
 	private static final int SPRITE_PROTECT_MELEE = SpriteID.PRAYER_PROTECT_FROM_MELEE;

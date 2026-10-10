@@ -12,6 +12,7 @@ import net.runelite.api.GraphicID;
 import net.runelite.api.Hitsplat;
 import net.runelite.api.HitsplatID;
 import net.runelite.api.Player;
+import net.runelite.api.Skill;
 import net.runelite.api.Varbits;
 import net.runelite.api.WorldType;
 import net.runelite.api.gameval.AnimationID;
@@ -796,6 +797,18 @@ public class TrackerTest
 		return new TeamPerformanceTracker(client, config, team, new PlayerNicknameTracker(client, config, team));
 	}
 
+	/**
+	 * Every game tick up to and including the given one, as the game runs them.
+	 */
+	private void ticksTo(TeamPerformanceTracker performance, int last)
+	{
+		while (tick < last)
+		{
+			tick++;
+			performance.onGameTick();
+		}
+	}
+
 	private static PerformanceRow row(List<PerformanceRow> rows, String name)
 	{
 		return rows.stream().filter(r -> r.name.equals(name)).findFirst().orElseThrow(AssertionError::new);
@@ -857,16 +870,26 @@ public class TrackerTest
 		assertTrue(performance.snapshot().get(0).startMillis >= before + 150 * 600L);
 
 		// A strength potion during the countdown isn't a pizza.
-		tick = 149;
-		performance.onGameTick();
+		ticksTo(performance, 149);
 		animate(mate, AnimationID.HUMAN_EAT);
 		performance.onAnimationChanged(mate);
 
 		// The countdown ends when the varbit goes to 0, whatever it said before.
-		tick = 160;
 		when(client.getVarbitValue(VarbitID.CLANWARS_COUNTDOWN)).thenReturn(0);
 		long end = System.currentTimeMillis();
+		ticksTo(performance, 160);
+		// Nobody's hit them yet: a strength potion just after the countdown isn't a pizza either.
+		animate(mate, AnimationID.HUMAN_EAT);
+		performance.onAnimationChanged(mate);
+
+		// Hit for 12: the next eat is a pizza, and makes up for it - the one after is a potion.
+		ticksTo(performance, 169);
+		tick = 170;
+		performance.onHitsplatApplied(mate, damage(12));
 		performance.onGameTick();
+		animate(mate, AnimationID.HUMAN_EAT);
+		performance.onAnimationChanged(mate);
+		ticksTo(performance, 175);
 		animate(mate, AnimationID.HUMAN_EAT);
 		performance.onAnimationChanged(mate);
 
@@ -876,6 +899,65 @@ public class TrackerTest
 		assertEquals("Matey", mateRow.nickname);
 		long start = performance.snapshot().get(0).startMillis;
 		assertTrue(start >= end && start <= System.currentTimeMillis());
+	}
+
+	@Test
+	public void anEatAtAFullHealthBarIsAPotion()
+	{
+		TeamPerformanceTracker performance = performance();
+		// No countdown (the wilderness): how far down they are is unknown, so an eat is a pizza.
+		performance.onGameTick();
+		animate(mate, AnimationID.HUMAN_EAT);
+		performance.onAnimationChanged(mate);
+		assertEquals(1, row(performance.currentRows(), "Mate").pizzas);
+
+		// Their bar shows full: the next eat is a potion.
+		tick = 1;
+		hp(mate, 99);
+		performance.onGameTick();
+		animate(mate, AnimationID.HUMAN_EAT);
+		performance.onAnimationChanged(mate);
+		assertEquals(1, row(performance.currentRows(), "Mate").pizzas);
+
+		// Hit below full: eating is a pizza again - and heals the 10, so the next is a potion.
+		tick = 2;
+		hp(mate, 89);
+		performance.onHitsplatApplied(mate, damage(10));
+		performance.onGameTick();
+		animate(mate, AnimationID.HUMAN_EAT);
+		performance.onAnimationChanged(mate);
+		performance.onAnimationChanged(mate);
+		assertEquals(2, row(performance.currentRows(), "Mate").pizzas);
+
+		// Out of view for a while, back without a bar: unknown again, so a pizza.
+		when(mate.getHealthScale()).thenReturn(-1);
+		when(mate.getHealthRatio()).thenReturn(-1);
+		setPlayers(local, enemyA, enemyB);
+		tick = 3;
+		performance.onGameTick();
+		setPlayers(local, mate, enemyA, enemyB);
+		tick = 20;
+		performance.onGameTick();
+		performance.onAnimationChanged(mate);
+		assertEquals(3, row(performance.currentRows(), "Mate").pizzas);
+	}
+
+	@Test
+	public void yourOwnEatIsAPizzaOnlyBelowFullHp()
+	{
+		TeamPerformanceTracker performance = performance();
+		when(client.getRealSkillLevel(Skill.HITPOINTS)).thenReturn(60);
+		when(client.getBoostedSkillLevel(Skill.HITPOINTS)).thenReturn(60);
+		performance.onGameTick();
+		animate(local, AnimationID.HUMAN_EAT);
+		performance.onAnimationChanged(local);
+		assertEquals(0, row(performance.currentRows(), "Me").pizzas);
+
+		tick = 1;
+		when(client.getBoostedSkillLevel(Skill.HITPOINTS)).thenReturn(45);
+		performance.onGameTick();
+		performance.onAnimationChanged(local);
+		assertEquals(1, row(performance.currentRows(), "Me").pizzas);
 	}
 
 	@Test

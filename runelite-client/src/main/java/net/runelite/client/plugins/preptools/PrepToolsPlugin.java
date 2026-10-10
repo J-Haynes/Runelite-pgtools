@@ -741,6 +741,7 @@ public class PrepToolsPlugin extends Plugin
 	public void onHitsplatApplied(HitsplatApplied event)
 	{
 		food.onHitsplatApplied(event.getActor(), event.getHitsplat());
+		performance.onHitsplatApplied(event.getActor(), event.getHitsplat());
 	}
 
 	/**
@@ -1164,8 +1165,13 @@ public class PrepToolsPlugin extends Plugin
 			}
 			String standard = team.standardName(player);
 			boolean caller = onScreenCallers.contains(standard);
-			rows.add(new ClanIdRow(player.getName(), caller ? highlights.nicknameFor(standard) : null, player.getId(),
-				player == local, caller));
+			// The caller list's nickname, else the Names tab's (or Friend Notes').
+			String nickname = caller ? highlights.nicknameFor(standard) : null;
+			if (nickname == null && config.showPlayerNicknames())
+			{
+				nickname = nicknames.nicknameFor(player.getName());
+			}
+			rows.add(new ClanIdRow(player.getName(), nickname, player.getId(), player == local, caller));
 		}
 		rows.sort(Comparator.comparingInt(row -> row.id));
 		return rows;
