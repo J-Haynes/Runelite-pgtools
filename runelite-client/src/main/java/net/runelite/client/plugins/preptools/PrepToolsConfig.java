@@ -127,6 +127,35 @@ public interface PrepToolsConfig extends Config
 		return true;
 	}
 
+	@ConfigItem(
+		keyName = "prioritiseFallInFollow",
+		name = "Fall-in finder",
+		description = "<html>Makes 'Follow' the left-click option on a teammate that<br>"
+			+ "many teammates are following - whoever leads the fall-in,<br>"
+			+ "caller or not. A caller's Follow and a target/pile/snipe<br>"
+			+ "Attack still win.</html>",
+		position = 8,
+		section = "callersSection"
+	)
+	default boolean prioritiseFallInFollow()
+	{
+		return true;
+	}
+
+	@Range(min = 2)
+	@ConfigItem(
+		keyName = "fallInThreshold",
+		name = "Fall-in followers",
+		description = "<html>How many teammates must be following someone for the<br>"
+			+ "fall-in finder to pick them.</html>",
+		position = 9,
+		section = "callersSection"
+	)
+	default int fallInThreshold()
+	{
+		return 20;
+	}
+
 	// --- Snipe List section ---
 
 	@ConfigSection(
@@ -1658,6 +1687,48 @@ public interface PrepToolsConfig extends Config
 	default String scoutPosterName()
 	{
 		return "";
+	}
+
+	@ConfigItem(
+		keyName = "scoutMap",
+		name = "Map picture",
+		description = "<html>Attaches a map: Drawn map = north-up map of the area with<br>"
+			+ "a dot per player (you white, team green, enemies red) and the<br>"
+			+ "Location tab's names; Your minimap = your real minimap, turned<br>"
+			+ "north-up and zoomed out for the picture, with the same names.</html>",
+		position = 5,
+		section = "scoutSection"
+	)
+	default ScoutMapStyle scoutMap()
+	{
+		return ScoutMapStyle.DRAWN;
+	}
+
+	@Range(min = 8, max = 128)
+	@ConfigItem(
+		keyName = "scoutMapRadius",
+		name = "Drawn map size",
+		description = "<html>How many tiles the drawn map shows each way from you.<br>"
+			+ "Players only show while they're on your screen.</html>",
+		position = 6,
+		section = "scoutSection"
+	)
+	default int scoutMapRadius()
+	{
+		return 40;
+	}
+
+	@ConfigItem(
+		keyName = "scoutCapes",
+		name = "Cape counter on map",
+		description = "<html>Draws the team capes around you on the map picture - the<br>"
+			+ "same capes as the Team Capes overlay (its minimum count).</html>",
+		position = 7,
+		section = "scoutSection"
+	)
+	default boolean scoutCapes()
+	{
+		return true;
 	}
 
 	// --- Nicknames section ---

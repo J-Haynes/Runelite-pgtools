@@ -218,6 +218,25 @@ public class MenuHandlerTest
 	}
 
 	@Test
+	public void fallInLeaderFollowIsLeftClick()
+	{
+		when(highlights.getFallInLeaders()).thenReturn(Collections.singleton(teammate));
+		MenuEntry follow = entry("Follow", teammate);
+		assertEquals(follow, leftClick(run(follow, entry("Attack", enemy), walkHere())));
+	}
+
+	@Test
+	public void callerFollowBeatsAFallInLeadersFollow()
+	{
+		when(highlights.getFallInLeaders()).thenReturn(Collections.singleton(teammate));
+		Player caller = mock(Player.class);
+		when(team.isOwnTeam(caller)).thenReturn(true);
+		when(highlights.getPrimaryCaller()).thenReturn(caller);
+		MenuEntry followCaller = entry("Follow", caller);
+		assertEquals(followCaller, leftClick(run(followCaller, entry("Follow", teammate), walkHere())));
+	}
+
+	@Test
 	public void freezeOnTeammateIsRemoved()
 	{
 		MenuEntry snareTeammate = entry("Cast", teammate);

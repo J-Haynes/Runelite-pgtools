@@ -25,6 +25,10 @@ client with similar team-coordination features. Core pieces:
   ✎ on a row opens an edit form (name + nickname) below the list - a separate panel, not an in-row
   form, because the row list is a `GridLayout` and one taller row would stretch every row
   (`ConfigListEditor#editCaller()` keeps list position, enabled state and the primary pin).
+  **Fall-in finder** (`prioritiseFallInFollow`, default on, `fallInThreshold` 20, asked for
+  2026-10-11): a teammate that many teammates are interacting with (= following - teammates don't
+  attack each other) gets left-click Follow (`HighlightTracker#getFallInLeaders()`), after the
+  primary caller's Follow, before a backup's; Attack priorities still win.
   Each row is two lines (asked for - one line was "too busy"): radio + in-game name on top,
   nickname + on-screen status underneath (`PrepToolsPanel#addRow()`).
 - **Highlighting** — three independent detection categories, each with its own config section and
@@ -89,7 +93,8 @@ client with similar team-coordination features. Core pieces:
   cosmetic, LMS - must be listed: find them in `item_variations.json`. Bryophyta's staff was
   missing entirely), who's attacking
   you, current wilderness location, your player index (informational — see the PID note below).
-- **Friends chat log** — sidebar panel (the "FC" tab, alongside the "Missing" list), newest-first,
+- **Friends chat log** — sidebar panel (the "FC" tab, alongside the "Missing" list - its Copy
+  starts with a `Missing names:` line), newest-first,
   logs members joining/leaving/dying (other members' deaths from the death animation, your own as
   "You died" from `ActorDeath`); copyable via a header Copy button.
 - **Attack Alert** (config section, everything **default off**) — two triggers: *attacked* = an
@@ -108,7 +113,19 @@ client with similar team-coordination features. Core pieces:
   incl. a whole-screen tint, but no in-game sounds and silent while focused by default.)
 - **Scout (Discord)** — hotkey (F9 default) posts to a Discord webhook (`scoutWebhookUrl`,
   `secret = true`), posted under `scoutPosterName` ("Post as"), or your in-game name if that's
-  blank (`ScoutReporter#posterName()`, cut to Discord's 80 chars). Multi-line,
+  blank (`ScoutReporter#posterName()`, cut to Discord's 80 chars), with **pictures** (asked for 2026-10-11): a map (`scoutMap`, toggle: DRAWN default /
+  MINIMAP / NONE) with the **cape counter drawn on it** (`scoutCapes`, `ScoutMap#withCapes()`: item
+  icon with count + `10x Team-50 (EoP)`, the overlay's minimum count; top-left on the drawn map,
+  where no names go - beside the smaller minimap). A separate screenshot of the Team Capes overlay
+  was built first and replaced the same day (asked for: "draw it on the map"). One picture. *Drawn* (`ScoutMap#drawn()`): north-up
+  art from mejrs' map squares (`ScoutMap.TILE_URL`, zoom 2 = 4px a tile, 64 tiles a square, cached
+  in `~/.runelite/pvptools-maptiles/`), `scoutMapRadius` (40) tiles each way, a dot per on-screen
+  player (you white/team green/enemy red, drawn **over** the names - asked for) and the Location
+  Mapper names (most specific first, overlapping names skipped). *Minimap*: cut from the next drawn frame
+  (`DrawManager#requestNextFrameListener`) at the `*.MINIMAP` widget, zoomed out to 2px a tile for
+  that one frame (restored in the listener), turned north-up from where `Perspective.localToMinimap`
+  puts you and a point north of you, same names. No frame within 1.5s (minimised) = drawn map only,
+  sent as multipart `payload_json` + `files[i]`. Multi-line,
   format asked for explicitly (`ScoutReport#format()`, tested in `ScoutReportTest`):
   `W308, Ferox Enclave, lvl 15 wild.` then one `10x Team-50 (EoP),` line per cape, most first,
   last line without the comma (`No team capes in sight` if none qualify).
@@ -446,6 +463,9 @@ Overlays inject the tracker they draw from, not the plugin. Tests live in
 
 ## Open questions / unverified
 
+- **Scout pictures, fall-in finder (2026-10-11)** - the first minimap crop was seen working.
+  Not yet seen: the drawn map, the minimap's north-up turn + zoom-out (does the minimap blink
+  visibly, is the turn's direction right?), the cape counter on the map.
 - **Pizza vs potion by missing hp, Scout "Post as", Clan Info nicknames, attackers under big HP
   (2026-10-11)** - not seen in game. Does a strength potion mid-round still count? Debug logging
   logs "ate at full hp - a potion". Assumes everyone is at full hp during the Clan Wars countdown.
@@ -530,6 +550,13 @@ Agreed with the user but deliberately not built yet. Low priority unless marked 
   debug logging and log freeze add/drop reasons in `FreezeTracker` to see which it is.
   **Likely cause found 2026-10-05:** a same-tick splash (see the lessons) - now covered by the
   "already held" message fallback, which is exactly the message from this report.
+
+- **Location Mapper personal layer: one config key per change** (agreed 2026-10-11). Today all of
+  `wildernessLocationsUserLayer` is one key, and RuneLite saves per *key* (each client writes only
+  keys it changed, merged into the re-read file) - so mapping in two clients at once, or editing in
+  B after mapping in A without restarting B, makes the last saver's whole layer win. Split into a
+  key per added/edited/hidden box id (+ a one-time migration from the single key) so two clients'
+  edits merge, conflicting only on the same box. Until then: map in one client only.
 
 - **(Low) Clear a TB when an in-view player leaves the Wilderness** - the game ends it then (OSRS
   wiki), but the icon stays until the timer runs out. Rare in practice, so deferred on purpose
@@ -745,7 +772,9 @@ These cost real debugging time to find. Don't rediscover them the hard way:
   Rebuilding is still fine to do without asking (per the rule in Build & run above) - the risk is
   specifically leaving the *old* process running across a rebuild and then continuing to interact
   with it. **Restart procedure (once the user has OK'd it): stop the client first, then
-  `shadowJar`, then launch** - never rebuild under a client you're about to keep using. Match the
+  `shadowJar`, then launch** (a `kill` skips the settings save - see the settings lesson; there's
+  no wmctrl/xdotool on this Wayland machine, so ask the user to close the window if they've
+  changed settings recently) - never rebuild under a client you're about to keep using. Match the
   process with a pattern that can't match your own shell (e.g. `ps -eo pid,args | grep "[j]ava -jar
   runelite-client/build/libs"`) - a plain `pgrep -f` on the jar path also matched and killed the
   shell running the command once. If the client freezes after a rebuild, this is the first thing to
@@ -841,6 +870,11 @@ These cost real debugging time to find. Don't rediscover them the hard way:
   frozen, or immune (5 ticks after a freeze), still plays the ice graphic but doesn't freeze or
   refresh. `FreezeTracker` ignores freeze graphics on anyone it's already tracking (frozen or
   immune); it used to restart the countdown, showing freezes that weren't there.
+- **RuneLite settings are saved only on a window close (`ClientShutdown`) or every 5 minutes
+  (`ConfigManager`'s scheduled `sendConfig`) - there's no JVM shutdown hook, so a SIGTERM (`kill`,
+  desktop logout) drops up to 5 minutes of changes.** Each client writes only the keys it changed.
+  Settings are per *profile*: the user's PvP client runs profile `pvp`, their normal settings
+  (NPC highlights, ground items) are in `default` - switching profile looks like settings vanished.
 - **Git remotes/identity:** `origin` is the user's own fork (`git@github.com:J-Haynes/Runelite-pgtools.git`,
   push here); `upstream` is `runelite/runelite` (fetch only - never push). The user has set their
   own git `user.name`/`user.email`; Claude still must not change git config itself. The `gh` CLI

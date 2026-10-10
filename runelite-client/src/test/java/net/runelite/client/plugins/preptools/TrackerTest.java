@@ -395,6 +395,30 @@ public class TrackerTest
 	}
 
 	@Test
+	public void aTeammateEnoughTeammatesFollowLeadsTheFallIn()
+	{
+		when(config.fallInThreshold()).thenReturn(2);
+		HighlightTracker highlights = new HighlightTracker(client, config, team, new FreezeTracker(client, config, team), range());
+		Player other = player("Other", true);
+		setPlayers(local, mate, other, enemyA, enemyB);
+		team.refresh();
+
+		// One follower isn't a fall-in; enemies "following" a teammate are attacking, not following.
+		when(local.getInteracting()).thenReturn(mate);
+		when(enemyA.getInteracting()).thenReturn(mate);
+		highlights.onGameTick();
+		assertTrue(highlights.getFallInLeaders().isEmpty());
+
+		when(other.getInteracting()).thenReturn(mate);
+		highlights.onGameTick();
+		assertEquals(Collections.singleton(mate), highlights.getFallInLeaders());
+
+		when(config.prioritiseFallInFollow()).thenReturn(false);
+		highlights.onGameTick();
+		assertTrue(highlights.getFallInLeaders().isEmpty());
+	}
+
+	@Test
 	public void attackersCapKeepsWhoeverEngagedFirst()
 	{
 		when(config.highlightAttackers()).thenReturn(true);

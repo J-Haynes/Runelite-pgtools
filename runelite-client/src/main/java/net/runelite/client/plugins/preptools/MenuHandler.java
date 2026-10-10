@@ -102,7 +102,8 @@ class MenuHandler
 	/**
 	 * One pass over the sorted menu: recolour, drop teammate Attack/spell entries, then pick the
 	 * left-click (the last entry). Left-click preference: a prioritised target/pile/snipe/attacker
-	 * Attack (tie-break: the Menu section's Attack priority), then a caller's Follow, then - only if
+	 * Attack (tie-break: the Menu section's Attack priority), then the primary caller's Follow, a
+	 * fall-in leader's Follow, a backup caller's Follow, then - only if
 	 * we removed the entry that WAS the left-click - some other enemy's Attack. Otherwise the game's
 	 * own order is kept. Shift-click Walk here beats all of it while shift is held.
 	 */
@@ -134,6 +135,7 @@ class MenuHandler
 		Player local = client.getLocalPlayer();
 		Player primaryCaller = highlights.getPrimaryCaller();
 		Set<Player> backupCallers = highlights.getBackupCallers();
+		Set<Player> fallInLeaders = highlights.getFallInLeaders();
 		String selectedSpell = getSelectedSpellName();
 
 		boolean debug = config.debugLogging() && System.currentTimeMillis() - lastDebugLogMillis >= DEBUG_LOG_INTERVAL_MILLIS;
@@ -146,6 +148,7 @@ class MenuHandler
 		Map<AttackCategory, Integer> priorityIndices = new EnumMap<>(AttackCategory.class);
 		int primaryFollowIndex = -1;
 		int backupFollowIndex = -1;
+		int fallInFollowIndex = -1;
 		int anyEnemyAttackIndex = -1;
 		boolean removedAny = false;
 		boolean removedLeftClick = false;
@@ -194,6 +197,11 @@ class MenuHandler
 						backupFollowIndex = kept.size();
 					}
 				}
+				kept.add(entry);
+			}
+			else if (!shiftWalk && fallInLeaders.contains(player) && "Follow".equalsIgnoreCase(option))
+			{
+				fallInFollowIndex = kept.size();
 				kept.add(entry);
 			}
 			else if ("Attack".equalsIgnoreCase(option))
@@ -287,7 +295,8 @@ class MenuHandler
 				config.attackPriority3(), config.attackPriority4()), priorityIndices);
 			if (leftClick < 0)
 			{
-				leftClick = primaryFollowIndex >= 0 ? primaryFollowIndex : backupFollowIndex;
+				leftClick = primaryFollowIndex >= 0 ? primaryFollowIndex
+					: fallInFollowIndex >= 0 ? fallInFollowIndex : backupFollowIndex;
 			}
 			if (leftClick < 0 && removedLeftClick)
 			{

@@ -83,6 +83,13 @@ class HighlightTracker
 	private final Set<Player> piledPlayers = new HashSet<>();
 
 	/**
+	 * Teammates at least fallInThreshold other teammates are interacting with - leading a fall-in
+	 * (MenuHandler makes their Follow the left-click).
+	 */
+	@Getter
+	private final Set<Player> fallInLeaders = new HashSet<>();
+
+	/**
 	 * Enemies interacting with you, in the order they started, capped at maxAttackers so the cap
 	 * keeps whoever engaged you first.
 	 */
@@ -173,6 +180,7 @@ class HighlightTracker
 		updateCallersAndTargets();
 		updateSnipes();
 		updatePiles();
+		updateFallIn();
 		updateAttackers();
 		rebuildStyles();
 	}
@@ -185,6 +193,7 @@ class HighlightTracker
 		targets.clear();
 		snipedPlayers.clear();
 		piledPlayers.clear();
+		fallInLeaders.clear();
 		attackers.clear();
 		targetFlashEndTimes.clear();
 		previousTargets = new HashSet<>();
@@ -324,6 +333,43 @@ class HighlightTracker
 	 * An uncalled pile: an enemy that at least targetedPlayerThreshold of your team (you included)
 	 * are interacting with. Team-on-team interactions (sparring, following) never count.
 	 */
+	/**
+	 * A teammate is leading a fall-in when enough teammates follow them. Teammates don't attack
+	 * each other, so a teammate interacting with a teammate is following them.
+	 */
+	private void updateFallIn()
+	{
+		fallInLeaders.clear();
+		if (!config.prioritiseFallInFollow())
+		{
+			return;
+		}
+
+		Player local = client.getLocalPlayer();
+		Map<Player, Integer> counts = new HashMap<>();
+		for (Player player : client.getPlayers())
+		{
+			if (player == null || !team.isOwnTeam(player))
+			{
+				continue;
+			}
+			Actor interacting = player.getInteracting();
+			if (interacting instanceof Player && interacting != local && team.isOwnTeam((Player) interacting))
+			{
+				counts.merge((Player) interacting, 1, Integer::sum);
+			}
+		}
+
+		int threshold = Math.max(1, config.fallInThreshold());
+		counts.forEach((player, count) ->
+		{
+			if (count >= threshold)
+			{
+				fallInLeaders.add(player);
+			}
+		});
+	}
+
 	private void updatePiles()
 	{
 		piledPlayers.clear();

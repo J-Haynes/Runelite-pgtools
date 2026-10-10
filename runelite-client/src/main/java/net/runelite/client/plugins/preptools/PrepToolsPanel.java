@@ -975,7 +975,7 @@ public class PrepToolsPanel extends PluginPanel
 			return;
 		}
 
-		String text = String.join("\n", missingNames);
+		String text = "Missing names:\n" + String.join("\n", missingNames);
 		Toolkit.getDefaultToolkit().getSystemClipboard().setContents(new StringSelection(text), null);
 	}
 

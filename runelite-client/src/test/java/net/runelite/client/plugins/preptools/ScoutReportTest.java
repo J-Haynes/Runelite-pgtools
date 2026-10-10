@@ -1,10 +1,17 @@
 package net.runelite.client.plugins.preptools;
 
+import java.awt.Color;
+import java.awt.Graphics2D;
+import java.awt.Rectangle;
+import java.awt.image.BufferedImage;
 import java.util.HashMap;
+import java.util.List;
 import java.util.Map;
+import java.util.function.Function;
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertNull;
+import static org.junit.Assert.assertSame;
 import static org.junit.Assert.assertTrue;
 import okhttp3.HttpUrl;
 import org.junit.Test;
@@ -67,6 +74,67 @@ public class ScoutReportTest
 		assertEquals("Me", ScoutReporter.posterName("   ", "Me"));
 		assertNull(ScoutReporter.posterName("", null));
 		assertEquals(80, ScoutReporter.posterName("x".repeat(100), "Me").length());
+	}
+
+	@Test
+	public void minimapIsCutAsAScaledUpCircle()
+	{
+		// A stretched frame, twice the canvas: the minimap at canvas (10, 10) is at (20, 20) in it.
+		BufferedImage frame = new BufferedImage(200, 160, BufferedImage.TYPE_INT_RGB);
+		Graphics2D g = frame.createGraphics();
+		g.setColor(Color.BLUE);
+		g.fillRect(0, 0, 200, 160);
+		g.setColor(Color.RED);
+		g.fillRect(20, 20, 40, 40);
+		g.dispose();
+
+		// Not turned (rotation 0), you in the middle.
+		BufferedImage minimap = ScoutMap.minimap(frame, new Rectangle(10, 10, 20, 20), 100, 20, 20, 0, 4,
+			3200, 3600, 0, List.of());
+		assertEquals(80, minimap.getWidth());
+		assertEquals(80, minimap.getHeight());
+		assertEquals(Color.RED.getRGB(), minimap.getRGB(40, 40));
+		// Outside the circle: transparent, not the interface around the minimap.
+		assertEquals(0, minimap.getRGB(0, 0) >>> 24);
+	}
+
+	@Test
+	public void drawnMapIsNorthUpWithYouInTheMiddle()
+	{
+		// Map square y 2 (world y 128-191) red, y 1 (64-127) blue; you on the line between.
+		Function<int[], BufferedImage> tiles = square ->
+		{
+			BufferedImage tile = new BufferedImage(256, 256, BufferedImage.TYPE_INT_RGB);
+			Graphics2D g = tile.createGraphics();
+			g.setColor(square[2] == 2 ? Color.RED : Color.BLUE);
+			g.fillRect(0, 0, 256, 256);
+			g.dispose();
+			return tile;
+		};
+		BufferedImage map = ScoutMap.drawn(tiles, 96, 128, 0, 16,
+			List.of(new ScoutMap.Dot(96, 128, ScoutMap.YOU_COLOR)), List.of(), null);
+
+		assertEquals(ScoutMap.DRAWN_SIZE, map.getWidth());
+		assertEquals(Color.RED.getRGB(), map.getRGB(ScoutMap.DRAWN_SIZE / 2, 5));
+		assertEquals(Color.BLUE.getRGB(), map.getRGB(ScoutMap.DRAWN_SIZE / 2, ScoutMap.DRAWN_SIZE - 5));
+		assertEquals(Color.WHITE.getRGB(), map.getRGB(ScoutMap.DRAWN_SIZE / 2, ScoutMap.DRAWN_SIZE / 2));
+	}
+
+	@Test
+	public void capeCounterGoesOnTheDrawnMapAndBesideTheMinimap()
+	{
+		List<ScoutMap.Cape> capes = List.of(new ScoutMap.Cape(null, "10x Team-50 (EoP)"), new ScoutMap.Cape(null, "3x Team-12"));
+
+		BufferedImage drawn = new BufferedImage(ScoutMap.DRAWN_SIZE, ScoutMap.DRAWN_SIZE, BufferedImage.TYPE_INT_RGB);
+		BufferedImage onMap = ScoutMap.withCapes(drawn, capes);
+		assertEquals(ScoutMap.DRAWN_SIZE, onMap.getWidth());
+		assertEquals(ScoutMap.DRAWN_SIZE, onMap.getHeight());
+
+		BufferedImage minimap = new BufferedImage(150, 150, BufferedImage.TYPE_INT_ARGB);
+		assertTrue(ScoutMap.withCapes(minimap, capes).getWidth() > 150);
+
+		assertSame(minimap, ScoutMap.withCapes(minimap, List.of()));
+		assertNull(ScoutMap.withCapes(null, List.of()));
 	}
 
 	@Test
