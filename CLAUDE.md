@@ -28,15 +28,20 @@ client with similar team-coordination features. Core pieces:
   **Fall-in finder** (`prioritiseFallInFollow`, default on, `fallInThreshold` 20, asked for
   2026-10-11): a teammate that many teammates are interacting with (= following - teammates don't
   attack each other) gets left-click Follow (`HighlightTracker#getFallInLeaders()`), after the
-  primary caller's Follow, before a backup's; Attack priorities still win.
+  primary caller's Follow, before a backup's; Attack priorities still win. The leader is also
+  **outlined** (`highlightFallInLeader`, default on, `fallInLeaderColor`; asked for 2026-10-18),
+  found even with the left-click Follow off. **Enemy fall-in finder** (`enemyFallInFinder`, default
+  off, own `enemyFallInThreshold` 10 + colour): an enemy that many enemies are interacting with -
+  enemy-on-enemy counts as following, except when both wear *different* team capes (two other clans
+  fighting). Highlight only, no menu change (`HighlightTracker#getEnemyFallInLeaders()`).
   Each row is two lines (asked for - one line was "too busy"): radio + in-game name on top,
   nickname + on-screen status underneath (`PrepToolsPanel#addRow()`).
 - **Highlighting** — three independent detection categories, each with its own config section and
   colour, but sharing one rendering style (shape/outline width/font/dot size — the config's
   "Overlay" section, `PrepToolsConfig#highlightShape()` etc.) so every highlighted player looks
   visually consistent no matter which category put them there. Priority when a player qualifies
-  for more than one at once, lowest to highest: backup caller < attacker < snipe list < pile
-  finder < primary caller < target (`HighlightTracker#rebuildStyles()`, cached once per tick;
+  for more than one at once, lowest to highest: backup caller < fall-in leader < enemy fall-in
+  leader < attacker < snipe list < pile finder < primary caller < target (`HighlightTracker#rebuildStyles()`, cached once per tick;
   `#getStyles()` adds the per-frame new-target flash on top) - e.g. a target overrides
   its own pile-finder highlight.
   - **Caller** — the primary caller and any backup callers from the caller list get an outline
@@ -131,7 +136,7 @@ client with similar team-coordination features. Core pieces:
   last line without the comma (`No team capes in sight` if none qualify).
   Counts **every** on-screen player by team cape number, own team included - the same numbers as
   the Team Capes overlay (it first skipped FC/clan members, which silently dropped named capes the
-  overlay showed). Capes tab name added if set,
+  overlay showed), cut to Scout's own combat level range if `scoutLevelFilter` is on. Capes tab name added if set,
   only capes with at least `scoutMinCapeCount` (default 2) wearers; capeless players are left out
   on purpose ("7 other players" was called useless); location parts are Location Spam's. Only sends to a real Discord webhook URL
   (`isDiscordWebhook()`), `allowed_mentions` empty so a cape name can't ping, 5s cooldown (Discord
@@ -237,7 +242,10 @@ client with similar team-coordination features. Core pieces:
     by hand. A source not used: the game cache's world-map labels (`cache` module) - current, but
     points only.
 - **Team cape overlay** — like vanilla RuneLite's "Teams" plugin, but with a custom name per team
-  number (`PrepToolsConfig#teamCapeNames`). Every cell reports the tallest cell's height
+  number (`PrepToolsConfig#teamCapeNames`). Optional combat level range (`capeLevelFilter` +
+  `capeMinCombatLevel`/`capeMaxCombatLevel`, inclusive, default off; asked for 2026-10-18). Scout
+  has its **own separate** range (`scoutLevelFilter`/`scoutMinCombatLevel`/`scoutMaxCombatLevel` -
+  asked for separately, don't merge them); both count through `TeamCapeOverlay#countCapes()`. Every cell reports the tallest cell's height
   (`EvenHeightCell`): core's wrapping `PanelComponent` moves a new row down by the *last* cell's
   height, so a named cape (icon + text) in row 2 after a plain icon ended row 1 hung out of the box.
 - **Right-click menu integration** — prioritises/recolours Attack and freeze-spell casts (target,
@@ -462,6 +470,10 @@ Overlays inject the tracker they draw from, not the plugin. Tests live in
   allow. Values the sidebar writes (pin, config lists, Mapper preview) are `volatile` swaps.
 
 ## Open questions / unverified
+
+- **Fall-in leader outline, enemy fall-in finder, cape level range (2026-10-18)** - not seen in
+  game. Is threshold 10 sensible for enemies? Do enemies attacking a capeless third clan show up
+  as a false "fall-in"?
 
 - **Scout pictures, fall-in finder (2026-10-11)** - the first minimap crop was seen working.
   Not yet seen: the drawn map, the minimap's north-up turn + zoom-out (does the minimap blink

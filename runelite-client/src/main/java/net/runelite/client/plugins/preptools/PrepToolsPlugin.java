@@ -14,7 +14,6 @@ import java.util.ArrayList;
 import java.util.Collections;
 import java.util.Comparator;
 import java.util.Deque;
-import java.util.HashMap;
 import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -1228,14 +1227,8 @@ public class PrepToolsPlugin extends Plugin
 			return;
 		}
 
-		Map<Integer, Integer> counts = new HashMap<>();
-		for (Player player : client.getPlayers())
-		{
-			if (player != null && player.getTeam() > 0)
-			{
-				counts.merge(player.getTeam(), 1, Integer::sum);
-			}
-		}
+		Map<Integer, Integer> counts = TeamCapeOverlay.countCapes(client.getPlayers(), config.capeLevelFilter(),
+			config.capeMinCombatLevel(), config.capeMaxCombatLevel());
 
 		Map<Integer, Integer> sorted = new LinkedHashMap<>();
 		counts.entrySet().stream()

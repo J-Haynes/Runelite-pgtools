@@ -4,9 +4,11 @@ import java.awt.Dimension;
 import java.awt.Graphics2D;
 import java.awt.Point;
 import java.awt.Rectangle;
+import java.util.HashMap;
 import java.util.Map;
 import javax.inject.Inject;
 import static net.runelite.api.MenuAction.RUNELITE_OVERLAY_CONFIG;
+import net.runelite.api.Player;
 import net.runelite.api.gameval.ItemID;
 import net.runelite.client.game.ItemManager;
 import static net.runelite.client.ui.overlay.OverlayManager.OPTION_CONFIGURE;
@@ -153,6 +155,30 @@ public class TeamCapeOverlay extends OverlayPanel
 		{
 			cell.setPreferredSize(dimension);
 		}
+	}
+
+	/**
+	 * Players wearing each team cape number, unsorted - everyone on screen, own team included, cut
+	 * to combat levels min to max (inclusive) when filter is on. The overlay and Scout both count
+	 * with this, each with its own level range.
+	 */
+	static Map<Integer, Integer> countCapes(Iterable<Player> players, boolean filter, int min, int max)
+	{
+		Map<Integer, Integer> counts = new HashMap<>();
+		for (Player player : players)
+		{
+			if (player == null || player.getTeam() <= 0)
+			{
+				continue;
+			}
+			int level = player.getCombatLevel();
+			if (filter && (level < min || level > max))
+			{
+				continue;
+			}
+			counts.merge(player.getTeam(), 1, Integer::sum);
+		}
+		return counts;
 	}
 
 	/**

@@ -18,7 +18,8 @@ import net.runelite.client.util.Text;
 
 /**
  * Who gets highlighted, recomputed every game tick: the primary and backup callers, the primary
- * caller's target, snipe list players, piles (Pile Finder) and players attacking you. Also caches
+ * caller's target, snipe list players, piles (Pile Finder), fall-in leaders (yours and, optionally,
+ * the enemy's) and players attacking you. Also caches
  * each highlighted player's HighlightStyle, which the outline/name overlays and the menu
  * recolouring read. Client thread only, except setPinnedCaller().
  */
@@ -84,10 +85,16 @@ class HighlightTracker
 
 	/**
 	 * Teammates at least fallInThreshold other teammates are interacting with - leading a fall-in
-	 * (MenuHandler makes their Follow the left-click).
+	 * (MenuHandler makes their Follow the left-click if prioritiseFallInFollow is on).
 	 */
 	@Getter
 	private final Set<Player> fallInLeaders = new HashSet<>();
+
+	/**
+	 * Enemies at least enemyFallInThreshold other enemies are following - their fall-in leader.
+	 */
+	@Getter
+	private final Set<Player> enemyFallInLeaders = new HashSet<>();
 
 	/**
 	 * Enemies interacting with you, in the order they started, capped at maxAttackers so the cap
@@ -194,6 +201,7 @@ class HighlightTracker
 		snipedPlayers.clear();
 		piledPlayers.clear();
 		fallInLeaders.clear();
+		enemyFallInLeaders.clear();
 		attackers.clear();
 		targetFlashEndTimes.clear();
 		previousTargets = new HashSet<>();
@@ -330,46 +338,76 @@ class HighlightTracker
 	}
 
 	/**
-	 * An uncalled pile: an enemy that at least targetedPlayerThreshold of your team (you included)
-	 * are interacting with. Team-on-team interactions (sparring, following) never count.
-	 */
-	/**
 	 * A teammate is leading a fall-in when enough teammates follow them. Teammates don't attack
-	 * each other, so a teammate interacting with a teammate is following them.
+	 * each other, so a teammate interacting with a teammate is following them. Same for the enemy:
+	 * an enemy interacting with another enemy is taken as following, unless both wear team capes
+	 * and they differ - then it's two other clans fighting.
 	 */
 	private void updateFallIn()
 	{
 		fallInLeaders.clear();
-		if (!config.prioritiseFallInFollow())
+		enemyFallInLeaders.clear();
+		boolean own = config.prioritiseFallInFollow() || config.highlightFallInLeader();
+		boolean enemy = config.enemyFallInFinder();
+		if (!own && !enemy)
 		{
 			return;
 		}
 
 		Player local = client.getLocalPlayer();
-		Map<Player, Integer> counts = new HashMap<>();
+		Map<Player, Integer> ownCounts = new HashMap<>();
+		Map<Player, Integer> enemyCounts = new HashMap<>();
 		for (Player player : client.getPlayers())
 		{
-			if (player == null || !team.isOwnTeam(player))
+			if (player == null)
 			{
 				continue;
 			}
+			// You count as a follower, never as a leader.
 			Actor interacting = player.getInteracting();
-			if (interacting instanceof Player && interacting != local && team.isOwnTeam((Player) interacting))
+			if (!(interacting instanceof Player) || interacting == local || interacting == player)
 			{
-				counts.merge((Player) interacting, 1, Integer::sum);
+				continue;
+			}
+			Player leader = (Player) interacting;
+			boolean followerOnTeam = team.isOwnTeam(player);
+			if (followerOnTeam != team.isOwnTeam(leader))
+			{
+				continue;
+			}
+			if (followerOnTeam)
+			{
+				if (own)
+				{
+					ownCounts.merge(leader, 1, Integer::sum);
+				}
+			}
+			else if (enemy && !(player.getTeam() > 0 && leader.getTeam() > 0 && player.getTeam() != leader.getTeam()))
+			{
+				enemyCounts.merge(leader, 1, Integer::sum);
 			}
 		}
 
-		int threshold = Math.max(1, config.fallInThreshold());
+		addOverThreshold(ownCounts, config.fallInThreshold(), fallInLeaders);
+		addOverThreshold(enemyCounts, config.enemyFallInThreshold(), enemyFallInLeaders);
+	}
+
+	private static void addOverThreshold(Map<Player, Integer> counts, int threshold, Set<Player> into)
+	{
+		int min = Math.max(1, threshold);
 		counts.forEach((player, count) ->
 		{
-			if (count >= threshold)
+			if (count >= min)
 			{
-				fallInLeaders.add(player);
+				into.add(player);
 			}
 		});
 	}
 
+	/**
+	 * An uncalled pile: an enemy that at least targetedPlayerThreshold of your team (you included)
+	 * are interacting with. Team-on-team interactions (sparring, following) never count.
+	 */
 	private void updatePiles()
 	{
 		piledPlayers.clear();
@@ -445,7 +483,8 @@ class HighlightTracker
 
 	/**
 	 * Highlight priority when a player is in more than one category, lowest to highest: backup
-	 * caller, attacker, snipe, pile, primary caller, target - later puts win. A frozen pile or
+	 * caller, fall-in leader, enemy fall-in leader, attacker, snipe, pile, primary caller,
+	 * target - later puts win. A frozen pile or
 	 * target gets its frozen colour (FreezeTracker has already moved on to this tick), and an
 	 * out-of-range snipe/pile/target the out-of-range colour over all of that (AttackRangeFilter
 	 * has also moved on).
@@ -457,6 +496,11 @@ class HighlightTracker
 			config.nameFontSize(), config.highlightShape(), config.dotSize());
 
 		putAll(styles, backupCallers, base.withColor(config.backupCallerColor()));
+		if (config.highlightFallInLeader())
+		{
+			putAll(styles, fallInLeaders, base.withColor(config.fallInLeaderColor()));
+		}
+		putAll(styles, enemyFallInLeaders, base.withColor(config.enemyFallInColor()));
 		putAll(styles, attackers, base.withColor(config.attackerColor()));
 		putAll(styles, snipedPlayers, base.withColor(config.snipeColor()));
 		putAll(styles, piledPlayers, base.withColor(config.targetedPlayerColor()), base.withColor(config.frozenPileColor()));
@@ -470,7 +514,7 @@ class HighlightTracker
 		if (range.isEnabled())
 		{
 			HighlightStyle outOfRange = base.withColor(config.outOfRangeColor());
-			for (Set<Player> players : List.of(snipedPlayers, piledPlayers, targets))
+			for (Set<Player> players : List.of(enemyFallInLeaders, snipedPlayers, piledPlayers, targets))
 			{
 				for (Player player : players)
 				{

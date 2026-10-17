@@ -412,10 +412,68 @@ public class TrackerTest
 		when(other.getInteracting()).thenReturn(mate);
 		highlights.onGameTick();
 		assertEquals(Collections.singleton(mate), highlights.getFallInLeaders());
+		assertEquals(config.fallInLeaderColor(), highlights.getStyles().get(mate).color);
 
+		// Left-click Follow off: still found, and still highlighted.
 		when(config.prioritiseFallInFollow()).thenReturn(false);
 		highlights.onGameTick();
+		assertEquals(Collections.singleton(mate), highlights.getFallInLeaders());
+
+		when(config.highlightFallInLeader()).thenReturn(false);
+		highlights.onGameTick();
 		assertTrue(highlights.getFallInLeaders().isEmpty());
+		assertNull(highlights.getStyles().get(mate));
+	}
+
+	@Test
+	public void anEnemyEnoughEnemiesFollowIsTheEnemyFallInLeader()
+	{
+		when(config.enemyFallInThreshold()).thenReturn(2);
+		HighlightTracker highlights = new HighlightTracker(client, config, team, new FreezeTracker(client, config, team), range());
+		Player enemyC = player("Enemy C", false);
+		setPlayers(local, mate, enemyA, enemyB, enemyC);
+		team.refresh();
+		when(enemyB.getInteracting()).thenReturn(enemyA);
+		when(enemyC.getInteracting()).thenReturn(enemyA);
+		// A teammate attacking the enemy leader isn't a follower of theirs.
+		when(mate.getInteracting()).thenReturn(enemyA);
+
+		highlights.onGameTick();
+		assertTrue("off by default", highlights.getEnemyFallInLeaders().isEmpty());
+
+		when(config.enemyFallInFinder()).thenReturn(true);
+		highlights.onGameTick();
+		assertEquals(Collections.singleton(enemyA), highlights.getEnemyFallInLeaders());
+		assertEquals(config.enemyFallInColor(), highlights.getStyles().get(enemyA).color);
+		assertTrue(highlights.getFallInLeaders().isEmpty());
+
+		// Different team capes: another clan attacking them, not following.
+		when(enemyA.getTeam()).thenReturn(50);
+		when(enemyB.getTeam()).thenReturn(50);
+		when(enemyC.getTeam()).thenReturn(38);
+		highlights.onGameTick();
+		assertTrue(highlights.getEnemyFallInLeaders().isEmpty());
+
+		// A capeless follower still counts.
+		when(enemyC.getTeam()).thenReturn(0);
+		highlights.onGameTick();
+		assertEquals(Collections.singleton(enemyA), highlights.getEnemyFallInLeaders());
+	}
+
+	@Test
+	public void capeCountsCanBeLimitedToACombatLevelRange()
+	{
+		when(local.getTeam()).thenReturn(50);
+		when(local.getCombatLevel()).thenReturn(60);
+		when(mate.getTeam()).thenReturn(50);
+		when(mate.getCombatLevel()).thenReturn(90);
+		when(enemyA.getTeam()).thenReturn(38);
+		when(enemyA.getCombatLevel()).thenReturn(70);
+		when(enemyB.getCombatLevel()).thenReturn(70);
+
+		assertEquals(Map.of(50, 2, 38, 1), TeamCapeOverlay.countCapes(client.getPlayers(), false, 60, 70));
+		// Both limits are inclusive.
+		assertEquals(Map.of(50, 1, 38, 1), TeamCapeOverlay.countCapes(client.getPlayers(), true, 60, 70));
 	}
 
 	@Test

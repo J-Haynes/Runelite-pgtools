@@ -10,7 +10,6 @@ import java.io.IOException;
 import java.nio.file.Files;
 import java.util.ArrayList;
 import java.util.Collections;
-import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -171,15 +170,10 @@ class ScoutReporter
 		}
 		lastSentMillis = now;
 
-		// Everyone wearing a cape, own team included - the same numbers as the Team Capes overlay.
-		Map<Integer, Integer> capeCounts = new HashMap<>();
-		for (Player player : client.getPlayers())
-		{
-			if (player != null && player.getTeam() > 0)
-			{
-				capeCounts.merge(player.getTeam(), 1, Integer::sum);
-			}
-		}
+		// Everyone wearing a cape, own team included - counted like the Team Capes overlay, but with
+		// Scout's own combat level range.
+		Map<Integer, Integer> capeCounts = TeamCapeOverlay.countCapes(client.getPlayers(), config.scoutLevelFilter(),
+			config.scoutMinCombatLevel(), config.scoutMaxCombatLevel());
 		String report = ScoutReport.format(capeCounts, capeNames, Math.max(1, config.scoutMinCapeCount()),
 			client.getWorld(), locationName, wildernessLevel);
 

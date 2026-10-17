@@ -156,6 +156,71 @@ public interface PrepToolsConfig extends Config
 		return 20;
 	}
 
+	@ConfigItem(
+		keyName = "highlightFallInLeader",
+		name = "Highlight fall-in leader",
+		description = "<html>Outlines whoever the fall-in finder picks, in the colour<br>"
+			+ "below. Works whether or not their Follow is made left-click.</html>",
+		position = 10,
+		section = "callersSection"
+	)
+	default boolean highlightFallInLeader()
+	{
+		return true;
+	}
+
+	@ConfigItem(
+		keyName = "fallInLeaderColor",
+		name = "Fall-in leader colour",
+		description = "Outline colour for the teammate leading the fall-in.",
+		position = 11,
+		section = "callersSection"
+	)
+	default Color fallInLeaderColor()
+	{
+		return new Color(0, 220, 160); // teal
+	}
+
+	@ConfigItem(
+		keyName = "enemyFallInFinder",
+		name = "Enemy fall-in finder",
+		description = "<html>Highlights an enemy (not your team) that many other enemies<br>"
+			+ "are following - usually their caller. Enemies wearing<br>"
+			+ "different team capes aren't counted as following each other,<br>"
+			+ "so two other clans fighting don't look like a fall-in.</html>",
+		position = 12,
+		section = "callersSection"
+	)
+	default boolean enemyFallInFinder()
+	{
+		return false;
+	}
+
+	@Range(min = 2)
+	@ConfigItem(
+		keyName = "enemyFallInThreshold",
+		name = "Enemy fall-in followers",
+		description = "How many enemies must be following an enemy for it to be highlighted.",
+		position = 13,
+		section = "callersSection"
+	)
+	default int enemyFallInThreshold()
+	{
+		return 10;
+	}
+
+	@ConfigItem(
+		keyName = "enemyFallInColor",
+		name = "Enemy fall-in colour",
+		description = "Outline colour for an enemy leading their team's fall-in.",
+		position = 14,
+		section = "callersSection"
+	)
+	default Color enemyFallInColor()
+	{
+		return Color.MAGENTA;
+	}
+
 	// --- Snipe List section ---
 
 	@ConfigSection(
@@ -1050,6 +1115,45 @@ public interface PrepToolsConfig extends Config
 	}
 
 	@ConfigItem(
+		keyName = "capeLevelFilter",
+		name = "Filter by combat level",
+		description = "<html>Only count cape wearers whose combat level is between the<br>"
+			+ "two limits below. This overlay only - Scout has its own.</html>",
+		position = 6,
+		section = "teamCapeSection"
+	)
+	default boolean capeLevelFilter()
+	{
+		return false;
+	}
+
+	@Range(min = 3, max = 126)
+	@ConfigItem(
+		keyName = "capeMinCombatLevel",
+		name = "Lowest combat level",
+		description = "Cape wearers below this combat level aren't counted (with the filter on).",
+		position = 7,
+		section = "teamCapeSection"
+	)
+	default int capeMinCombatLevel()
+	{
+		return 3;
+	}
+
+	@Range(min = 3, max = 126)
+	@ConfigItem(
+		keyName = "capeMaxCombatLevel",
+		name = "Highest combat level",
+		description = "Cape wearers above this combat level aren't counted (with the filter on).",
+		position = 8,
+		section = "teamCapeSection"
+	)
+	default int capeMaxCombatLevel()
+	{
+		return 126;
+	}
+
+	@ConfigItem(
 		keyName = "showFriendsChatMemberCount",
 		name = "Friends chat count",
 		description = "<html>Infobox counting friends chat members near you (in your<br>"
@@ -1729,6 +1833,46 @@ public interface PrepToolsConfig extends Config
 	default boolean scoutCapes()
 	{
 		return true;
+	}
+
+	@ConfigItem(
+		keyName = "scoutLevelFilter",
+		name = "Filter by combat level",
+		description = "<html>Only count cape wearers whose combat level is between the<br>"
+			+ "two limits below, in the message and on the map. Separate<br>"
+			+ "from the Team Capes overlay's own filter.</html>",
+		position = 8,
+		section = "scoutSection"
+	)
+	default boolean scoutLevelFilter()
+	{
+		return false;
+	}
+
+	@Range(min = 3, max = 126)
+	@ConfigItem(
+		keyName = "scoutMinCombatLevel",
+		name = "Lowest combat level",
+		description = "Cape wearers below this combat level aren't reported (with the filter on).",
+		position = 9,
+		section = "scoutSection"
+	)
+	default int scoutMinCombatLevel()
+	{
+		return 3;
+	}
+
+	@Range(min = 3, max = 126)
+	@ConfigItem(
+		keyName = "scoutMaxCombatLevel",
+		name = "Highest combat level",
+		description = "Cape wearers above this combat level aren't reported (with the filter on).",
+		position = 10,
+		section = "scoutSection"
+	)
+	default int scoutMaxCombatLevel()
+	{
+		return 126;
 	}
 
 	// --- Nicknames section ---

@@ -3,6 +3,7 @@ package net.runelite.client.plugins.preptools;
 import java.awt.Color;
 import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.Collections;
 import java.util.EnumMap;
 import java.util.List;
 import java.util.Map;
@@ -135,7 +136,7 @@ class MenuHandler
 		Player local = client.getLocalPlayer();
 		Player primaryCaller = highlights.getPrimaryCaller();
 		Set<Player> backupCallers = highlights.getBackupCallers();
-		Set<Player> fallInLeaders = highlights.getFallInLeaders();
+		Set<Player> fallInLeaders = config.prioritiseFallInFollow() ? highlights.getFallInLeaders() : Collections.emptySet();
 		String selectedSpell = getSelectedSpellName();
 
 		boolean debug = config.debugLogging() && System.currentTimeMillis() - lastDebugLogMillis >= DEBUG_LOG_INTERVAL_MILLIS;
