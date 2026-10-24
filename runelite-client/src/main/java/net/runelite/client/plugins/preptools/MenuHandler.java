@@ -104,7 +104,7 @@ class MenuHandler
 	 * One pass over the sorted menu: recolour, drop teammate Attack/spell entries, then pick the
 	 * left-click (the last entry). Left-click preference: a prioritised target/pile/snipe/attacker
 	 * Attack (tie-break: the Menu section's Attack priority), then the primary caller's Follow, a
-	 * fall-in leader's Follow, a backup caller's Follow, then - only if
+	 * fall-in leader's Follow, a backup caller's Follow, the enemy fall-in leader's Follow, then - only if
 	 * we removed the entry that WAS the left-click - some other enemy's Attack. Otherwise the game's
 	 * own order is kept. Shift-click Walk here beats all of it while shift is held.
 	 */
@@ -137,6 +137,8 @@ class MenuHandler
 		Player primaryCaller = highlights.getPrimaryCaller();
 		Set<Player> backupCallers = highlights.getBackupCallers();
 		Set<Player> fallInLeaders = config.prioritiseFallInFollow() ? highlights.getFallInLeaders() : Collections.emptySet();
+		Set<Player> enemyFallInLeaders = config.prioritiseEnemyFallInFollow()
+			? highlights.getEnemyFallInLeaders() : Collections.emptySet();
 		String selectedSpell = getSelectedSpellName();
 
 		boolean debug = config.debugLogging() && System.currentTimeMillis() - lastDebugLogMillis >= DEBUG_LOG_INTERVAL_MILLIS;
@@ -150,6 +152,7 @@ class MenuHandler
 		int primaryFollowIndex = -1;
 		int backupFollowIndex = -1;
 		int fallInFollowIndex = -1;
+		int enemyFallInFollowIndex = -1;
 		int anyEnemyAttackIndex = -1;
 		boolean removedAny = false;
 		boolean removedLeftClick = false;
@@ -203,6 +206,15 @@ class MenuHandler
 			else if (!shiftWalk && fallInLeaders.contains(player) && "Follow".equalsIgnoreCase(option))
 			{
 				fallInFollowIndex = kept.size();
+				kept.add(entry);
+			}
+			else if (!shiftWalk && enemyFallInLeaders.contains(player) && "Follow".equalsIgnoreCase(option))
+			{
+				if (style != null)
+				{
+					entry.setOption(ColorUtil.wrapWithColorTag("Follow", style.color));
+				}
+				enemyFallInFollowIndex = kept.size();
 				kept.add(entry);
 			}
 			else if ("Attack".equalsIgnoreCase(option))
@@ -297,7 +309,8 @@ class MenuHandler
 			if (leftClick < 0)
 			{
 				leftClick = primaryFollowIndex >= 0 ? primaryFollowIndex
-					: fallInFollowIndex >= 0 ? fallInFollowIndex : backupFollowIndex;
+					: fallInFollowIndex >= 0 ? fallInFollowIndex
+					: backupFollowIndex >= 0 ? backupFollowIndex : enemyFallInFollowIndex;
 			}
 			if (leftClick < 0 && removedLeftClick)
 			{

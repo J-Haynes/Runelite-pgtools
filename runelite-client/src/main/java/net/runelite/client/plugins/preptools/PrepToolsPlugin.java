@@ -278,6 +278,12 @@ public class PrepToolsPlugin extends Plugin
 	private Map<Integer, Integer> teamCapeCounts = Collections.emptyMap();
 
 	/**
+	 * On-screen enemies' combat levels by team cape - for the Capes tab's Enemy Levels.
+	 */
+	@Getter
+	private EnemyLevels enemyLevels = EnemyLevels.EMPTY;
+
+	/**
 	 * The Capes tab's team cape names, reloaded when that config changes.
 	 */
 	@Getter
@@ -398,6 +404,7 @@ public class PrepToolsPlugin extends Plugin
 		performance.reset();
 		nicknames.clear();
 		teamCapeCounts = Collections.emptyMap();
+		enemyLevels = EnemyLevels.EMPTY;
 		friendsChatLog.clear();
 	}
 
@@ -429,6 +436,7 @@ public class PrepToolsPlugin extends Plugin
 		attackAlert.onGameTick();
 		locations.onGameTick();
 		updateTeamCapeCounts();
+		updateEnemyLevels();
 		updateMemberCountInfoBoxes();
 		pushTickToPanel();
 		if (renames.onGameTick())
@@ -464,6 +472,8 @@ public class PrepToolsPlugin extends Plugin
 			case "spamRandom":
 			case "playerNicknames":
 			case "useFriendNotesAsNicknames":
+			case "enemyLevelRanges":
+			case "enemyLevelBucketSize":
 				reloadConfigLists();
 				rebuildPanelLists();
 				break;
@@ -499,6 +509,7 @@ public class PrepToolsPlugin extends Plugin
 			nicknames.clear();
 			renames.onSessionChanged();
 			teamCapeCounts = Collections.emptyMap();
+			enemyLevels = EnemyLevels.EMPTY;
 		}
 	}
 
@@ -977,8 +988,11 @@ public class PrepToolsPlugin extends Plugin
 		String selectedSpam = config.selectedSpamMessage();
 		boolean spamRandom = config.spamRandom();
 		Map<String, String> playerNicknames = ConfigLists.parsePlayerNicknames(config.playerNicknames());
+		String levelRanges = EnemyLevels.formatRanges(EnemyLevels.parseRanges(config.enemyLevelRanges()));
+		int levelBucketSize = config.enemyLevelBucketSize();
 		onSwing(() ->
 		{
+			panel.setEnemyLevelSettings(levelRanges, levelBucketSize);
 			panel.rebuildPlayerNicknames(playerNicknames);
 			panel.rebuild(callers);
 			panel.rebuildSnipeList(snipes);
@@ -1010,6 +1024,10 @@ public class PrepToolsPlugin extends Plugin
 		List<String> missing = computeMissingMembers();
 		List<ClanIdRow> clanIds = computeClanIdRows(onScreenCallers);
 		ClanWeaponSummary clanWeapons = computeClanWeapons();
+		EnemyLevels levels = enemyLevels;
+		List<EnemyLevels.LevelRange> levelRanges = EnemyLevels.chartRanges(
+			EnemyLevels.parseRanges(config.enemyLevelRanges()), config.enemyLevelBucketSize(), levels.getAll());
+		Map<Integer, String> capeNames = teamCapeNames;
 		onSwing(() ->
 		{
 			panel.updateStatus(onScreenCallers, primaryName);
@@ -1017,6 +1035,7 @@ public class PrepToolsPlugin extends Plugin
 			panel.updateMissingMembers(missing);
 			panel.updateClanIds(clanIds);
 			panel.updateClanWeapons(clanWeapons);
+			panel.updateEnemyLevels(levels, levelRanges, capeNames);
 		});
 		pushLocationMapper();
 	}
@@ -1235,6 +1254,12 @@ public class PrepToolsPlugin extends Plugin
 			.sorted(Map.Entry.<Integer, Integer>comparingByValue().reversed().thenComparing(Map.Entry.comparingByKey()))
 			.forEach(e -> sorted.put(e.getKey(), e.getValue()));
 		teamCapeCounts = sorted;
+	}
+
+	private void updateEnemyLevels()
+	{
+		enemyLevels = EnemyLevels.compute(client.getPlayers(), p -> !team.isOwnTeam(p),
+			Math.max(1, config.minimumTeamCapeCount()));
 	}
 
 	/**

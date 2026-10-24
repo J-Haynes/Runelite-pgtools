@@ -5,6 +5,7 @@ import java.util.Collections;
 import java.util.EnumSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import net.runelite.api.Client;
 import net.runelite.api.Friend;
 import net.runelite.api.FriendContainer;
@@ -458,6 +459,51 @@ public class TrackerTest
 		when(enemyC.getTeam()).thenReturn(0);
 		highlights.onGameTick();
 		assertEquals(Collections.singleton(enemyA), highlights.getEnemyFallInLeaders());
+	}
+
+	@Test
+	public void enemyLevelsAreGroupedByCape()
+	{
+		Player enemyC = player("enemy c", false);
+		Player enemyD = player("enemy d", false);
+		when(local.getTeam()).thenReturn(50);
+		when(enemyA.getTeam()).thenReturn(38);
+		when(enemyA.getCombatLevel()).thenReturn(70);
+		when(enemyB.getTeam()).thenReturn(38);
+		when(enemyB.getCombatLevel()).thenReturn(62);
+		when(enemyC.getTeam()).thenReturn(7);
+		when(enemyC.getCombatLevel()).thenReturn(55);
+		when(enemyD.getCombatLevel()).thenReturn(81);
+		Set<Player> own = Set.of(local, mate);
+
+		EnemyLevels levels = EnemyLevels.compute(Arrays.asList(local, mate, enemyA, enemyB, enemyC, enemyD),
+			p -> !own.contains(p), 2);
+
+		assertEquals(Arrays.asList(55, 62, 70, 81), levels.getAll());
+		assertEquals(Collections.singletonList(new EnemyLevels.Group(38, Arrays.asList(62, 70))), levels.getCapes());
+		// Capeless, and team 7 with fewer than 2 wearers.
+		assertEquals(Arrays.asList(55, 81), levels.getOthers());
+		assertEquals(62, EnemyLevels.median(levels.getAll()));
+	}
+
+	@Test
+	public void enemyLevelRangesAreUserSetOrEveryNLevels()
+	{
+		// Commas or new lines, single levels, reversed ends, junk, out of 3-126, duplicates.
+		List<EnemyLevels.LevelRange> custom = EnemyLevels.parseRanges("60-69, 50 - 59\n75, 90-80, abc, 1-200, 50-59");
+		assertEquals("3-126, 50-59, 60-69, 75, 80-90", EnemyLevels.formatRanges(custom));
+		assertTrue(EnemyLevels.parseRanges("").isEmpty());
+
+		List<Integer> levels = Arrays.asList(55, 62, 70, 81);
+		// The user's ranges win; blank = every N levels, on multiples of N, lowest to highest enemy.
+		assertSame(custom, EnemyLevels.chartRanges(custom, 3, levels));
+		assertEquals("54-56, 57-59, 60-62, 63-65, 66-68, 69-71, 72-74, 75-77, 78-80, 81-83",
+			EnemyLevels.formatRanges(EnemyLevels.chartRanges(Collections.emptyList(), 3, levels)));
+
+		List<EnemyLevels.LevelRange> tens = EnemyLevels.parseRanges("50-59, 60-69");
+		assertEquals(1, EnemyLevels.count(levels, tens.get(0)));
+		assertEquals(1, EnemyLevels.count(levels, tens.get(1)));
+		assertEquals(2, EnemyLevels.outside(levels, tens));
 	}
 
 	@Test

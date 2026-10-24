@@ -232,6 +232,22 @@ class ConfigListEditor
 		configManager.setConfiguration(PrepToolsConfig.GROUP, "spamRandom", random);
 	}
 
+	// --- Enemy levels ---
+
+	/**
+	 * Saved tidied up (parsed and re-formatted); blank = automatic ranges.
+	 */
+	void setEnemyLevelRanges(String text)
+	{
+		configManager.setConfiguration(PrepToolsConfig.GROUP, "enemyLevelRanges",
+			EnemyLevels.formatRanges(EnemyLevels.parseRanges(text)));
+	}
+
+	void setEnemyLevelBucketSize(int size)
+	{
+		configManager.setConfiguration(PrepToolsConfig.GROUP, "enemyLevelBucketSize", Math.max(1, size));
+	}
+
 	// --- Team cape names ---
 
 	/**

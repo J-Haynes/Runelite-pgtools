@@ -237,6 +237,37 @@ public class MenuHandlerTest
 	}
 
 	@Test
+	public void enemyFallInLeaderFollowIsLeftClickOnlyWhenEnabled()
+	{
+		when(highlights.getEnemyFallInLeaders()).thenReturn(Collections.singleton(enemy));
+		MenuEntry follow = entry("Follow", enemy);
+		assertNull(run(follow, entry("Attack", enemy), walkHere()));
+
+		when(config.prioritiseEnemyFallInFollow()).thenReturn(true);
+		assertEquals(follow, leftClick(run(follow, entry("Attack", enemy), walkHere())));
+	}
+
+	@Test
+	public void ownFallInLeaderBeatsTheEnemyFallInFollow()
+	{
+		when(config.prioritiseEnemyFallInFollow()).thenReturn(true);
+		when(highlights.getEnemyFallInLeaders()).thenReturn(Collections.singleton(enemy));
+		when(highlights.getFallInLeaders()).thenReturn(Collections.singleton(teammate));
+		MenuEntry followTeammate = entry("Follow", teammate);
+		assertEquals(followTeammate, leftClick(run(entry("Follow", enemy), followTeammate, walkHere())));
+	}
+
+	@Test
+	public void targetAttackBeatsTheEnemyFallInFollow()
+	{
+		when(config.prioritiseEnemyFallInFollow()).thenReturn(true);
+		when(highlights.getEnemyFallInLeaders()).thenReturn(Collections.singleton(enemy));
+		targets.add(target);
+		MenuEntry attackTarget = entry("Attack", target);
+		assertEquals(attackTarget, leftClick(run(attackTarget, entry("Follow", enemy), walkHere())));
+	}
+
+	@Test
 	public void freezeOnTeammateIsRemoved()
 	{
 		MenuEntry snareTeammate = entry("Cast", teammate);

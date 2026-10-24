@@ -4,6 +4,8 @@ import java.awt.BorderLayout;
 import java.awt.Color;
 import java.awt.Component;
 import java.awt.Dimension;
+import java.awt.FlowLayout;
+import java.awt.Graphics;
 import java.awt.GridLayout;
 import java.awt.Image;
 import java.awt.Insets;
@@ -32,6 +34,7 @@ import javax.swing.BoxLayout;
 import javax.swing.ButtonGroup;
 import javax.swing.Icon;
 import javax.swing.JCheckBox;
+import javax.swing.JComponent;
 import javax.swing.JComboBox;
 import javax.swing.ImageIcon;
 import javax.swing.JButton;
@@ -180,6 +183,15 @@ public class PrepToolsPanel extends PluginPanel
 	private final JSpinner teamCapeNumberSpinner = new JSpinner(new SpinnerNumberModel(1, 1, 999, 1));
 	private final JTextField teamCapeNameField = new JTextField();
 
+	// --- Enemy levels (Capes tab) ---
+	private final JTextField enemyLevelRangesField = new JTextField();
+	private final JSpinner enemyLevelBucketSpinner = new JSpinner(new SpinnerNumberModel(3, 1, 20, 1));
+	private final JPanel enemyLevelsPanel = new JPanel();
+	private EnemyLevels lastEnemyLevels;
+	private List<EnemyLevels.LevelRange> lastEnemyLevelRanges;
+	private Map<Integer, String> lastEnemyLevelCapeNames;
+	private boolean settingEnemyLevelFields;
+
 	// --- Location mapper ---
 	private final JLabel currentCoordLabel = new JLabel();
 	private final JLabel hoveredCoordLabel = new JLabel();
@@ -221,7 +233,7 @@ public class PrepToolsPanel extends PluginPanel
 		MaterialTab spamTab = new MaterialTab("Spam", tabGroup, wrapTabContent(buildSpamSection()));
 		MaterialTab clanIdsTab = new MaterialTab("Clan Info", tabGroup, wrapTabContent(buildClanIdsSection()));
 		MaterialTab fcLogTab = new MaterialTab("FC", tabGroup, wrapTabContent(buildFriendsChatLogSection()));
-		MaterialTab capesTab = new MaterialTab("Capes", tabGroup, wrapTabContent(buildTeamCapeNamesSection()));
+		MaterialTab capesTab = new MaterialTab("Capes", tabGroup, wrapTabContent(buildCapesTab()));
 		MaterialTab locationTab = new MaterialTab("Location", tabGroup, wrapTabContent(buildLocationMapperSection()));
 		MaterialTab statsTab = new MaterialTab("Stats", tabGroup, wrapTabContent(buildPerformanceSection()));
 		MaterialTab namesTab = new MaterialTab("Names", tabGroup, wrapTabContent(buildPlayerNicknamesSection()));
@@ -1993,6 +2005,268 @@ public class PrepToolsPanel extends PluginPanel
 
 		revalidate();
 		repaint();
+	}
+
+	// ============================================================================================
+	// Capes tab, second section: on-screen enemies' combat levels per team cape
+	// (EnemyLevels, pushed every tick), counted in the user's level ranges.
+	// ============================================================================================
+
+	private static final int LEVEL_RANGE_LABEL_WIDTH = 52;
+	private static final int LEVEL_COUNT_LABEL_WIDTH = 24;
+
+	private JPanel buildCapesTab()
+	{
+		JPanel tab = new JPanel();
+		tab.setLayout(new BoxLayout(tab, BoxLayout.Y_AXIS));
+		tab.setBackground(ColorScheme.DARK_GRAY_COLOR);
+		tab.add(buildTeamCapeNamesSection());
+		tab.add(Box.createVerticalStrut(TIER_GAP * 2));
+		tab.add(buildEnemyLevelsSection());
+		return tab;
+	}
+
+	private JPanel buildEnemyLevelsSection()
+	{
+		JPanel section = new JPanel();
+		section.setLayout(new BoxLayout(section, BoxLayout.Y_AXIS));
+		section.setBackground(ColorScheme.DARK_GRAY_COLOR);
+		section.setAlignmentX(LEFT_ALIGNMENT);
+		section.setMaximumSize(new Dimension(PluginPanel.PANEL_WIDTH, Integer.MAX_VALUE));
+
+		JLabel title = createSectionTitle("Enemy Levels", 0);
+
+		JTextArea instructions = createDescriptionArea(
+			"Combat levels of enemies on screen (anyone not on your team), counted in level ranges. "
+				+ "A team cape gets its own chart once it has the Team Capes 'Minimum count' wearers; "
+				+ "everyone else is under Others. Set your own ranges, e.g. 3-49, 50-59, 60-126 - "
+				+ "or leave it blank for a range every N levels.");
+
+		enemyLevelRangesField.setFont(FontManager.getRunescapeSmallFont());
+		enemyLevelRangesField.setToolTipText("Level ranges, e.g. 3-49, 50-59, 60-126 - blank for automatic");
+		enemyLevelRangesField.addActionListener(e -> saveEnemyLevelRanges());
+
+		JButton saveButton = createSmallButton("Save", "Save these level ranges (blank = automatic)");
+		saveButton.addActionListener(e -> saveEnemyLevelRanges());
+
+		JPanel rangesRow = new JPanel(new BorderLayout(4, 0));
+		rangesRow.setAlignmentX(LEFT_ALIGNMENT);
+		rangesRow.setMaximumSize(new Dimension(PluginPanel.PANEL_WIDTH, Integer.MAX_VALUE));
+		rangesRow.add(enemyLevelRangesField, BorderLayout.CENTER);
+		rangesRow.add(saveButton, BorderLayout.EAST);
+		styleInputRow(rangesRow);
+
+		enemyLevelBucketSpinner.setFont(FontManager.getRunescapeSmallFont());
+		((JSpinner.DefaultEditor) enemyLevelBucketSpinner.getEditor()).getTextField().setColumns(2);
+		enemyLevelBucketSpinner.addChangeListener(e ->
+		{
+			if (!settingEnemyLevelFields)
+			{
+				lists.setEnemyLevelBucketSize((Integer) enemyLevelBucketSpinner.getValue());
+			}
+		});
+		JLabel bucketLabel = new JLabel("Automatic: a range every");
+		bucketLabel.setFont(FontManager.getRunescapeSmallFont());
+		bucketLabel.setForeground(ColorScheme.LIGHT_GRAY_COLOR);
+		JLabel levelsLabel = new JLabel("levels");
+		levelsLabel.setFont(FontManager.getRunescapeSmallFont());
+		levelsLabel.setForeground(ColorScheme.LIGHT_GRAY_COLOR);
+
+		JPanel bucketRow = new JPanel(new FlowLayout(FlowLayout.LEFT, 4, 0));
+		bucketRow.setBackground(ColorScheme.DARK_GRAY_COLOR);
+		bucketRow.setAlignmentX(LEFT_ALIGNMENT);
+		bucketRow.setMaximumSize(new Dimension(PluginPanel.PANEL_WIDTH, Integer.MAX_VALUE));
+		bucketRow.add(bucketLabel);
+		bucketRow.add(enemyLevelBucketSpinner);
+		bucketRow.add(levelsLabel);
+		styleInputRow(bucketRow);
+
+		enemyLevelsPanel.setLayout(new BoxLayout(enemyLevelsPanel, BoxLayout.Y_AXIS));
+		enemyLevelsPanel.setBackground(ColorScheme.DARK_GRAY_COLOR);
+		enemyLevelsPanel.setAlignmentX(LEFT_ALIGNMENT);
+		enemyLevelsPanel.setMaximumSize(new Dimension(PluginPanel.PANEL_WIDTH, Integer.MAX_VALUE));
+
+		section.add(title);
+		section.add(Box.createVerticalStrut(TIER_GAP));
+		section.add(instructions);
+		section.add(Box.createVerticalStrut(TIER_GAP));
+		section.add(rangesRow);
+		section.add(bucketRow);
+		section.add(Box.createVerticalStrut(TIER_GAP));
+		section.add(enemyLevelsPanel);
+		updateEnemyLevels(EnemyLevels.EMPTY, Collections.emptyList(), Collections.emptyMap());
+		return section;
+	}
+
+	private void saveEnemyLevelRanges()
+	{
+		String ranges = EnemyLevels.formatRanges(EnemyLevels.parseRanges(enemyLevelRangesField.getText()));
+		enemyLevelRangesField.setText(ranges);
+		lists.setEnemyLevelRanges(ranges);
+	}
+
+	/**
+	 * The saved ranges/bucket size, into the fields - at startup and when any list setting
+	 * changes. Ranges being typed (field focused) aren't overwritten.
+	 */
+	void setEnemyLevelSettings(String ranges, int bucketSize)
+	{
+		settingEnemyLevelFields = true;
+		if (!enemyLevelRangesField.isFocusOwner())
+		{
+			enemyLevelRangesField.setText(ranges);
+		}
+		enemyLevelBucketSpinner.setValue(Math.max(1, Math.min(20, bucketSize)));
+		settingEnemyLevelFields = false;
+	}
+
+	void updateEnemyLevels(EnemyLevels levels, List<EnemyLevels.LevelRange> ranges, Map<Integer, String> capeNames)
+	{
+		if (levels.equals(lastEnemyLevels) && ranges.equals(lastEnemyLevelRanges) && capeNames.equals(lastEnemyLevelCapeNames))
+		{
+			return;
+		}
+		lastEnemyLevels = levels;
+		lastEnemyLevelRanges = ranges;
+		lastEnemyLevelCapeNames = capeNames;
+		enemyLevelsPanel.removeAll();
+
+		if (levels.getAll().isEmpty())
+		{
+			JLabel empty = new JLabel("(no enemies on screen)");
+			empty.setForeground(ColorScheme.LIGHT_GRAY_COLOR);
+			empty.setFont(FontManager.getRunescapeSmallFont());
+			enemyLevelsPanel.add(empty);
+		}
+		else
+		{
+			addEnemyLevelChart("All enemies", 0, levels.getAll(), ranges);
+			for (EnemyLevels.Group group : levels.getCapes())
+			{
+				String name = capeNames.get(group.getTeam());
+				addEnemyLevelChart(name != null ? name + " (team " + group.getTeam() + ")" : "Team " + group.getTeam(),
+					group.getTeam(), group.getLevels(), ranges);
+			}
+			if (!levels.getCapes().isEmpty() && !levels.getOthers().isEmpty())
+			{
+				addEnemyLevelChart("Others", 0, levels.getOthers(), ranges);
+			}
+		}
+
+		revalidate();
+		repaint();
+	}
+
+	/**
+	 * One chart: a header (cape icon, name, count, lowest-highest and median), then a row per
+	 * range - the range, a bar scaled to this chart's fullest range, and the count.
+	 */
+	private void addEnemyLevelChart(String name, int team, List<Integer> levels, List<EnemyLevels.LevelRange> ranges)
+	{
+		JPanel chart = new JPanel();
+		chart.setLayout(new BoxLayout(chart, BoxLayout.Y_AXIS));
+		chart.setBackground(ColorScheme.DARKER_GRAY_COLOR);
+		chart.setBorder(new EmptyBorder(4, 6, 6, 6));
+		chart.setAlignmentX(LEFT_ALIGNMENT);
+		chart.setMaximumSize(new Dimension(PluginPanel.PANEL_WIDTH, Integer.MAX_VALUE));
+
+		JLabel header = new JLabel(name + " - " + levels.size());
+		header.setFont(FontManager.getRunescapeBoldFont());
+		header.setForeground(Color.WHITE);
+		if (team > 0)
+		{
+			itemManager.getImage(TeamCapeOverlay.teamCapeItemId(team)).addTo(header);
+		}
+		int low = levels.get(0);
+		int high = levels.get(levels.size() - 1);
+		JLabel spread = new JLabel(low == high ? String.valueOf(low) : low + "-" + high + ", median " + EnemyLevels.median(levels));
+		spread.setFont(FontManager.getRunescapeSmallFont());
+		spread.setForeground(ColorScheme.LIGHT_GRAY_COLOR);
+
+		JPanel headerRow = new JPanel(new BorderLayout(4, 0));
+		headerRow.setBackground(ColorScheme.DARKER_GRAY_COLOR);
+		headerRow.setAlignmentX(LEFT_ALIGNMENT);
+		headerRow.add(header, BorderLayout.WEST);
+		headerRow.add(spread, BorderLayout.EAST);
+		chart.add(headerRow);
+		chart.add(Box.createVerticalStrut(4));
+
+		int[] counts = new int[ranges.size()];
+		int fullest = 1;
+		for (int i = 0; i < ranges.size(); i++)
+		{
+			counts[i] = EnemyLevels.count(levels, ranges.get(i));
+			fullest = Math.max(fullest, counts[i]);
+		}
+		for (int i = 0; i < ranges.size(); i++)
+		{
+			chart.add(buildLevelRangeRow(ranges.get(i).toString(), counts[i], fullest));
+		}
+		int outside = EnemyLevels.outside(levels, ranges);
+		if (outside > 0)
+		{
+			JLabel note = new JLabel(outside + " outside your ranges");
+			note.setFont(FontManager.getRunescapeSmallFont());
+			note.setForeground(ColorScheme.LIGHT_GRAY_COLOR);
+			note.setAlignmentX(LEFT_ALIGNMENT);
+			chart.add(note);
+		}
+
+		enemyLevelsPanel.add(chart);
+		enemyLevelsPanel.add(Box.createVerticalStrut(6));
+	}
+
+	private JPanel buildLevelRangeRow(String range, int count, int fullest)
+	{
+		JLabel rangeLabel = new JLabel(range);
+		rangeLabel.setFont(FontManager.getRunescapeSmallFont());
+		rangeLabel.setForeground(count > 0 ? Color.WHITE : ColorScheme.MEDIUM_GRAY_COLOR);
+		rangeLabel.setPreferredSize(new Dimension(LEVEL_RANGE_LABEL_WIDTH, 14));
+
+		JLabel countLabel = new JLabel(String.valueOf(count), SwingConstants.RIGHT);
+		countLabel.setFont(FontManager.getRunescapeSmallFont());
+		countLabel.setForeground(count > 0 ? Color.WHITE : ColorScheme.MEDIUM_GRAY_COLOR);
+		countLabel.setPreferredSize(new Dimension(LEVEL_COUNT_LABEL_WIDTH, 14));
+
+		JPanel row = new JPanel(new BorderLayout(4, 0));
+		row.setBackground(ColorScheme.DARKER_GRAY_COLOR);
+		row.setAlignmentX(LEFT_ALIGNMENT);
+		row.setMaximumSize(new Dimension(PluginPanel.PANEL_WIDTH, 16));
+		row.setBorder(new EmptyBorder(1, 0, 1, 0));
+		row.add(rangeLabel, BorderLayout.WEST);
+		row.add(new LevelBar(count / (float) fullest), BorderLayout.CENTER);
+		row.add(countLabel, BorderLayout.EAST);
+		return row;
+	}
+
+	/**
+	 * A horizontal bar filled to a fraction of its width.
+	 */
+	private static final class LevelBar extends JComponent
+	{
+		private final float fraction;
+
+		LevelBar(float fraction)
+		{
+			this.fraction = fraction;
+			setPreferredSize(new Dimension(0, 10));
+		}
+
+		@Override
+		protected void paintComponent(Graphics g)
+		{
+			int barHeight = 8;
+			int y = (getHeight() - barHeight) / 2;
+			g.setColor(ColorScheme.DARK_GRAY_COLOR);
+			g.fillRect(0, y, getWidth(), barHeight);
+			int filled = Math.round(getWidth() * fraction);
+			if (fraction > 0 && filled == 0)
+			{
+				filled = 1;
+			}
+			g.setColor(ColorScheme.BRAND_ORANGE);
+			g.fillRect(0, y, filled, barHeight);
+		}
 	}
 
 	// ============================================================================================

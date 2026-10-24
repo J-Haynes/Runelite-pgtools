@@ -33,7 +33,9 @@ client with similar team-coordination features. Core pieces:
   found even with the left-click Follow off. **Enemy fall-in finder** (`enemyFallInFinder`, default
   off, own `enemyFallInThreshold` 10 + colour): an enemy that many enemies are interacting with -
   enemy-on-enemy counts as following, except when both wear *different* team capes (two other clans
-  fighting). Highlight only, no menu change (`HighlightTracker#getEnemyFallInLeaders()`).
+  fighting). `HighlightTracker#getEnemyFallInLeaders()`. Optional left-click Follow on it
+  (`prioritiseEnemyFallInFollow`, default off, needs the finder on; asked for 2026-10-25) - last
+  of the Follows (after a backup caller's), Attack priorities still win.
   Each row is two lines (asked for - one line was "too busy"): radio + in-game name on top,
   nickname + on-screen status underneath (`PrepToolsPanel#addRow()`).
 - **Highlighting** — three independent detection categories, each with its own config section and
@@ -248,6 +250,14 @@ client with similar team-coordination features. Core pieces:
   asked for separately, don't merge them); both count through `TeamCapeOverlay#countCapes()`. Every cell reports the tallest cell's height
   (`EvenHeightCell`): core's wrapping `PanelComponent` moves a new row down by the *last* cell's
   height, so a named cape (icon + text) in row 2 after a plain icon ended row 1 hung out of the box.
+  **Enemy Levels** (Capes sidebar tab, below the cape names; asked for 2026-10-25 - first built
+  as an overlay, then asked to be a sidebar feature instead, overlay removed): a chart per group -
+  all enemies (`!isOwnTeam`), one per cape with `minimumTeamCapeCount` wearers (icon, name,
+  count, low-high + median), then Others - with a row per level range: range, bar (scaled to that
+  chart's fullest range) and count. Ranges are user-set in the tab (hidden `enemyLevelRanges`,
+  e.g. `3-49, 50-59`; blank = automatic, a range every `enemyLevelBucketSize` levels, default 3,
+  on multiples of it, lowest to highest enemy). Built once a tick (`EnemyLevels`, pure), pushed
+  with the tick snapshot, rebuilt only when it changes; ignores the cape level filter.
 - **Right-click menu integration** — prioritises/recolours Attack and freeze-spell casts (target,
   pile, and now snipe-list hits too, with a configurable tie-break order —
   four "1st..4th Attack priority" dropdowns, `PrepToolsConfig#attackPriority1()`.., default
@@ -451,7 +461,7 @@ reloading them on `ConfigChanged`, and pushing data to the sidebar. Each feature
 | `ChatHotkeys`, `ScoutReporter` | Pile Spam, Spammer, Location Spam; Scout webhook |
 | `ConfigListEditor` | every edit to the hidden list config (callers/snipe/spam/capes/nicknames) - sidebar + menu |
 | `FoodTracker`, `AttackRangeFilter`, `TeamPerformanceTracker`, `PlayerNicknameTracker`, `FriendRenameTracker` | Experimental: food eaten, combat bracket incl. Highlight Others' range (before `HighlightTracker` each tick), Stats tab, nicknames, renames between logins |
-| `CallerEntry`, `ConfigLists`, `ScoutReport`, `WeaponStyle`, `AttackCategory#resolve()`, `AttackRange`, `PerformanceRow#byDeath()`, `RenameMatch`, `FoodTracker#biteCount()` | pure logic - unit tested |
+| `CallerEntry`, `ConfigLists`, `ScoutReport`, `WeaponStyle`, `AttackCategory#resolve()`, `AttackRange`, `PerformanceRow#byDeath()`, `RenameMatch`, `FoodTracker#biteCount()`, `EnemyLevels` | pure logic - unit tested |
 
 Overlays inject the tracker they draw from, not the plugin. Tests live in
 `runelite-client/src/test/java/net/runelite/client/plugins/preptools/` - pure logic, plus
@@ -470,6 +480,9 @@ Overlays inject the tracker they draw from, not the plugin. Tests live in
   allow. Values the sidebar writes (pin, config lists, Mapper preview) are `volatile` swaps.
 
 ## Open questions / unverified
+
+- **Enemy fall-in left-click Follow, Enemy Levels tab section (2026-10-25)** - not seen in game.
+  Does the chart fit the sidebar width at 2x scale? Is a big cape icon in each header too tall?
 
 - **Fall-in leader outline, enemy fall-in finder, cape level range (2026-10-18)** - not seen in
   game. Is threshold 10 sensible for enemies? Do enemies attacking a capeless third clan show up

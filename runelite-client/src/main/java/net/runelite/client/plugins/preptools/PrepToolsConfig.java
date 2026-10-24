@@ -221,6 +221,21 @@ public interface PrepToolsConfig extends Config
 		return Color.MAGENTA;
 	}
 
+	@ConfigItem(
+		keyName = "prioritiseEnemyFallInFollow",
+		name = "Enemy fall-in left-click Follow",
+		description = "<html>Makes 'Follow' the left-click option on the enemy fall-in<br>"
+			+ "leader (needs the enemy fall-in finder on). Your own callers'<br>"
+			+ "and fall-in leader's Follow, and a target/pile/snipe/attacker<br>"
+			+ "Attack, still win.</html>",
+		position = 15,
+		section = "callersSection"
+	)
+	default boolean prioritiseEnemyFallInFollow()
+	{
+		return false;
+	}
+
 	// --- Snipe List section ---
 
 	@ConfigSection(
@@ -1151,6 +1166,32 @@ public interface PrepToolsConfig extends Config
 	default int capeMaxCombatLevel()
 	{
 		return 126;
+	}
+
+	@ConfigItem(
+		keyName = "enemyLevelRanges",
+		name = "Enemy level ranges",
+		description = "The Capes tab's Enemy Levels ranges, e.g. '3-49, 50-59' - blank = every N levels.",
+		position = 9,
+		section = "teamCapeSection",
+		hidden = true
+	)
+	default String enemyLevelRanges()
+	{
+		return "";
+	}
+
+	@ConfigItem(
+		keyName = "enemyLevelBucketSize",
+		name = "Levels per range",
+		description = "The Capes tab's Enemy Levels: how many levels each automatic range covers.",
+		position = 10,
+		section = "teamCapeSection",
+		hidden = true
+	)
+	default int enemyLevelBucketSize()
+	{
+		return 3;
 	}
 
 	@ConfigItem(
