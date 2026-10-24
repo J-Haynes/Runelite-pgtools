@@ -42,6 +42,10 @@ import net.runelite.api.Tile;
 import net.runelite.api.WorldView;
 import net.runelite.api.clan.ClanChannel;
 import net.runelite.api.clan.ClanChannelMember;
+import net.runelite.api.clan.ClanMember;
+import net.runelite.api.clan.ClanRank;
+import net.runelite.api.clan.ClanSettings;
+import net.runelite.api.clan.ClanTitle;
 import net.runelite.api.coords.WorldPoint;
 import net.runelite.api.events.ActorDeath;
 import net.runelite.api.events.AnimationChanged;
@@ -1118,7 +1122,9 @@ public class PrepToolsPlugin extends Plugin
 			}
 			else
 			{
-				List<String> names = new ArrayList<>();
+				// Name to clan rank title ("" for friends chat).
+				Map<String, String> members = new HashMap<>();
+				ClanSettings clanSettings = client.getClanSettings();
 				if (source == HiscoreLookups.Source.FRIENDS_CHAT)
 				{
 					FriendsChatManager friendsChat = client.getFriendsChatManager();
@@ -1126,28 +1132,37 @@ public class PrepToolsPlugin extends Plugin
 					{
 						for (FriendsChatMember member : friendsChat.getMembers())
 						{
-							names.add(member.getName());
+							members.put(member.getName(), "");
 						}
 					}
 				}
-				else
+				else if (source == HiscoreLookups.Source.CLAN_CHAT)
 				{
 					ClanChannel clan = client.getClanChannel();
 					if (clan != null)
 					{
 						for (ClanChannelMember member : clan.getMembers())
 						{
-							names.add(member.getName());
+							members.put(member.getName(), rankTitle(clanSettings, member.getRank()));
 						}
 					}
 				}
+				else if (clanSettings != null)
+				{
+					for (ClanMember member : clanSettings.getMembers())
+					{
+						members.put(member.getName(), rankTitle(clanSettings, member.getRank()));
+					}
+				}
+				List<String> names = new ArrayList<>(members.keySet());
 				names.sort(String.CASE_INSENSITIVE_ORDER);
 				Map<String, HiscoreLookups.Target> byName = new LinkedHashMap<>();
 				for (String name : names)
 				{
 					Player player = onScreen.get(Text.standardize(name));
 					byName.putIfAbsent(Text.standardize(name), new HiscoreLookups.Target(name,
-						player != null ? player.getCombatLevel() : 0, player != null ? Math.max(0, player.getTeam()) : 0));
+						player != null ? player.getCombatLevel() : 0, player != null ? Math.max(0, player.getTeam()) : 0,
+						members.get(name)));
 				}
 				targets = new ArrayList<>(byName.values());
 				title = source.toString();
@@ -1174,9 +1189,15 @@ public class PrepToolsPlugin extends Plugin
 		List<HiscoreLookups.Target> targets = new ArrayList<>();
 		for (Player player : players)
 		{
-			targets.add(new HiscoreLookups.Target(player.getName(), player.getCombatLevel(), Math.max(0, player.getTeam())));
+			targets.add(new HiscoreLookups.Target(player.getName(), player.getCombatLevel(), Math.max(0, player.getTeam()), ""));
 		}
 		return targets;
+	}
+
+	private static String rankTitle(ClanSettings clanSettings, ClanRank rank)
+	{
+		ClanTitle title = clanSettings != null && rank != null ? clanSettings.titleForRank(rank) : null;
+		return title != null && title.getName() != null ? title.getName() : "";
 	}
 
 	void cancelHiscoreLookup(HiscoreLookups.Kind kind)

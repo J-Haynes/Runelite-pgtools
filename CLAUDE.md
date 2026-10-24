@@ -295,8 +295,11 @@ client with similar team-coordination features. Core pieces:
 
 - **Hiscore lookups** (asked for 2026-10-25) - **manual only**: a "Look up" button in the Clan Info
   tab (Team Stats, with a source dropdown: teammates on screen incl. you, or the whole **friends
-  chat** / **clan chat** member list, on screen or not - off-screen members' combat comes from
-  their hiscore levels, `HiscoreLookups#combatLevel()`) and in the Capes tab (Enemy Stats, grouped
+  chat** / **clan chat** member list, on screen or not, or **all clan members** incl. offline
+  (`ClanSettings#getMembers()` - the in-game Settings > Members list, no need to open it; CSV gets
+  the clan rank title) - off-screen members' combat comes from their hiscore levels,
+  `HiscoreLookups#combatLevel()`; a clan over the limit takes more presses, the cache skips
+  whoever's done) and in the Capes tab (Enemy Stats, grouped
   by cape exactly like Enemy Levels). `HiscoreLookups` (bound singleton) snapshots who's on
   screen, then calls core's `HiscoreClient` **one at a time, 1.5-3s apart** (random), at most
   `hiscoreLookupLimit` (default and max 100, own config section) per press, biggest cape first.

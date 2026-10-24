@@ -1345,10 +1345,12 @@ public class PrepToolsPanel extends PluginPanel
 		section.add(clanIdsListPanel);
 		section.add(Box.createVerticalStrut(TIER_GAP * 2));
 		section.add(new HiscoreLookupView(HiscoreLookups.Kind.TEAM, "Team Stats",
-			"Hiscore levels of your team on screen (you included), or of everyone in your friends chat "
-				+ "or clan chat, on screen or not (combat worked out from their levels). Manual only: Look "
-				+ "up checks each player 1.5-3 seconds apart, so a big team takes a minute or two. Results "
-				+ "are kept for 6 hours, so pressing again only looks up new names.", true).panel);
+			"Hiscore levels of your team on screen (you included), of everyone in your friends chat "
+				+ "or clan chat, on screen or not, or of all your clan's members, offline too (combat worked "
+				+ "out from their levels when not on screen). Manual only: Look up checks each player "
+				+ "1.5-3 seconds apart. Results are kept for 6 hours, so pressing again only looks up new "
+				+ "names - a clan bigger than the limit in settings just needs more presses. Copy includes "
+				+ "clan ranks.", true).panel);
 		updateClanIds(Collections.emptyList());
 		updateClanWeapons(new ClanWeaponSummary(Collections.emptyList(), Collections.emptyList(), Collections.emptyList(), 0));
 		return section;
@@ -2428,17 +2430,22 @@ public class PrepToolsPanel extends PluginPanel
 			for (HiscoreLookups.Row row : group.getRows())
 			{
 				String name = row.getName().replace('\u00A0', ' ');
+				String tooltip = row.getRank().isEmpty() ? name : name + " - " + row.getRank();
 				HiscoreLookups.Stats s = row.getStats();
 				if (s == null)
 				{
 					JPanel line = statRow(name, new String[]{level(row.getCombat())}, null, ColorScheme.LIGHT_GRAY_COLOR);
 					line.add(smallLabel(HiscoreLookups.statusText(row.getStatus()), ColorScheme.MEDIUM_GRAY_COLOR), statConstraints(2, 7));
+					line.setToolTipText(tooltip);
+					((JComponent) line.getComponent(0)).setToolTipText(tooltip);
 					box.add(line);
 					continue;
 				}
-				box.add(statRow(name, new String[]{level(HiscoreLookups.combatLevel(row)), level(s.getAttack()), level(s.getStrength()),
+				JPanel line = statRow(name, new String[]{level(HiscoreLookups.combatLevel(row)), level(s.getAttack()), level(s.getStrength()),
 					level(s.getDefence()), level(s.getHitpoints()), level(s.getRanged()), level(s.getMagic()), level(s.getPrayer())},
-					defenceColor(s.getDefence()), Color.WHITE));
+					defenceColor(s.getDefence()), Color.WHITE);
+				((JComponent) line.getComponent(0)).setToolTipText(tooltip);
+				box.add(line);
 			}
 			return box;
 		}

@@ -54,14 +54,15 @@ class HiscoreLookups
 	}
 
 	/**
-	 * Who a team lookup covers: teammates on screen, or everyone in your friends chat or clan
-	 * chat channel (online, on screen or not).
+	 * Who a team lookup covers: teammates on screen, everyone in your friends chat or clan chat
+	 * channel (online, on screen or not), or every member of your clan, offline too.
 	 */
 	enum Source
 	{
 		ON_SCREEN("Team on screen"),
 		FRIENDS_CHAT("Friends chat"),
-		CLAN_CHAT("Clan chat");
+		CLAN_CHAT("Clan chat"),
+		ALL_CLAN_MEMBERS("All clan members");
 
 		private final String label;
 
@@ -119,6 +120,10 @@ class HiscoreLookups
 		 * Team cape number, 0 for none.
 		 */
 		int team;
+		/**
+		 * Clan rank title, "" if unknown.
+		 */
+		String rank;
 	}
 
 	@Value
@@ -127,6 +132,7 @@ class HiscoreLookups
 		String name;
 		int combat;
 		int team;
+		String rank;
 		Status status;
 		/**
 		 * Null unless FOUND.
@@ -135,7 +141,7 @@ class HiscoreLookups
 
 		Row with(Status status, Stats stats)
 		{
-			return new Row(name, combat, team, status, stats);
+			return new Row(name, combat, team, rank, status, stats);
 		}
 	}
 
@@ -236,7 +242,7 @@ class HiscoreLookups
 			int queued = 0;
 			for (Target target : targets)
 			{
-				Row row = new Row(target.name, target.combat, target.team, Status.QUEUED, null);
+				Row row = new Row(target.name, target.combat, target.team, target.rank, Status.QUEUED, null);
 				CacheEntry cached = cache.get(key(target.name));
 				if (cached != null && now - cached.time < TimeUnit.HOURS.toMillis(CACHE_HOURS))
 				{
@@ -253,7 +259,10 @@ class HiscoreLookups
 				}
 			}
 			generation = generations.merge(kind, 1, Integer::sum);
-			String message = rows.isEmpty() ? "Nobody to look up." : queued == 0 ? "All from the cache." : "Looking up " + queued + "...";
+			long overLimit = rows.stream().filter(r -> r.status == Status.NOT_LOOKED_UP).count();
+			String message = rows.isEmpty() ? "Nobody to look up."
+				: queued == 0 ? "All from the cache."
+				: "Looking up " + queued + (overLimit > 0 ? " (" + overLimit + " more next press)" : "") + "...";
 			batch = new Batch(title, Collections.unmodifiableList(rows), queued > 0, message);
 			batches.put(kind, batch);
 		}
@@ -291,7 +300,8 @@ class HiscoreLookups
 			row = getBatch(kind).rows.stream().filter(r -> r.status == Status.QUEUED).findFirst().orElse(null);
 			if (row == null)
 			{
-				finish(kind, getBatch(kind), "Done.");
+				long left = getBatch(kind).count(Status.NOT_LOOKED_UP);
+				finish(kind, getBatch(kind), left > 0 ? "Done - " + left + " more over the limit: press Look up again." : "Done.");
 				saveCache();
 			}
 		}
@@ -485,13 +495,13 @@ class HiscoreLookups
 	 */
 	static String csv(List<Group> groups)
 	{
-		StringBuilder sb = new StringBuilder("Group,Name,Combat,Attack,Strength,Defence,Hitpoints,Ranged,Magic,Prayer,Status\n");
+		StringBuilder sb = new StringBuilder("Group,Name,Rank,Combat,Attack,Strength,Defence,Hitpoints,Ranged,Magic,Prayer,Status\n");
 		for (Group group : groups)
 		{
 			for (Row row : group.rows)
 			{
 				sb.append(csvField(group.title)).append(',').append(csvField(row.name.replace('\u00A0', ' ')))
-					.append(',').append(combatLevel(row) > 0 ? String.valueOf(combatLevel(row)) : "");
+					.append(',').append(csvField(row.rank)).append(',').append(combatLevel(row) > 0 ? String.valueOf(combatLevel(row)) : "");
 				Stats s = row.stats;
 				for (int level : s != null
 					? new int[]{s.attack, s.strength, s.defence, s.hitpoints, s.ranged, s.magic, s.prayer}

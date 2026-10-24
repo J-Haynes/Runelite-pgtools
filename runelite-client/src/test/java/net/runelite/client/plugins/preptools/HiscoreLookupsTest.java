@@ -91,7 +91,7 @@ public class HiscoreLookupsTest
 
 	private static HiscoreLookups.Target target(String name, int team)
 	{
-		return new HiscoreLookups.Target(name, 70, team);
+		return new HiscoreLookups.Target(name, 70, team, "");
 	}
 
 	@Test
@@ -130,6 +130,12 @@ public class HiscoreLookupsTest
 		HiscoreLookups.Batch batch = lookups.getBatch(HiscoreLookups.Kind.TEAM);
 		assertEquals(HiscoreLookups.Status.NOT_LOOKED_UP, batch.getRows().get(2).getStatus());
 		verify(hiscoreClient, never()).lookupAsync(eq("Charlie"), any());
+		// A big clan: the rest come with the next press.
+		assertEquals("Done - 1 more over the limit: press Look up again.", batch.getMessage());
+		found("Charlie", 40);
+		lookups.start(HiscoreLookups.Kind.TEAM, "All clan members", List.of(target("Alpha", 0), target("Bravo", 0), target("Charlie", 0)), 2);
+		verify(hiscoreClient, times(1)).lookupAsync("Alpha", HiscoreEndpoint.NORMAL);
+		assertEquals(3, lookups.getBatch(HiscoreLookups.Kind.TEAM).count(HiscoreLookups.Status.FOUND));
 	}
 
 	@Test
@@ -137,7 +143,7 @@ public class HiscoreLookupsTest
 	{
 		found("Alpha", 1);
 		// Off screen: no combat level seen.
-		lookups.start(HiscoreLookups.Kind.TEAM, "Friends chat", List.of(new HiscoreLookups.Target("Alpha", 0, 0)), 100);
+		lookups.start(HiscoreLookups.Kind.TEAM, "Friends chat", List.of(new HiscoreLookups.Target("Alpha", 0, 0, "Recruit")), 100);
 
 		HiscoreLookups.Batch batch = lookups.getBatch(HiscoreLookups.Kind.TEAM);
 		assertEquals("Friends chat", batch.getTitle());
@@ -147,7 +153,10 @@ public class HiscoreLookupsTest
 		assertEquals("Friends chat", HiscoreLookups.groups(HiscoreLookups.Kind.TEAM, batch.getTitle(), batch.getRows(), 2, Map.of())
 			.get(0).getTitle());
 		// Seen on screen wins.
-		assertEquals(70, HiscoreLookups.combatLevel(new HiscoreLookups.Row("Bravo", 70, 0, HiscoreLookups.Status.FOUND, row.getStats())));
+		assertEquals(70, HiscoreLookups.combatLevel(new HiscoreLookups.Row("Bravo", 70, 0, "", HiscoreLookups.Status.FOUND, row.getStats())));
+
+		assertTrue(HiscoreLookups.csv(HiscoreLookups.groups(HiscoreLookups.Kind.TEAM, batch.getTitle(), batch.getRows(), 2, Map.of()))
+			.contains("Friends chat,Alpha,Recruit,"));
 
 		lookups.start(HiscoreLookups.Kind.TEAM, "Clan chat", List.of(), 100);
 		assertEquals("Nobody to look up.", lookups.getBatch(HiscoreLookups.Kind.TEAM).getMessage());
@@ -177,11 +186,11 @@ public class HiscoreLookupsTest
 		HiscoreLookups.Stats tank = new HiscoreLookups.Stats(60, 70, 45, 65, 0, 50, 31);
 		HiscoreLookups.Stats unranked = new HiscoreLookups.Stats(60, 70, 0, 65, 0, 50, 31);
 		List<HiscoreLookups.Row> rows = List.of(
-			new HiscoreLookups.Row("Alpha", 70, 50, HiscoreLookups.Status.FOUND, pure),
-			new HiscoreLookups.Row("Bravo", 70, 50, HiscoreLookups.Status.FOUND, tank),
-			new HiscoreLookups.Row("Charlie", 70, 50, HiscoreLookups.Status.NOT_FOUND, null),
-			new HiscoreLookups.Row("Delta", 70, 12, HiscoreLookups.Status.FOUND, mid),
-			new HiscoreLookups.Row("Echo, Jr", 70, 0, HiscoreLookups.Status.FOUND, unranked));
+			new HiscoreLookups.Row("Alpha", 70, 50, "", HiscoreLookups.Status.FOUND, pure),
+			new HiscoreLookups.Row("Bravo", 70, 50, "", HiscoreLookups.Status.FOUND, tank),
+			new HiscoreLookups.Row("Charlie", 70, 50, "", HiscoreLookups.Status.NOT_FOUND, null),
+			new HiscoreLookups.Row("Delta", 70, 12, "", HiscoreLookups.Status.FOUND, mid),
+			new HiscoreLookups.Row("Echo, Jr", 70, 0, "", HiscoreLookups.Status.FOUND, unranked));
 
 		List<HiscoreLookups.Group> groups = HiscoreLookups.groups(HiscoreLookups.Kind.ENEMIES, "Enemies", rows, 2, Map.of(50, "EoP"));
 		assertEquals(2, groups.size());
@@ -197,9 +206,9 @@ public class HiscoreLookupsTest
 		assertEquals(1, HiscoreLookups.groups(HiscoreLookups.Kind.TEAM, "Friends chat", rows, 2, Map.of()).size());
 
 		String csv = HiscoreLookups.csv(groups);
-		assertTrue(csv.startsWith("Group,Name,Combat,Attack,Strength,Defence,Hitpoints,Ranged,Magic,Prayer,Status\n"));
-		assertTrue(csv.contains("EoP (team 50),Alpha,70,60,70,1,65,,50,31,found\n"));
-		assertTrue(csv.contains("EoP (team 50),Charlie,70,,,,,,,,not on hiscores\n"));
-		assertTrue(csv.contains("Others,\"Echo, Jr\",70,60,70,,65,,50,31,found\n"));
+		assertTrue(csv.startsWith("Group,Name,Rank,Combat,Attack,Strength,Defence,Hitpoints,Ranged,Magic,Prayer,Status\n"));
+		assertTrue(csv.contains("EoP (team 50),Alpha,,70,60,70,1,65,,50,31,found\n"));
+		assertTrue(csv.contains("EoP (team 50),Charlie,,70,,,,,,,,not on hiscores\n"));
+		assertTrue(csv.contains("Others,\"Echo, Jr\",,70,60,70,,65,,50,31,found\n"));
 	}
 }
