@@ -2299,6 +2299,7 @@ public class PrepToolsPanel extends PluginPanel
 		private final JButton lookUpButton = createSmallButton("Look up", "Look up everyone on screen on the hiscores");
 		private final JButton cancelButton = createSmallButton("Cancel", "Stop looking up");
 		private final JButton copyButton = createSmallButton("Copy", "Copy as CSV for a spreadsheet");
+		private final JButton discordButton = createSmallButton("Discord", "Copy as tables to paste into Discord");
 		private final JLabel progress = new JLabel();
 		private final JComboBox<HiscoreLookups.Source> source = new JComboBox<>(HiscoreLookups.Source.values());
 		private final JPanel results = new JPanel();
@@ -2318,6 +2319,8 @@ public class PrepToolsPanel extends PluginPanel
 			cancelButton.addActionListener(e -> plugin.cancelHiscoreLookup(kind));
 			copyButton.addActionListener(e -> Toolkit.getDefaultToolkit().getSystemClipboard()
 				.setContents(new StringSelection(HiscoreLookups.csv(lastGroups)), null));
+			discordButton.addActionListener(e -> Toolkit.getDefaultToolkit().getSystemClipboard()
+				.setContents(new StringSelection(HiscoreLookups.discord(lastGroups)), null));
 
 			JPanel buttons = new JPanel(new FlowLayout(FlowLayout.LEFT, 4, 0));
 			buttons.setBackground(ColorScheme.DARK_GRAY_COLOR);
@@ -2335,7 +2338,11 @@ public class PrepToolsPanel extends PluginPanel
 			results.setAlignmentX(LEFT_ALIGNMENT);
 			results.setMaximumSize(new Dimension(PluginPanel.PANEL_WIDTH, Integer.MAX_VALUE));
 
-			panel.add(createSubHeader(title, copyButton));
+			JPanel copyButtons = new JPanel(new FlowLayout(FlowLayout.RIGHT, 4, 0));
+			copyButtons.setBackground(ColorScheme.DARK_GRAY_COLOR);
+			copyButtons.add(discordButton);
+			copyButtons.add(copyButton);
+			panel.add(createSubHeader(title, copyButtons));
 			panel.add(Box.createVerticalStrut(4));
 			panel.add(createDescriptionArea(description));
 			panel.add(Box.createVerticalStrut(TIER_GAP));
@@ -2370,6 +2377,7 @@ public class PrepToolsPanel extends PluginPanel
 			lookUpButton.setEnabled(!batch.isRunning());
 			cancelButton.setEnabled(batch.isRunning());
 			copyButton.setEnabled(batch.count(HiscoreLookups.Status.FOUND) > 0);
+			discordButton.setEnabled(copyButton.isEnabled());
 			progress.setText(batch.getMessage().isEmpty() ? " " : batch.getMessage());
 
 			results.removeAll();

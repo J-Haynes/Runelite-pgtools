@@ -305,7 +305,11 @@ client with similar team-coordination features. Core pieces:
   `hiscoreLookupLimit` (default and max 100, own config section) per press, biggest cape first.
   Results (attack/strength/defence/hitpoints/ranged/magic/prayer, 0 = unranked = xp -1, same rule
   as the Hiscore panel) cached 6h in `~/.runelite/pvptools-hiscores.json`, so a re-press only looks
-  up new names. Stops on 2 failures in a row (or a 429), Cancel button, CSV Copy. Each group shows
+  up new names. The cache is saved every 10 lookups, on Cancel and at the end (it was only at the
+  end, so closing mid-batch lost it); each entry expires 6h after *its* lookup. Stops on 2
+  failures in a row (or a 429), Cancel button, CSV Copy, and a Discord copy (`#discord()`: per
+  group a bold title + Defence split, then a code-block table in the user's format - asked for
+  2026-10-25 - then not-found / not-looked-up lines; over 2000 chars Discord offers it as a file). Each group shows
   the exact Defence split 1-5 / 6-39 / 40+ / unranked. **Never make it automatic** (see the gear
   Defence backlog item for why).
 - **Experimental** (config section of that name, position 19, everything **default off**) - built

@@ -45,6 +45,10 @@ class HiscoreLookups
 	static final long MAX_DELAY_MILLIS = 3000;
 	static final long CACHE_HOURS = 6;
 	private static final int FAILURES_TO_STOP = 2;
+	/**
+	 * Saved to disk this often during a batch too, so closing the client mid-batch keeps most of it.
+	 */
+	private static final int SAVE_EVERY_LOOKUPS = 10;
 	private static final File CACHE_FILE = new File(RuneLite.RUNELITE_DIR, "pvptools-hiscores.json");
 
 	enum Kind
@@ -191,6 +195,7 @@ class HiscoreLookups
 	private final Map<Kind, Batch> batches = new HashMap<>();
 	private final Map<Kind, Integer> generations = new HashMap<>();
 	private Map<String, CacheEntry> cache;
+	private int unsavedLookups;
 	/**
 	 * Tests point this at a temporary file.
 	 */
@@ -284,6 +289,7 @@ class HiscoreLookups
 				return;
 			}
 			finish(kind, batch, "Cancelled.");
+			saveCache();
 		}
 		listener.accept(kind);
 	}
@@ -329,6 +335,10 @@ class HiscoreLookups
 					entry.time = System.currentTimeMillis();
 					entry.stats = done.stats;
 					cache.put(key(row.name), entry);
+					if (++unsavedLookups >= SAVE_EVERY_LOOKUPS)
+					{
+						saveCache();
+					}
 				}
 				else
 				{
@@ -515,6 +525,138 @@ class HiscoreLookups
 		return sb.toString();
 	}
 
+	/**
+	 * Discord-friendly: per group a bold title line with the Defence split, then a code block
+	 * table of the players found (aligned columns, unranked as "-"), then who wasn't on the
+	 * hiscores or wasn't looked up.
+	 */
+	static String discord(List<Group> groups)
+	{
+		StringBuilder sb = new StringBuilder();
+		for (Group group : groups)
+		{
+			List<Row> found = new ArrayList<>();
+			List<String> notFound = new ArrayList<>();
+			int notLookedUp = 0;
+			for (Row row : group.rows)
+			{
+				if (row.status == Status.FOUND)
+				{
+					found.add(row);
+				}
+				else if (row.status == Status.NOT_FOUND)
+				{
+					notFound.add(row.name.replace('\u00A0', ' '));
+				}
+				else
+				{
+					notLookedUp++;
+				}
+			}
+
+			int[] split = defenceSplit(group.rows);
+			if (sb.length() > 0)
+			{
+				sb.append('\n');
+			}
+			sb.append("**").append(group.title).append(" - ").append(group.rows.size()).append("**")
+				.append(" | Def 1-5: ").append(split[0]).append(", 6-39: ").append(split[1]).append(", 40+: ").append(split[2]);
+			if (split[3] > 0)
+			{
+				sb.append(", unranked: ").append(split[3]);
+			}
+			sb.append('\n');
+
+			if (!found.isEmpty())
+			{
+				List<String[]> lines = new ArrayList<>();
+				lines.add(DISCORD_HEADERS);
+				for (Row row : found)
+				{
+					Stats s = row.stats;
+					lines.add(new String[]{row.name.replace('\u00A0', ' '), dash(combatLevel(row)), dash(s.attack), dash(s.strength),
+						dash(s.defence), dash(s.hitpoints), dash(s.ranged), dash(s.magic), dash(s.prayer)});
+				}
+				int[] widths = new int[DISCORD_HEADERS.length];
+				for (String[] line : lines)
+				{
+					for (int i = 0; i < line.length; i++)
+					{
+						widths[i] = Math.max(widths[i], line[i].length());
+					}
+				}
+				sb.append("```\n");
+				for (int l = 0; l < lines.size(); l++)
+				{
+					sb.append(tableLine(lines.get(l), widths)).append('\n');
+					if (l == 0)
+					{
+						sb.append(separatorLine(widths)).append('\n');
+					}
+				}
+				sb.append("```\n");
+			}
+			if (!notFound.isEmpty())
+			{
+				sb.append("Not on the hiscores: ").append(String.join(", ", notFound)).append('\n');
+			}
+			if (notLookedUp > 0)
+			{
+				sb.append("Not looked up: ").append(notLookedUp).append('\n');
+			}
+		}
+		return sb.toString();
+	}
+
+	private static final String[] DISCORD_HEADERS = {"Name", "Cmbt", "Atk", "Str", "Def", "HP", "Rng", "Mag", "Pray"};
+
+	private static String dash(int level)
+	{
+		return level > 0 ? String.valueOf(level) : "-";
+	}
+
+	/**
+	 * "Name         | 58   | 40  | ..." - each cell padded to its column, trailing spaces trimmed.
+	 */
+	private static String tableLine(String[] cells, int[] widths)
+	{
+		StringBuilder sb = new StringBuilder();
+		for (int i = 0; i < cells.length; i++)
+		{
+			if (i > 0)
+			{
+				sb.append(" | ");
+			}
+			sb.append(cells[i]);
+			for (int pad = cells[i].length(); pad < widths[i]; pad++)
+			{
+				sb.append(' ');
+			}
+		}
+		return sb.toString().replaceAll("\\s+$", "");
+	}
+
+	/**
+	 * "-------------|------|-----" lined up with tableLine's pipes.
+	 */
+	private static String separatorLine(int[] widths)
+	{
+		StringBuilder sb = new StringBuilder();
+		for (int i = 0; i < widths.length; i++)
+		{
+			if (i > 0)
+			{
+				sb.append('|');
+			}
+			int dashes = widths[i] + (i == 0 || i == widths.length - 1 ? 1 : 2);
+			for (int d = 0; d < dashes; d++)
+			{
+				sb.append('-');
+			}
+		}
+		return sb.toString();
+	}
+
 	static String statusText(Status status)
 	{
 		switch (status)
@@ -583,6 +725,11 @@ class HiscoreLookups
 	 */
 	private void saveCache()
 	{
+		if (cache == null)
+		{
+			return;
+		}
+		unsavedLookups = 0;
 		String json = gson.toJson(new HashMap<>(cache));
 		File file = cacheFile;
 		executor.execute(() ->

@@ -163,6 +163,42 @@ public class HiscoreLookupsTest
 	}
 
 	@Test
+	public void discordCopyIsAnAlignedTablePerGroup()
+	{
+		List<HiscoreLookups.Row> rows = List.of(
+			new HiscoreLookups.Row("000OOOOO000P", 58, 0, "", HiscoreLookups.Status.FOUND, new HiscoreLookups.Stats(40, 80, 1, 75, 80, 70, 1)),
+			new HiscoreLookups.Row("Plowet", 52, 0, "", HiscoreLookups.Status.FOUND, new HiscoreLookups.Stats(1, 80, 0, 72, 70, 13, 1)),
+			new HiscoreLookups.Row("Gone", 60, 0, "", HiscoreLookups.Status.NOT_FOUND, null),
+			new HiscoreLookups.Row("Later", 60, 0, "", HiscoreLookups.Status.NOT_LOOKED_UP, null));
+
+		String discord = HiscoreLookups.discord(HiscoreLookups.groups(HiscoreLookups.Kind.TEAM, "Clan chat", rows, 2, Map.of()));
+
+		assertEquals("**Clan chat - 4** | Def 1-5: 1, 6-39: 0, 40+: 0, unranked: 1\n"
+			+ "```\n"
+			+ "Name         | Cmbt | Atk | Str | Def | HP | Rng | Mag | Pray\n"
+			+ "-------------|------|-----|-----|-----|----|-----|-----|-----\n"
+			+ "000OOOOO000P | 58   | 40  | 80  | 1   | 75 | 80  | 70  | 1\n"
+			+ "Plowet       | 52   | 1   | 80  | -   | 72 | 70  | 13  | 1\n"
+			+ "```\n"
+			+ "Not on the hiscores: Gone\n"
+			+ "Not looked up: 1\n", discord);
+	}
+
+	@Test
+	public void resultsAreSavedDuringABatchNotOnlyAtTheEnd()
+	{
+		// Cancelled as soon as the first lookup lands - nothing reaches "Done".
+		when(hiscoreClient.lookupAsync(anyString(), any())).thenAnswer(i ->
+		{
+			lookups.cancel(HiscoreLookups.Kind.TEAM);
+			return CompletableFuture.completedFuture(result(i.getArgument(0), 40));
+		});
+		lookups.start(HiscoreLookups.Kind.TEAM, "Team on screen", List.of(target("Alpha", 0), target("Bravo", 0)), 100);
+		assertEquals("Cancelled.", lookups.getBatch(HiscoreLookups.Kind.TEAM).getMessage());
+		assertTrue(lookups.cacheFile.isFile());
+	}
+
+	@Test
 	public void stopsWhenTheHiscoresKeepFailing()
 	{
 		CompletableFuture<HiscoreResult> failed = new CompletableFuture<>();
