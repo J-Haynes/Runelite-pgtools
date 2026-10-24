@@ -566,6 +566,12 @@ section (or delete it) once the user confirms it:
 
 Agreed with the user but deliberately not built yet. Low priority unless marked otherwise:
 
+- **Enemy Defence distribution from worn gear** (agreed 2026-10-25, plan in
+  [issue #1](https://github.com/J-Haynes/Runelite-pgtools/issues/1)). The client never gets
+  another player's Defence; gear proves only a minimum (40+/20-39/10-19/unknown - 1-5 can't be
+  confirmed). **No bulk hiscore lookups of players in view** - not standard (core looks up only
+  the player you fight), rate-limited, and pures are often unranked in Defence anyway.
+
 - **Freeze sometimes not shown on an obviously frozen target** (reported 2026-09-26: casting
   Snare got "this player is already snared", no icon). Investigated, no clear cause - backlogged
   to revisit if it keeps happening. Ruled out: Protect from Magic (doesn't shorten any freeze,
