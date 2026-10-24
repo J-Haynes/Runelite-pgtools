@@ -138,6 +138,29 @@ public class ScoutReportTest
 	}
 
 	@Test
+	public void enemyLevelChartsMatchTheCapesTabAndGoBesideThePicture()
+	{
+		EnemyLevels levels = new EnemyLevels(List.of(52, 55, 61, 63, 70),
+			List.of(new EnemyLevels.Group(50, List.of(55, 61, 63))), List.of(52, 70));
+		List<EnemyLevels.LevelRange> ranges = EnemyLevels.parseRanges("50-59, 60-64");
+		List<EnemyLevels.Chart> charts = EnemyLevels.charts(levels, ranges, Map.of(50, "EoP"));
+
+		assertEquals(3, charts.size());
+		assertEquals(new EnemyLevels.Chart(0, "All enemies", 5, "52-70, median 61", ranges, List.of(2, 2), 1), charts.get(0));
+		assertEquals(new EnemyLevels.Chart(50, "EoP (team 50)", 3, "55-63, median 61", ranges, List.of(1, 2), 0), charts.get(1));
+		assertEquals("Others", charts.get(2).getTitle());
+		assertTrue(EnemyLevels.charts(EnemyLevels.EMPTY, ranges, Map.of()).isEmpty());
+
+		BufferedImage map = new BufferedImage(ScoutMap.DRAWN_SIZE, ScoutMap.DRAWN_SIZE, BufferedImage.TYPE_INT_ARGB);
+		BufferedImage picture = ScoutMap.withEnemyLevels(map, charts, Map.of());
+		assertTrue(picture.getWidth() > ScoutMap.DRAWN_SIZE);
+		assertEquals(ScoutMap.DRAWN_SIZE, picture.getHeight());
+		assertSame(map, ScoutMap.withEnemyLevels(map, List.of(), Map.of()));
+		// No map: the charts alone.
+		assertTrue(ScoutMap.withEnemyLevels(null, charts, Map.of()).getWidth() < ScoutMap.DRAWN_SIZE);
+	}
+
+	@Test
 	public void locationSpamFormat()
 	{
 		assertEquals("Location: W318, Ferox Enclave, lvl 15 wild", ChatHotkeys.formatLocation(318, "Ferox Enclave", 15));

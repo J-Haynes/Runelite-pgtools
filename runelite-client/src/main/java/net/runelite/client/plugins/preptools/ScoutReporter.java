@@ -10,6 +10,7 @@ import java.io.IOException;
 import java.nio.file.Files;
 import java.util.ArrayList;
 import java.util.Collections;
+import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -199,10 +200,19 @@ class ScoutReporter
 		DrawnMap drawn = style == ScoutMapStyle.DRAWN && here != null ? new DrawnMap(here, dots(local), boxes) : null;
 		Rectangle minimap = style == ScoutMapStyle.MINIMAP && here != null ? minimapBounds() : null;
 		List<ScoutMap.Cape> capes = config.scoutCapes() ? capes(capeCounts, capeNames) : Collections.emptyList();
+		List<EnemyLevels.Chart> levels = config.scoutEnemyLevels() ? levelCharts(capeNames) : Collections.emptyList();
+		Map<Integer, BufferedImage> levelIcons = new HashMap<>();
+		for (EnemyLevels.Chart chart : levels)
+		{
+			if (chart.getTeam() > 0)
+			{
+				levelIcons.put(chart.getTeam(), itemManager.getImage(TeamCapeOverlay.teamCapeItemId(chart.getTeam())));
+			}
+		}
 
 		if (minimap == null)
 		{
-			executor.submit(() -> send(url, json, pictures(drawn, null, capes), report));
+			executor.submit(() -> send(url, json, pictures(drawn, null, capes, levels, levelIcons), report));
 			return;
 		}
 
@@ -229,16 +239,29 @@ class ScoutReporter
 			}
 			BufferedImage map = cutMinimap(frame, minimap, canvasWidth, here, boxes);
 			restoreZoom.run();
-			executor.submit(() -> send(url, json, pictures(null, map, capes), report));
+			executor.submit(() -> send(url, json, pictures(null, map, capes, levels, levelIcons), report));
 		});
 		executor.schedule(() ->
 		{
 			if (sent.compareAndSet(false, true))
 			{
 				clientThread.invoke(restoreZoom);
-				send(url, json, pictures(null, null, capes), report);
+				send(url, json, pictures(null, null, capes, levels, levelIcons), report);
 			}
 		}, FRAME_TIMEOUT_MILLIS, TimeUnit.MILLISECONDS);
+	}
+
+	/**
+	 * The Capes tab's Enemy Levels charts, worked out now from the same inputs (everyone not on
+	 * your team, the Team Capes minimum count, your ranges). Client thread.
+	 */
+	private List<EnemyLevels.Chart> levelCharts(Map<Integer, String> capeNames)
+	{
+		EnemyLevels levels = EnemyLevels.compute(client.getPlayers(), p -> !team.isOwnTeam(p),
+			Math.max(1, config.minimumTeamCapeCount()));
+		List<EnemyLevels.LevelRange> ranges = EnemyLevels.chartRanges(
+			EnemyLevels.parseRanges(config.enemyLevelRanges()), config.enemyLevelBucketSize(), levels.getAll());
+		return EnemyLevels.charts(levels, ranges, capeNames);
 	}
 
 	/**
@@ -332,7 +355,8 @@ class ScoutReporter
 	/**
 	 * The pictures to attach, map first. Off the client thread - the drawn map downloads tiles.
 	 */
-	private List<BufferedImage> pictures(DrawnMap drawn, BufferedImage minimap, List<ScoutMap.Cape> capes)
+	private List<BufferedImage> pictures(DrawnMap drawn, BufferedImage minimap, List<ScoutMap.Cape> capes,
+		List<EnemyLevels.Chart> levels, Map<Integer, BufferedImage> levelIcons)
 	{
 		BufferedImage map = minimap;
 		if (drawn != null)
@@ -347,7 +371,7 @@ class ScoutReporter
 				log.warn("PvP Tools: couldn't draw the scout map", e);
 			}
 		}
-		BufferedImage picture = ScoutMap.withCapes(map, capes);
+		BufferedImage picture = ScoutMap.withEnemyLevels(ScoutMap.withCapes(map, capes), levels, levelIcons);
 		return picture != null ? Collections.singletonList(picture) : Collections.emptyList();
 	}
 

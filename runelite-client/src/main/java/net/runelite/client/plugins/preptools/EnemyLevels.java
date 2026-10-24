@@ -69,6 +69,67 @@ class EnemyLevels
 		}
 	}
 
+	/**
+	 * One chart as the Capes tab and Scout show it: a title (cape name), how many enemies, their
+	 * lowest-highest and median, and a count per range.
+	 */
+	@Value
+	static class Chart
+	{
+		/**
+		 * 0 for All/Others - no cape icon.
+		 */
+		int team;
+		String title;
+		int total;
+		String spread;
+		List<LevelRange> ranges;
+		List<Integer> counts;
+		/**
+		 * Levels in none of the ranges.
+		 */
+		int outside;
+
+		int fullest()
+		{
+			return Math.max(1, counts.stream().mapToInt(Integer::intValue).max().orElse(0));
+		}
+	}
+
+	/**
+	 * All enemies, then a chart per cape, then Others (only when there's a cape chart to set them
+	 * apart from). Empty with no enemies.
+	 */
+	static List<Chart> charts(EnemyLevels levels, List<LevelRange> ranges, Map<Integer, String> capeNames)
+	{
+		List<Chart> charts = new ArrayList<>();
+		if (levels.all.isEmpty())
+		{
+			return charts;
+		}
+		charts.add(chart(0, "All enemies", levels.all, ranges));
+		for (Group group : levels.capes)
+		{
+			String name = capeNames.get(group.team);
+			charts.add(chart(group.team, name != null ? name + " (team " + group.team + ")" : "Team " + group.team,
+				group.levels, ranges));
+		}
+		if (!levels.capes.isEmpty() && !levels.others.isEmpty())
+		{
+			charts.add(chart(0, "Others", levels.others, ranges));
+		}
+		return charts;
+	}
+
+	private static Chart chart(int team, String title, List<Integer> levels, List<LevelRange> ranges)
+	{
+		int low = levels.get(0);
+		int high = levels.get(levels.size() - 1);
+		String spread = low == high ? String.valueOf(low) : low + "-" + high + ", median " + median(levels);
+		List<Integer> counts = ranges.stream().map(r -> count(levels, r)).collect(Collectors.toList());
+		return new Chart(team, title, levels.size(), spread, ranges, counts, outside(levels, ranges));
+	}
+
 	static EnemyLevels compute(Iterable<Player> players, Predicate<Player> isEnemy, int minimumCapeCount)
 	{
 		List<Integer> all = new ArrayList<>();

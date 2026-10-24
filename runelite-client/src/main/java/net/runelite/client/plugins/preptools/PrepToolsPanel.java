@@ -2138,19 +2138,9 @@ public class PrepToolsPanel extends PluginPanel
 			empty.setFont(FontManager.getRunescapeSmallFont());
 			enemyLevelsPanel.add(empty);
 		}
-		else
+		for (EnemyLevels.Chart chart : EnemyLevels.charts(levels, ranges, capeNames))
 		{
-			addEnemyLevelChart("All enemies", 0, levels.getAll(), ranges);
-			for (EnemyLevels.Group group : levels.getCapes())
-			{
-				String name = capeNames.get(group.getTeam());
-				addEnemyLevelChart(name != null ? name + " (team " + group.getTeam() + ")" : "Team " + group.getTeam(),
-					group.getTeam(), group.getLevels(), ranges);
-			}
-			if (!levels.getCapes().isEmpty() && !levels.getOthers().isEmpty())
-			{
-				addEnemyLevelChart("Others", 0, levels.getOthers(), ranges);
-			}
+			addEnemyLevelChart(chart);
 		}
 
 		revalidate();
@@ -2161,7 +2151,7 @@ public class PrepToolsPanel extends PluginPanel
 	 * One chart: a header (cape icon, name, count, lowest-highest and median), then a row per
 	 * range - the range, a bar scaled to this chart's fullest range, and the count.
 	 */
-	private void addEnemyLevelChart(String name, int team, List<Integer> levels, List<EnemyLevels.LevelRange> ranges)
+	private void addEnemyLevelChart(EnemyLevels.Chart model)
 	{
 		JPanel chart = new JPanel();
 		chart.setLayout(new BoxLayout(chart, BoxLayout.Y_AXIS));
@@ -2170,16 +2160,14 @@ public class PrepToolsPanel extends PluginPanel
 		chart.setAlignmentX(LEFT_ALIGNMENT);
 		chart.setMaximumSize(new Dimension(PluginPanel.PANEL_WIDTH, Integer.MAX_VALUE));
 
-		JLabel header = new JLabel(name + " - " + levels.size());
+		JLabel header = new JLabel(model.getTitle() + " - " + model.getTotal());
 		header.setFont(FontManager.getRunescapeBoldFont());
 		header.setForeground(Color.WHITE);
-		if (team > 0)
+		if (model.getTeam() > 0)
 		{
-			itemManager.getImage(TeamCapeOverlay.teamCapeItemId(team)).addTo(header);
+			itemManager.getImage(TeamCapeOverlay.teamCapeItemId(model.getTeam())).addTo(header);
 		}
-		int low = levels.get(0);
-		int high = levels.get(levels.size() - 1);
-		JLabel spread = new JLabel(low == high ? String.valueOf(low) : low + "-" + high + ", median " + EnemyLevels.median(levels));
+		JLabel spread = new JLabel(model.getSpread());
 		spread.setFont(FontManager.getRunescapeSmallFont());
 		spread.setForeground(ColorScheme.LIGHT_GRAY_COLOR);
 
@@ -2191,21 +2179,14 @@ public class PrepToolsPanel extends PluginPanel
 		chart.add(headerRow);
 		chart.add(Box.createVerticalStrut(4));
 
-		int[] counts = new int[ranges.size()];
-		int fullest = 1;
-		for (int i = 0; i < ranges.size(); i++)
+		int fullest = model.fullest();
+		for (int i = 0; i < model.getRanges().size(); i++)
 		{
-			counts[i] = EnemyLevels.count(levels, ranges.get(i));
-			fullest = Math.max(fullest, counts[i]);
+			chart.add(buildLevelRangeRow(model.getRanges().get(i).toString(), model.getCounts().get(i), fullest));
 		}
-		for (int i = 0; i < ranges.size(); i++)
+		if (model.getOutside() > 0)
 		{
-			chart.add(buildLevelRangeRow(ranges.get(i).toString(), counts[i], fullest));
-		}
-		int outside = EnemyLevels.outside(levels, ranges);
-		if (outside > 0)
-		{
-			JLabel note = new JLabel(outside + " outside your ranges");
+			JLabel note = new JLabel(model.getOutside() + " outside your ranges");
 			note.setFont(FontManager.getRunescapeSmallFont());
 			note.setForeground(ColorScheme.LIGHT_GRAY_COLOR);
 			note.setAlignmentX(LEFT_ALIGNMENT);

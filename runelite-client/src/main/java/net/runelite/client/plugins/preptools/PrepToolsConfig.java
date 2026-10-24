@@ -1877,6 +1877,20 @@ public interface PrepToolsConfig extends Config
 	}
 
 	@ConfigItem(
+		keyName = "scoutEnemyLevels",
+		name = "Enemy levels on picture",
+		description = "<html>Adds the Capes tab's Enemy Levels charts beside the map<br>"
+			+ "picture - the same charts, ranges and minimum count, worked<br>"
+			+ "out when you press the hotkey.</html>",
+		position = 7,
+		section = "scoutSection"
+	)
+	default boolean scoutEnemyLevels()
+	{
+		return false;
+	}
+
+	@ConfigItem(
 		keyName = "scoutLevelFilter",
 		name = "Filter by combat level",
 		description = "<html>Only count cape wearers whose combat level is between the<br>"

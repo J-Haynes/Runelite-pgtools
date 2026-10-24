@@ -16,7 +16,9 @@ import java.awt.image.BufferedImage;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.List;
+import java.util.Map;
 import java.util.function.Function;
+import net.runelite.client.ui.ColorScheme;
 import net.runelite.client.util.ImageUtil;
 
 /**
@@ -302,6 +304,159 @@ final class ScoutMap
 		}
 		g.dispose();
 		return out;
+	}
+
+	private static final int LEVEL_WIDTH = 270;
+	private static final int LEVEL_HEADER_HEIGHT = 26;
+	private static final int LEVEL_ROW_HEIGHT = 16;
+	private static final int LEVEL_RANGE_WIDTH = 52;
+	private static final int LEVEL_COUNT_WIDTH = 26;
+	private static final int LEVEL_ICON_WIDTH = 26;
+	private static final int LEVEL_ICON_HEIGHT = 23;
+	private static final int LEVEL_MIN_COLUMN_HEIGHT = 512;
+	private static final Font LEVEL_TITLE_FONT = new Font(Font.SANS_SERIF, Font.BOLD, 13);
+	private static final Font LEVEL_FONT = new Font(Font.SANS_SERIF, Font.PLAIN, 12);
+	private static final Color LEVEL_BACKGROUND = new Color(30, 30, 30);
+	private static final Color LEVEL_CHART_BACKGROUND = new Color(45, 45, 45);
+	private static final Color LEVEL_TRACK = new Color(60, 60, 60);
+	private static final Color LEVEL_BAR = ColorScheme.BRAND_ORANGE;
+	private static final Color LEVEL_MUTED = new Color(160, 160, 160);
+	private static final Color LEVEL_EMPTY = new Color(100, 100, 100);
+
+	private static int levelChartHeight(EnemyLevels.Chart chart)
+	{
+		return CAPE_PADDING * 2 + LEVEL_HEADER_HEIGHT + LEVEL_ROW_HEIGHT * (chart.getRanges().size() + (chart.getOutside() > 0 ? 1 : 0));
+	}
+
+	/**
+	 * The Capes tab's Enemy Levels charts, drawn to the right of the picture (or on their own if
+	 * there's none) - in columns no taller than the picture (at least 512px), so a long list wraps
+	 * sideways rather than making a very tall image. icons: team number to its cape's item icon.
+	 */
+	static BufferedImage withEnemyLevels(BufferedImage picture, List<EnemyLevels.Chart> charts, Map<Integer, BufferedImage> icons)
+	{
+		if (charts.isEmpty())
+		{
+			return picture;
+		}
+
+		int columnLimit = Math.max(LEVEL_MIN_COLUMN_HEIGHT, picture != null ? picture.getHeight() : 0) - CAPE_PADDING;
+		List<List<EnemyLevels.Chart>> columns = new ArrayList<>();
+		List<EnemyLevels.Chart> column = new ArrayList<>();
+		int columnHeight = CAPE_PADDING;
+		int tallest = 0;
+		for (EnemyLevels.Chart chart : charts)
+		{
+			int height = levelChartHeight(chart) + CAPE_PADDING;
+			if (!column.isEmpty() && columnHeight + height > columnLimit)
+			{
+				columns.add(column);
+				column = new ArrayList<>();
+				columnHeight = CAPE_PADDING;
+			}
+			column.add(chart);
+			columnHeight += height;
+			tallest = Math.max(tallest, columnHeight);
+		}
+		columns.add(column);
+
+		int left = picture != null ? picture.getWidth() : 0;
+		int width = left + columns.size() * (LEVEL_WIDTH + CAPE_PADDING) + CAPE_PADDING;
+		int height = Math.max(picture != null ? picture.getHeight() : 0, tallest);
+
+		BufferedImage out = new BufferedImage(width, height, BufferedImage.TYPE_INT_ARGB);
+		Graphics2D g = out.createGraphics();
+		g.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON);
+		g.setRenderingHint(RenderingHints.KEY_TEXT_ANTIALIASING, RenderingHints.VALUE_TEXT_ANTIALIAS_ON);
+		g.setColor(LEVEL_BACKGROUND);
+		g.fillRect(left, 0, width - left, height);
+		if (picture != null)
+		{
+			g.drawImage(picture, 0, 0, null);
+		}
+
+		int x = left + CAPE_PADDING;
+		for (List<EnemyLevels.Chart> chartsInColumn : columns)
+		{
+			int y = CAPE_PADDING;
+			for (EnemyLevels.Chart chart : chartsInColumn)
+			{
+				drawLevelChart(g, chart, icons.get(chart.getTeam()), x, y);
+				y += levelChartHeight(chart) + CAPE_PADDING;
+			}
+			x += LEVEL_WIDTH + CAPE_PADDING;
+		}
+		g.dispose();
+		return out;
+	}
+
+	/**
+	 * Same layout as the Capes tab: header (icon, title - count, spread on the right), then per
+	 * range its label, a bar scaled to the chart's fullest range, and the count.
+	 */
+	private static void drawLevelChart(Graphics2D g, EnemyLevels.Chart chart, BufferedImage icon, int x, int y)
+	{
+		int height = levelChartHeight(chart);
+		g.setColor(LEVEL_CHART_BACKGROUND);
+		g.fillRoundRect(x, y, LEVEL_WIDTH, height, 8, 8);
+
+		int innerX = x + CAPE_PADDING;
+		int innerRight = x + LEVEL_WIDTH - CAPE_PADDING;
+		int top = y + CAPE_PADDING;
+		int titleX = innerX;
+		if (icon != null)
+		{
+			g.drawImage(icon, innerX, top + (LEVEL_HEADER_HEIGHT - LEVEL_ICON_HEIGHT) / 2, LEVEL_ICON_WIDTH, LEVEL_ICON_HEIGHT, null);
+			titleX += LEVEL_ICON_WIDTH + 4;
+		}
+		g.setFont(LEVEL_FONT);
+		FontMetrics small = g.getFontMetrics();
+		int spreadWidth = small.stringWidth(chart.getSpread());
+		g.setColor(LEVEL_MUTED);
+		int headerBaseline = top + (LEVEL_HEADER_HEIGHT + small.getAscent() - small.getDescent()) / 2;
+		g.drawString(chart.getSpread(), innerRight - spreadWidth, headerBaseline);
+
+		g.setFont(LEVEL_TITLE_FONT);
+		FontMetrics bold = g.getFontMetrics();
+		g.setColor(Color.WHITE);
+		String title = chart.getTitle() + " - " + chart.getTotal();
+		int titleRoom = innerRight - spreadWidth - 6 - titleX;
+		while (title.length() > 1 && bold.stringWidth(title) > titleRoom)
+		{
+			title = title.substring(0, title.length() - 1);
+		}
+		g.drawString(title, titleX, headerBaseline);
+
+		g.setFont(LEVEL_FONT);
+		int fullest = chart.fullest();
+		int barX = innerX + LEVEL_RANGE_WIDTH;
+		int barWidth = innerRight - LEVEL_COUNT_WIDTH - 4 - barX;
+		int rowY = top + LEVEL_HEADER_HEIGHT;
+		for (int i = 0; i < chart.getRanges().size(); i++)
+		{
+			int count = chart.getCounts().get(i);
+			int baseline = rowY + (LEVEL_ROW_HEIGHT + small.getAscent() - small.getDescent()) / 2;
+			g.setColor(count > 0 ? Color.WHITE : LEVEL_EMPTY);
+			g.drawString(chart.getRanges().get(i).toString(), innerX, baseline);
+			String number = String.valueOf(count);
+			g.drawString(number, innerRight - small.stringWidth(number), baseline);
+
+			int barY = rowY + (LEVEL_ROW_HEIGHT - 8) / 2;
+			g.setColor(LEVEL_TRACK);
+			g.fillRect(barX, barY, barWidth, 8);
+			if (count > 0)
+			{
+				g.setColor(LEVEL_BAR);
+				g.fillRect(barX, barY, Math.max(1, Math.round(barWidth * count / (float) fullest)), 8);
+			}
+			rowY += LEVEL_ROW_HEIGHT;
+		}
+		if (chart.getOutside() > 0)
+		{
+			g.setColor(LEVEL_MUTED);
+			g.drawString(chart.getOutside() + " outside your ranges", innerX,
+				rowY + (LEVEL_ROW_HEIGHT + small.getAscent() - small.getDescent()) / 2);
+		}
 	}
 
 	private static final class Label

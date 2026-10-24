@@ -123,7 +123,10 @@ client with similar team-coordination features. Core pieces:
   blank (`ScoutReporter#posterName()`, cut to Discord's 80 chars), with **pictures** (asked for 2026-10-11): a map (`scoutMap`, toggle: DRAWN default /
   MINIMAP / NONE) with the **cape counter drawn on it** (`scoutCapes`, `ScoutMap#withCapes()`: item
   icon with count + `10x Team-50 (EoP)`, the overlay's minimum count; top-left on the drawn map,
-  where no names go - beside the smaller minimap). A separate screenshot of the Team Capes overlay
+  where no names go - beside the smaller minimap). **Enemy levels on picture** (`scoutEnemyLevels`,
+  default off; asked for 2026-10-25): the Capes tab's Enemy Levels charts, worked out at the
+  keypress, drawn to the right of the picture (`ScoutMap#withEnemyLevels()`), wrapping into another
+  column rather than growing taller than the map (min 512px). A separate screenshot of the Team Capes overlay
   was built first and replaced the same day (asked for: "draw it on the map"). One picture. *Drawn* (`ScoutMap#drawn()`): north-up
   art from mejrs' map squares (`ScoutMap.TILE_URL`, zoom 2 = 4px a tile, 64 tiles a square, cached
   in `~/.runelite/pvptools-maptiles/`), `scoutMapRadius` (40) tiles each way, a dot per on-screen
@@ -257,7 +260,8 @@ client with similar team-coordination features. Core pieces:
   chart's fullest range) and count. Ranges are user-set in the tab (hidden `enemyLevelRanges`,
   e.g. `3-49, 50-59`; blank = automatic, a range every `enemyLevelBucketSize` levels, default 3,
   on multiples of it, lowest to highest enemy). Built once a tick (`EnemyLevels`, pure), pushed
-  with the tick snapshot, rebuilt only when it changes; ignores the cape level filter.
+  with the tick snapshot, rebuilt only when it changes; ignores the cape level filter. Both it and
+  Scout draw from `EnemyLevels#charts()` (`Chart`), so they always show the same numbers.
 - **Right-click menu integration** — prioritises/recolours Attack and freeze-spell casts (target,
   pile, and now snipe-list hits too, with a configurable tie-break order —
   four "1st..4th Attack priority" dropdowns, `PrepToolsConfig#attackPriority1()`.., default
@@ -481,8 +485,9 @@ Overlays inject the tracker they draw from, not the plugin. Tests live in
 
 ## Open questions / unverified
 
-- **Enemy fall-in left-click Follow, Enemy Levels tab section (2026-10-25)** - not seen in game.
-  Does the chart fit the sidebar width at 2x scale? Is a big cape icon in each header too tall?
+- **Scout enemy level charts (2026-10-25)** - rendered offline only, not yet posted from game.
+- **Enemy fall-in left-click Follow (2026-10-25)** - not seen in game. Enemy Levels tab section
+  CONFIRMED ("works", "looks great").
 
 - **Fall-in leader outline, enemy fall-in finder, cape level range (2026-10-18)** - not seen in
   game. Is threshold 10 sensible for enemies? Do enemies attacking a capeless third clan show up
