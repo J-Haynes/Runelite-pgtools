@@ -641,7 +641,7 @@ plain/`-sources`/`-javadoc` jars) would bundle all of them into the app for no r
 dead weight. Output lands under `runelite-client/build/jpackage/{image,installer}/`.
 
 - **jpackage needs a JDK 14+ to run**, even though the app itself still targets Java 11 - this
-  machine only has 11 installed. `settings.gradle.kts` adds the `foojay-resolver-convention`
+  machine has 11 and 25 (no 17). `settings.gradle.kts` adds the `foojay-resolver-convention`
   plugin so Gradle's Java toolchain support can auto-download and cache a JDK 17 under
   `~/.gradle/jdks` on first use, with **no sudo/system-wide install** - that's the whole reason
   that plugin is there instead of just `apt install openjdk-17-jdk`.
@@ -851,6 +851,13 @@ These cost real debugging time to find. Don't rediscover them the hard way:
   written straight over the sidebar's edits ("switching between the sidebar and settings can destroy
   the caller list"). `callers`, `snipeList`, `teamCapeNames`, `spamMessages`, `selectedSpamMessage`, `playerNicknames`
   are all hidden for this reason; the sidebar is their only editor.
+- **The system `java` is Java 25 now (Ubuntu 26.04), not 11 - found 2026-10-25.** The client
+  launched on it, and Gson then threw `InaccessibleObjectException` serializing
+  `Collections.emptyList()`, so every Scout (F9) press failed with nothing shown in game.
+  Gradle fails on it too (the error is just "25.0.4.1"). `run-runelite.sh` now prefers
+  `/usr/lib/jvm/java-11-openjdk-amd64`; run Gradle with
+  `JAVA_HOME=/usr/lib/jvm/java-11-openjdk-amd64`. Don't hand Gson immutable JDK collections
+  (`Collections.empty*`, `List.of`) - use `ArrayList`/`LinkedHashMap`.
 - **Never put `/` in a `@PluginDescriptor` `name`.** `PluginManagerTest` writes one `<name>.dot`
   file per plugin, so a slash becomes a missing subdirectory and CI (`ci/build.sh` -> `:buildAll`)
   fails - "Menu Order/PID Debug" kept CI red for several commits unnoticed. Run

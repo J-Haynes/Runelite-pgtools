@@ -185,7 +185,11 @@ class ScoutReporter
 		{
 			payload.put("username", username);
 		}
-		payload.put("allowed_mentions", Collections.singletonMap("parse", Collections.emptyList()));
+		// Plain mutable collections: Gson can't build an adapter for Collections.emptyList() on
+		// Java 17+ (InaccessibleObjectException), which made every press fail silently.
+		Map<String, Object> allowedMentions = new LinkedHashMap<>();
+		allowedMentions.put("parse", new ArrayList<>());
+		payload.put("allowed_mentions", allowedMentions);
 		String json = gson.toJson(payload);
 
 		ScoutMapStyle style = config.scoutMap();

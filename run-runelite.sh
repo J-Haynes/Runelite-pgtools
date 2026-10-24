@@ -26,4 +26,13 @@ if [ -z "$jar" ]; then
 	echo "No shaded client jar - run ./gradlew :client:shadowJar first" >&2
 	exit 1
 fi
-exec java -jar "$jar"
+# Java 11, like official RuneLite - the system default may be newer (Ubuntu 26.04 defaults to
+# 25), and 17+ breaks reflection the client and its libraries rely on.
+java=java
+for home in /usr/lib/jvm/java-11-openjdk-amd64 /usr/lib/jvm/java-11-openjdk; do
+	if [ -x "$home/bin/java" ]; then
+		java="$home/bin/java"
+		break
+	fi
+done
+exec "$java" -jar "$jar"
