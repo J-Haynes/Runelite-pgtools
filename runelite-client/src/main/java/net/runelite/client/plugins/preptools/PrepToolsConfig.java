@@ -1222,6 +1222,31 @@ public interface PrepToolsConfig extends Config
 		return true;
 	}
 
+	// --- Hiscore Lookups section ---
+
+	@ConfigSection(
+		name = "Hiscore Lookups",
+		description = "The Clan Info and Capes tabs' manual 'Look up' buttons for team and enemy stats.",
+		position = 10,
+		closedByDefault = true
+	)
+	String hiscoreLookupSection = "hiscoreLookupSection";
+
+	@Range(min = 1, max = HiscoreLookups.MAX_LIMIT)
+	@ConfigItem(
+		keyName = "hiscoreLookupLimit",
+		name = "Most lookups per press",
+		description = "<html>How many players one 'Look up' press may look up on the<br>"
+			+ "hiscores (1.5-3 seconds apart). Anyone cached from the last<br>"
+			+ "6 hours doesn't count.</html>",
+		position = 1,
+		section = "hiscoreLookupSection"
+	)
+	default int hiscoreLookupLimit()
+	{
+		return HiscoreLookups.MAX_LIMIT;
+	}
+
 	// --- Friends Chat Log section ---
 
 	@ConfigSection(

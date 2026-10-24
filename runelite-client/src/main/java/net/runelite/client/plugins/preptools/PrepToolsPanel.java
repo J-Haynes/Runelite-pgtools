@@ -6,6 +6,8 @@ import java.awt.Component;
 import java.awt.Dimension;
 import java.awt.FlowLayout;
 import java.awt.Graphics;
+import java.awt.GridBagConstraints;
+import java.awt.GridBagLayout;
 import java.awt.GridLayout;
 import java.awt.Image;
 import java.awt.Insets;
@@ -22,6 +24,7 @@ import java.util.Collections;
 import java.util.Comparator;
 import java.util.Date;
 import java.util.Deque;
+import java.util.EnumMap;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
@@ -191,6 +194,9 @@ public class PrepToolsPanel extends PluginPanel
 	private List<EnemyLevels.LevelRange> lastEnemyLevelRanges;
 	private Map<Integer, String> lastEnemyLevelCapeNames;
 	private boolean settingEnemyLevelFields;
+
+	// --- Hiscore lookups (Clan Info tab: team, Capes tab: enemies) ---
+	private final Map<HiscoreLookups.Kind, HiscoreLookupView> hiscoreViews = new EnumMap<>(HiscoreLookups.Kind.class);
 
 	// --- Location mapper ---
 	private final JLabel currentCoordLabel = new JLabel();
@@ -1337,6 +1343,12 @@ public class PrepToolsPanel extends PluginPanel
 		section.add(instructions);
 		section.add(Box.createVerticalStrut(TIER_GAP));
 		section.add(clanIdsListPanel);
+		section.add(Box.createVerticalStrut(TIER_GAP * 2));
+		section.add(new HiscoreLookupView(HiscoreLookups.Kind.TEAM, "Team Stats",
+			"Hiscore levels of your team on screen (you included), or of everyone in your friends chat "
+				+ "or clan chat, on screen or not (combat worked out from their levels). Manual only: Look "
+				+ "up checks each player 1.5-3 seconds apart, so a big team takes a minute or two. Results "
+				+ "are kept for 6 hours, so pressing again only looks up new names.", true).panel);
 		updateClanIds(Collections.emptyList());
 		updateClanWeapons(new ClanWeaponSummary(Collections.emptyList(), Collections.emptyList(), Collections.emptyList(), 0));
 		return section;
@@ -2023,6 +2035,11 @@ public class PrepToolsPanel extends PluginPanel
 		tab.add(buildTeamCapeNamesSection());
 		tab.add(Box.createVerticalStrut(TIER_GAP * 2));
 		tab.add(buildEnemyLevelsSection());
+		tab.add(Box.createVerticalStrut(TIER_GAP * 2));
+		tab.add(new HiscoreLookupView(HiscoreLookups.Kind.ENEMIES, "Enemy Stats",
+			"Hiscore levels of the enemies on screen, grouped by team cape like Enemy Levels. Manual "
+				+ "only: Look up checks each player 1.5-3 seconds apart (biggest cape first, up to the "
+				+ "limit in settings). Results are kept for 6 hours.", false).panel);
 		return tab;
 	}
 
@@ -2247,6 +2264,235 @@ public class PrepToolsPanel extends PluginPanel
 			}
 			g.setColor(ColorScheme.BRAND_ORANGE);
 			g.fillRect(0, y, filled, barHeight);
+		}
+	}
+
+	// ============================================================================================
+	// Hiscore lookups - the same block in the Clan Info tab (team) and the Capes tab (enemies).
+	// ============================================================================================
+
+	private static final Color DEFENCE_LOW_COLOR = new Color(110, 190, 255);
+	private static final Color DEFENCE_HIGH_COLOR = ColorScheme.BRAND_ORANGE;
+	private static final int STAT_COLUMN_WIDTH = 17;
+	private static final String[] STAT_HEADERS = {"Cb", "A", "S", "D", "H", "R", "M", "P"};
+
+	void updateHiscoreLookup(HiscoreLookups.Kind kind, HiscoreLookups.Batch batch, List<HiscoreLookups.Group> groups)
+	{
+		HiscoreLookupView view = hiscoreViews.get(kind);
+		if (view != null)
+		{
+			view.update(batch, groups);
+		}
+	}
+
+	private static Color defenceColor(int defence)
+	{
+		return defence <= 0 ? ColorScheme.LIGHT_GRAY_COLOR : defence <= 5 ? DEFENCE_LOW_COLOR
+			: defence >= 40 ? DEFENCE_HIGH_COLOR : Color.WHITE;
+	}
+
+	private final class HiscoreLookupView
+	{
+		final JPanel panel = new JPanel();
+		private final JButton lookUpButton = createSmallButton("Look up", "Look up everyone on screen on the hiscores");
+		private final JButton cancelButton = createSmallButton("Cancel", "Stop looking up");
+		private final JButton copyButton = createSmallButton("Copy", "Copy as CSV for a spreadsheet");
+		private final JLabel progress = new JLabel();
+		private final JComboBox<HiscoreLookups.Source> source = new JComboBox<>(HiscoreLookups.Source.values());
+		private final JPanel results = new JPanel();
+		private HiscoreLookups.Batch lastBatch;
+		private List<HiscoreLookups.Group> lastGroups = Collections.emptyList();
+
+		HiscoreLookupView(HiscoreLookups.Kind kind, String title, String description, boolean withSources)
+		{
+			hiscoreViews.put(kind, this);
+
+			panel.setLayout(new BoxLayout(panel, BoxLayout.Y_AXIS));
+			panel.setBackground(ColorScheme.DARK_GRAY_COLOR);
+			panel.setAlignmentX(LEFT_ALIGNMENT);
+			panel.setMaximumSize(new Dimension(PluginPanel.PANEL_WIDTH, Integer.MAX_VALUE));
+
+			lookUpButton.addActionListener(e -> plugin.startHiscoreLookup(kind, (HiscoreLookups.Source) source.getSelectedItem()));
+			cancelButton.addActionListener(e -> plugin.cancelHiscoreLookup(kind));
+			copyButton.addActionListener(e -> Toolkit.getDefaultToolkit().getSystemClipboard()
+				.setContents(new StringSelection(HiscoreLookups.csv(lastGroups)), null));
+
+			JPanel buttons = new JPanel(new FlowLayout(FlowLayout.LEFT, 4, 0));
+			buttons.setBackground(ColorScheme.DARK_GRAY_COLOR);
+			buttons.setAlignmentX(LEFT_ALIGNMENT);
+			buttons.setMaximumSize(new Dimension(PluginPanel.PANEL_WIDTH, Integer.MAX_VALUE));
+			buttons.add(lookUpButton);
+			buttons.add(cancelButton);
+			styleInputRow(buttons);
+			progress.setFont(FontManager.getRunescapeSmallFont());
+			progress.setForeground(ColorScheme.LIGHT_GRAY_COLOR);
+			progress.setAlignmentX(LEFT_ALIGNMENT);
+
+			results.setLayout(new BoxLayout(results, BoxLayout.Y_AXIS));
+			results.setBackground(ColorScheme.DARK_GRAY_COLOR);
+			results.setAlignmentX(LEFT_ALIGNMENT);
+			results.setMaximumSize(new Dimension(PluginPanel.PANEL_WIDTH, Integer.MAX_VALUE));
+
+			panel.add(createSubHeader(title, copyButton));
+			panel.add(Box.createVerticalStrut(4));
+			panel.add(createDescriptionArea(description));
+			panel.add(Box.createVerticalStrut(TIER_GAP));
+			if (withSources)
+			{
+				source.setFont(FontManager.getRunescapeSmallFont());
+				source.setFocusable(false);
+				source.setToolTipText("Who to look up");
+				JPanel sourceRow = new JPanel(new BorderLayout());
+				sourceRow.setBackground(ColorScheme.DARK_GRAY_COLOR);
+				sourceRow.setAlignmentX(LEFT_ALIGNMENT);
+				sourceRow.setMaximumSize(new Dimension(PluginPanel.PANEL_WIDTH, 26));
+				sourceRow.add(source, BorderLayout.CENTER);
+				styleInputRow(sourceRow);
+				panel.add(sourceRow);
+			}
+			panel.add(buttons);
+			panel.add(progress);
+			panel.add(Box.createVerticalStrut(TIER_GAP));
+			panel.add(results);
+			update(HiscoreLookups.Batch.EMPTY, Collections.emptyList());
+		}
+
+		void update(HiscoreLookups.Batch batch, List<HiscoreLookups.Group> groups)
+		{
+			if (batch.equals(lastBatch) && groups.equals(lastGroups))
+			{
+				return;
+			}
+			lastBatch = batch;
+			lastGroups = groups;
+			lookUpButton.setEnabled(!batch.isRunning());
+			cancelButton.setEnabled(batch.isRunning());
+			copyButton.setEnabled(batch.count(HiscoreLookups.Status.FOUND) > 0);
+			progress.setText(batch.getMessage().isEmpty() ? " " : batch.getMessage());
+
+			results.removeAll();
+			if (batch.getRows().isEmpty())
+			{
+				JLabel empty = new JLabel("(not looked up yet)");
+				empty.setFont(FontManager.getRunescapeSmallFont());
+				empty.setForeground(ColorScheme.LIGHT_GRAY_COLOR);
+				results.add(empty);
+			}
+			for (HiscoreLookups.Group group : groups)
+			{
+				results.add(buildGroup(group));
+				results.add(Box.createVerticalStrut(6));
+			}
+			results.revalidate();
+			results.repaint();
+		}
+
+		/**
+		 * One box per group: icon + title + count, the Defence split, then a row per player.
+		 */
+		private JPanel buildGroup(HiscoreLookups.Group group)
+		{
+			JPanel box = new JPanel();
+			box.setLayout(new BoxLayout(box, BoxLayout.Y_AXIS));
+			box.setBackground(ColorScheme.DARKER_GRAY_COLOR);
+			box.setBorder(new EmptyBorder(4, 6, 6, 6));
+			box.setAlignmentX(LEFT_ALIGNMENT);
+			box.setMaximumSize(new Dimension(PluginPanel.PANEL_WIDTH, Integer.MAX_VALUE));
+
+			JLabel header = new JLabel(group.getTitle() + " - " + group.getRows().size());
+			header.setFont(FontManager.getRunescapeBoldFont());
+			header.setForeground(Color.WHITE);
+			header.setAlignmentX(LEFT_ALIGNMENT);
+			if (group.getTeam() > 0)
+			{
+				itemManager.getImage(TeamCapeOverlay.teamCapeItemId(group.getTeam())).addTo(header);
+			}
+			box.add(header);
+
+			int[] split = HiscoreLookups.defenceSplit(group.getRows());
+			JPanel splitRow = new JPanel(new FlowLayout(FlowLayout.LEFT, 6, 0));
+			splitRow.setBackground(ColorScheme.DARKER_GRAY_COLOR);
+			splitRow.setAlignmentX(LEFT_ALIGNMENT);
+			splitRow.add(smallLabel("Def", ColorScheme.LIGHT_GRAY_COLOR));
+			splitRow.add(smallLabel("1-5: " + split[0], DEFENCE_LOW_COLOR));
+			splitRow.add(smallLabel("6-39: " + split[1], Color.WHITE));
+			splitRow.add(smallLabel("40+: " + split[2], DEFENCE_HIGH_COLOR));
+			if (split[3] > 0)
+			{
+				splitRow.add(smallLabel("unranked: " + split[3], ColorScheme.LIGHT_GRAY_COLOR));
+			}
+			box.add(splitRow);
+			box.add(Box.createVerticalStrut(4));
+
+			box.add(statRow("Name", STAT_HEADERS, null, ColorScheme.LIGHT_GRAY_COLOR));
+			for (HiscoreLookups.Row row : group.getRows())
+			{
+				String name = row.getName().replace('\u00A0', ' ');
+				HiscoreLookups.Stats s = row.getStats();
+				if (s == null)
+				{
+					JPanel line = statRow(name, new String[]{level(row.getCombat())}, null, ColorScheme.LIGHT_GRAY_COLOR);
+					line.add(smallLabel(HiscoreLookups.statusText(row.getStatus()), ColorScheme.MEDIUM_GRAY_COLOR), statConstraints(2, 7));
+					box.add(line);
+					continue;
+				}
+				box.add(statRow(name, new String[]{level(HiscoreLookups.combatLevel(row)), level(s.getAttack()), level(s.getStrength()),
+					level(s.getDefence()), level(s.getHitpoints()), level(s.getRanged()), level(s.getMagic()), level(s.getPrayer())},
+					defenceColor(s.getDefence()), Color.WHITE));
+			}
+			return box;
+		}
+
+		/**
+		 * Name (truncated, full in the tooltip), then fixed-width columns; the 4th column (D) can
+		 * have its own colour.
+		 */
+		private JPanel statRow(String name, String[] columns, Color defence, Color color)
+		{
+			JPanel line = new JPanel(new GridBagLayout());
+			line.setBackground(ColorScheme.DARKER_GRAY_COLOR);
+			line.setAlignmentX(LEFT_ALIGNMENT);
+			line.setMaximumSize(new Dimension(PluginPanel.PANEL_WIDTH, 16));
+
+			JLabel nameLabel = smallLabel(name, color);
+			nameLabel.setToolTipText(name);
+			nameLabel.setPreferredSize(new Dimension(10, 14));
+			GridBagConstraints c = new GridBagConstraints();
+			c.gridx = 0;
+			c.weightx = 1;
+			c.fill = GridBagConstraints.HORIZONTAL;
+			line.add(nameLabel, c);
+
+			for (int i = 0; i < columns.length; i++)
+			{
+				JLabel cell = smallLabel(columns[i], i == 3 && defence != null ? defence : color);
+				cell.setHorizontalAlignment(SwingConstants.RIGHT);
+				cell.setPreferredSize(new Dimension(STAT_COLUMN_WIDTH, 14));
+				line.add(cell, statConstraints(i + 1, 1));
+			}
+			return line;
+		}
+
+		private GridBagConstraints statConstraints(int x, int width)
+		{
+			GridBagConstraints c = new GridBagConstraints();
+			c.gridx = x;
+			c.gridwidth = width;
+			c.anchor = GridBagConstraints.EAST;
+			return c;
+		}
+
+		private String level(int level)
+		{
+			return level > 0 ? String.valueOf(level) : "-";
+		}
+
+		private JLabel smallLabel(String text, Color color)
+		{
+			JLabel label = new JLabel(text);
+			label.setFont(FontManager.getRunescapeSmallFont());
+			label.setForeground(color);
+			return label;
 		}
 	}
 

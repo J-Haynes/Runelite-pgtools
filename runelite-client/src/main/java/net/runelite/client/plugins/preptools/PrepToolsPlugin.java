@@ -11,9 +11,11 @@ import java.awt.image.BufferedImage;
 import java.io.File;
 import java.util.ArrayDeque;
 import java.util.ArrayList;
+import java.util.Collection;
 import java.util.Collections;
 import java.util.Comparator;
 import java.util.Deque;
+import java.util.HashMap;
 import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -38,6 +40,8 @@ import net.runelite.api.Ignore;
 import net.runelite.api.Player;
 import net.runelite.api.Tile;
 import net.runelite.api.WorldView;
+import net.runelite.api.clan.ClanChannel;
+import net.runelite.api.clan.ClanChannelMember;
 import net.runelite.api.coords.WorldPoint;
 import net.runelite.api.events.ActorDeath;
 import net.runelite.api.events.AnimationChanged;
@@ -214,6 +218,9 @@ public class PrepToolsPlugin extends Plugin
 	private HighlightTracker highlights;
 
 	@Inject
+	private HiscoreLookups hiscoreLookups;
+
+	@Inject
 	private MenuHandler menu;
 
 	@Inject
@@ -310,7 +317,7 @@ public class PrepToolsPlugin extends Plugin
 		for (Class<?> feature : new Class<?>[]{TeamTracker.class, HighlightTracker.class, MenuHandler.class,
 			FreezeTracker.class, FightInfoTracker.class, AttackAlert.class, LocationTracker.class, ChatHotkeys.class,
 			ScoutReporter.class, ConfigListEditor.class, FoodTracker.class, AttackRangeFilter.class,
-			TeamPerformanceTracker.class, PlayerNicknameTracker.class, FriendRenameTracker.class})
+			TeamPerformanceTracker.class, PlayerNicknameTracker.class, FriendRenameTracker.class, HiscoreLookups.class})
 		{
 			binder.bind(feature).in(Singleton.class);
 		}
@@ -348,6 +355,7 @@ public class PrepToolsPlugin extends Plugin
 		overlayManager.add(hitpointsOverlay);
 		overlayManager.add(lowHitpointsOverlay);
 		multiLinesOverlay.load();
+		hiscoreLookups.setListener(this::pushHiscoreLookup);
 		hotkeys.start();
 		keyManager.registerKeyListener(foodResetListener);
 
@@ -385,6 +393,11 @@ public class PrepToolsPlugin extends Plugin
 		overlayManager.remove(lowHitpointsOverlay);
 		multiLinesOverlay.clear();
 		hotkeys.stop();
+		hiscoreLookups.cancel(HiscoreLookups.Kind.TEAM);
+		hiscoreLookups.cancel(HiscoreLookups.Kind.ENEMIES);
+		hiscoreLookups.setListener(kind ->
+		{
+		});
 		keyManager.unregisterKeyListener(foodResetListener);
 		removeMemberCountInfoBoxes();
 		clientToolbar.removeNavigation(navButton);
@@ -1075,6 +1088,111 @@ public class PrepToolsPlugin extends Plugin
 		boolean enabled = config.enablePerformanceTracker();
 		List<PerformanceRound> rounds = performance.snapshot();
 		onSwing(() -> panel.updatePerformance(rounds, enabled));
+	}
+
+	/**
+	 * A "Look up" button (EDT): snapshots who to look up, then starts the lookups. Enemies and
+	 * teammates on screen come from the player list - enemies ordered like the Enemy Levels charts
+	 * (biggest cape first), so the limit cuts the smallest groups. Friends chat / clan chat take
+	 * the channel's member list, on screen or not.
+	 */
+	void startHiscoreLookup(HiscoreLookups.Kind kind, HiscoreLookups.Source source)
+	{
+		clientThread.invoke(() ->
+		{
+			Map<String, Player> onScreen = new HashMap<>();
+			for (Player player : client.getPlayers())
+			{
+				if (player != null && player.getName() != null)
+				{
+					onScreen.put(Text.standardize(player.getName()), player);
+				}
+			}
+
+			List<HiscoreLookups.Target> targets;
+			String title;
+			if (kind == HiscoreLookups.Kind.ENEMIES || source == HiscoreLookups.Source.ON_SCREEN)
+			{
+				targets = onScreenTargets(onScreen.values(), kind == HiscoreLookups.Kind.TEAM);
+				title = kind == HiscoreLookups.Kind.ENEMIES ? "Enemies" : source.toString();
+			}
+			else
+			{
+				List<String> names = new ArrayList<>();
+				if (source == HiscoreLookups.Source.FRIENDS_CHAT)
+				{
+					FriendsChatManager friendsChat = client.getFriendsChatManager();
+					if (friendsChat != null)
+					{
+						for (FriendsChatMember member : friendsChat.getMembers())
+						{
+							names.add(member.getName());
+						}
+					}
+				}
+				else
+				{
+					ClanChannel clan = client.getClanChannel();
+					if (clan != null)
+					{
+						for (ClanChannelMember member : clan.getMembers())
+						{
+							names.add(member.getName());
+						}
+					}
+				}
+				names.sort(String.CASE_INSENSITIVE_ORDER);
+				Map<String, HiscoreLookups.Target> byName = new LinkedHashMap<>();
+				for (String name : names)
+				{
+					Player player = onScreen.get(Text.standardize(name));
+					byName.putIfAbsent(Text.standardize(name), new HiscoreLookups.Target(name,
+						player != null ? player.getCombatLevel() : 0, player != null ? Math.max(0, player.getTeam()) : 0));
+				}
+				targets = new ArrayList<>(byName.values());
+				title = source.toString();
+			}
+			hiscoreLookups.start(kind, title, targets, config.hiscoreLookupLimit());
+		});
+	}
+
+	private List<HiscoreLookups.Target> onScreenTargets(Collection<Player> onScreen, boolean ownTeam)
+	{
+		Map<Integer, Integer> capeSizes = new HashMap<>();
+		List<Player> players = new ArrayList<>();
+		for (Player player : onScreen)
+		{
+			if (team.isOwnTeam(player) == ownTeam)
+			{
+				players.add(player);
+				capeSizes.merge(Math.max(0, player.getTeam()), 1, Integer::sum);
+			}
+		}
+		players.sort(Comparator.<Player>comparingInt(p -> p.getTeam() > 0 ? -capeSizes.get(p.getTeam()) : 0)
+			.thenComparingInt(p -> Math.max(0, p.getTeam()))
+			.thenComparing(Player::getName, String.CASE_INSENSITIVE_ORDER));
+		List<HiscoreLookups.Target> targets = new ArrayList<>();
+		for (Player player : players)
+		{
+			targets.add(new HiscoreLookups.Target(player.getName(), player.getCombatLevel(), Math.max(0, player.getTeam())));
+		}
+		return targets;
+	}
+
+	void cancelHiscoreLookup(HiscoreLookups.Kind kind)
+	{
+		hiscoreLookups.cancel(kind);
+	}
+
+	/**
+	 * Any thread - the lookups report from the HTTP/executor threads.
+	 */
+	private void pushHiscoreLookup(HiscoreLookups.Kind kind)
+	{
+		HiscoreLookups.Batch batch = hiscoreLookups.getBatch(kind);
+		List<HiscoreLookups.Group> groups = HiscoreLookups.groups(kind, batch.getTitle(), batch.getRows(),
+			Math.max(1, config.minimumTeamCapeCount()), teamCapeNames);
+		onSwing(() -> panel.updateHiscoreLookup(kind, batch, groups));
 	}
 
 	/**

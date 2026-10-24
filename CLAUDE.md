@@ -293,6 +293,18 @@ client with similar team-coordination features. Core pieces:
   enemy's own menu on your team's pile is built exclusively from your team's ids, so enemy ids don't
   factor into who on your side is exposed.
 
+- **Hiscore lookups** (asked for 2026-10-25) - **manual only**: a "Look up" button in the Clan Info
+  tab (Team Stats, with a source dropdown: teammates on screen incl. you, or the whole **friends
+  chat** / **clan chat** member list, on screen or not - off-screen members' combat comes from
+  their hiscore levels, `HiscoreLookups#combatLevel()`) and in the Capes tab (Enemy Stats, grouped
+  by cape exactly like Enemy Levels). `HiscoreLookups` (bound singleton) snapshots who's on
+  screen, then calls core's `HiscoreClient` **one at a time, 1.5-3s apart** (random), at most
+  `hiscoreLookupLimit` (default and max 100, own config section) per press, biggest cape first.
+  Results (attack/strength/defence/hitpoints/ranged/magic/prayer, 0 = unranked = xp -1, same rule
+  as the Hiscore panel) cached 6h in `~/.runelite/pvptools-hiscores.json`, so a re-press only looks
+  up new names. Stops on 2 failures in a row (or a 429), Cancel button, CSV Copy. Each group shows
+  the exact Defence split 1-5 / 6-39 / 40+ / unranked. **Never make it automatic** (see the gear
+  Defence backlog item for why).
 - **Experimental** (config section of that name, position 19, everything **default off**) - built
   2026-10-02, not yet proven in a fight. Once one is confirmed, give it its own section (keep keys).
   - *Low food detector* (`FoodTracker`, `FoodOverlay`) - **for Clan Wars, not the wilderness.**
@@ -464,6 +476,7 @@ reloading them on `ConfigChanged`, and pushing data to the sidebar. Each feature
 | `LocationTracker` | position, wilderness level/location, Mapper corners/preview, `WildernessLocationStore` |
 | `ChatHotkeys`, `ScoutReporter` | Pile Spam, Spammer, Location Spam; Scout webhook |
 | `ConfigListEditor` | every edit to the hidden list config (callers/snipe/spam/capes/nicknames) - sidebar + menu |
+| `HiscoreLookups` | manual team/enemy hiscore lookups (rate-limited queue, disk cache) + pure grouping/Defence split/CSV |
 | `FoodTracker`, `AttackRangeFilter`, `TeamPerformanceTracker`, `PlayerNicknameTracker`, `FriendRenameTracker` | Experimental: food eaten, combat bracket incl. Highlight Others' range (before `HighlightTracker` each tick), Stats tab, nicknames, renames between logins |
 | `CallerEntry`, `ConfigLists`, `ScoutReport`, `WeaponStyle`, `AttackCategory#resolve()`, `AttackRange`, `PerformanceRow#byDeath()`, `RenameMatch`, `FoodTracker#biteCount()`, `EnemyLevels` | pure logic - unit tested |
 
@@ -485,7 +498,8 @@ Overlays inject the tracker they draw from, not the plugin. Tests live in
 
 ## Open questions / unverified
 
-- **Scout enemy level charts (2026-10-25)** - rendered offline only, not yet posted from game.
+- **Hiscore lookups (2026-10-25)** - not seen in game. Do names with spaces resolve? Does the
+  stat table fit the sidebar width at 2x scale?
 - **Enemy fall-in left-click Follow (2026-10-25)** - not seen in game. Enemy Levels tab section
   CONFIRMED ("works", "looks great").
 
